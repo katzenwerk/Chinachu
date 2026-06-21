@@ -42,7 +42,7 @@ process.on('uncaughtException', (err) => {
 const dateFormat = require('dateformat');
 const mkdirp = require('mkdirp');
 const Mtwitter = require('mtwitter');
-const disk = require('diskusage');
+// Node.js 18.15.0 以降の fs.statfs() を使用するため diskusage は不要
 const nodemailer = require("nodemailer");
 const sendmail = require("nodemailer-sendmail-transport");
 const chinachu = require('chinachu-common');
@@ -60,7 +60,8 @@ const config = require(CONFIG_FILE);
 // settings
 const schedulerIntervalTime = 1000 * 60 * 10;// 最長10分毎
 const notifyIntervalTime = 1000 * 60 * 60 * 3;// 3時間毎
-const prepTime = 1000 * 15;// 15秒前
+const prepTime = 1000 * 20;// 20秒前
+const recordingExpireGraceTime = 1000 * 60 * 5;// 終了後5分で録画中固着を掃除
 const recordingPriority = config.recordingPriority || 2;
 const conflictedPriority = config.conflictedPriority || 1;
 const storageLowSpaceThresholdMB = config.storageLowSpaceThresholdMB || 3000;// 3 GB
@@ -153,6 +154,7 @@ let scheduler = null;
 let scheduled = 0;
 let stChecked = 0;
 let stNotified = 0;
+let recordingChecked = 0;
 
 // メインループ
 setInterval(() => {
@@ -175,6 +177,11 @@ setInterval(() => {
 	if (clock - stChecked > 1000 * 20) {
 		storageChecker();
 		stChecked = clock;
+	}
+
+	if (clock - recordingChecked > 1000 * 30) {
+		recordingStaleChecker();
+		recordingChecked = clock;
 	}
 }, 1000 * 6);
 
@@ -299,12 +306,139 @@ function printProgram(program) {
 	return `#${program.id} ${dateFormat(new Date(program.start), "isoDateTime")} [${program.channel.name}] ${program.title}`
 }
 
+// ストレージ容量取得
+// Node.js 18.15.0 以降の fs.statfs() を使用し、diskusage 依存を避ける
+function getDiskUsage(targetPath, callback) {
+	if (typeof fs.statfs !== 'function') {
+		callback(new Error('fs.statfs is not available. Node.js v18.15.0 or later is required.'));
+		return;
+	}
+
+	fs.statfs(targetPath, (err, stats) => {
+		if (err) {
+			callback(err);
+			return;
+		}
+
+		const blockSize = stats.bsize || stats.frsize;
+
+		callback(null, {
+			available: stats.bavail * blockSize,
+			free: stats.bfree * blockSize,
+			total: stats.blocks * blockSize
+		});
+	});
+}
+
+// 録画中リストを書き込む
+function writeRecordingData() {
+	fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));
+	util.log('WRITE: ' + RECORDING_DATA_FILE);
+}
+
+
+// 録画保存先HDDを事前に起こす
+function wakeRecordedStorage(program) {
+	let targetDir = config.recordedDir;
+	let wakeFile = null;
+
+	try {
+		if (program) {
+			const recPath = config.recordedDir + chinachu.formatRecordedName(program, program.recordedFormat || config.recordedFormat);
+			targetDir = recPath.replace(/^(.+)\/.+$/, '$1');
+		}
+
+		if (!fs.existsSync(targetDir)) {
+			util.log('MKDIR: ' + targetDir);
+			mkdirp.sync(targetDir);
+		}
+
+		wakeFile = path.join(targetDir, '.chinachu-wakeup');
+
+		fs.writeFileSync(wakeFile, [
+			Date.now(),
+			program ? program.id : '',
+			program ? program.title : ''
+		].join('\t'));
+		fs.unlinkSync(wakeFile);
+
+		util.log('WAKE: recorded storage ' + targetDir);
+	} catch (e) {
+		util.log('WARNING: recorded storage wake failed: ' + e.message);
+	}
+}
+
+// 録画中番組をNG扱いにする
+function markRecordingNg(program, reason) {
+	if (!program) {
+		return;
+	}
+
+	try {
+		Object.defineProperty(program, '_operatorNg', {
+			enumerable: false,
+			configurable: true,
+			value: reason || 'NG RECORDING'
+		});
+	} catch (e) {
+		// 既に定義済みの場合は無視する
+	}
+}
+
+// 録画中リストから削除する
+function removeRecording(programId, reason) {
+	let changed = false;
+
+	for (let i = recording.length - 1; i >= 0; i--) {
+		if (recording[i].id !== programId) {
+			continue;
+		}
+
+		util.log((reason || 'REMOVE RECORDING') + ': ' + printProgram(recording[i]));
+		recording.splice(i, 1);
+		changed = true;
+	}
+
+	if (changed) {
+		writeRecordingData();
+	}
+}
+
+// 録画中のまま固着した番組を掃除する
+function recordingStaleChecker() {
+	for (let i = recording.length - 1; i >= 0; i--) {
+		const program = recording[i];
+
+		if (!program || !program.end) {
+			continue;
+		}
+
+		if (clock <= program.end + recordingExpireGraceTime) {
+			continue;
+		}
+
+		markRecordingNg(program, 'NG RECORDING');
+
+		if (program._stream && program._stream.req) {
+			try {
+				program._stream.req.abort();
+			} catch (e) {
+				util.log('WARNING: NG recording abort failed: ' + e.message);
+			}
+		}
+
+		removeRecording(program.id, 'NG RECORDING');
+	}
+}
+
 // 録画準備
 function prepRecord(program) {
 
 	if (clock > program.end) {
 		return;
 	}
+
+	wakeRecordedStorage(program);
 
 	util.log('PREPARE: ' + printProgram(program));
 
@@ -335,8 +469,7 @@ function prepRecord(program) {
 		});
 
 	recording.push(program);
-	fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));
-	util.log('WRITE: ' + RECORDING_DATA_FILE);
+	writeRecordingData();
 }
 
 // 録画実行
@@ -378,8 +511,7 @@ function doRecord(program, stream) {
 	process.on('SIGTERM', finalize);
 
 	// 状態更新
-	fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));
-	util.log('WRITE: ' + RECORDING_DATA_FILE);
+	writeRecordingData();
 
 	// 内部用
 	Object.defineProperty(program, "_stream", {
@@ -418,22 +550,30 @@ function doRecord(program, stream) {
 
 		// 状態を更新
 		delete program.pid;
-		for (let i = 0, l = recorded.length; i < l; i++) {
-			if (recorded[i].id === program.id) {
-				if (recorded[i].recorded === program.recorded) {
-					recorded.splice(i, 1);
-				} else {
-					recorded[i].id += '-' + recorded[i].start.toString(36);
+
+		if (!program._operatorNg) {
+			for (let i = 0, l = recorded.length; i < l; i++) {
+				if (recorded[i].id === program.id) {
+					if (recorded[i].recorded === program.recorded) {
+						recorded.splice(i, 1);
+					} else {
+						recorded[i].id += '-' + recorded[i].start.toString(36);
+					}
+					break;
 				}
-				break;
 			}
+			recorded.push(program);
+			fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
+			util.log('WRITE: ' + RECORDED_DATA_FILE);
+		} else {
+			util.log(program._operatorNg + ': ' + printProgram(program));
 		}
-		recorded.push(program);
-		recording.splice(recording.indexOf(program), 1);
-		fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
-		fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));
-		util.log('WRITE: ' + RECORDED_DATA_FILE);
-		util.log('WRITE: ' + RECORDING_DATA_FILE);
+
+		const recordingIndex = recording.indexOf(program);
+		if (recordingIndex !== -1) {
+			recording.splice(recordingIndex, 1);
+		}
+		writeRecordingData();
 		if (program.isManualReserved) {
 			for (let i = 0, l = reserves.length; i < l; i++) {
 				if (reserves[i].id === program.id) {
@@ -474,9 +614,13 @@ function doRecord(program, stream) {
 }
 
 // 録画中止
-function stopRecording(programId) {
+function stopRecording(programId, reason) {
 
 	const program = recording.find(program => program.id === programId);
+
+	if (program) {
+		markRecordingNg(program, reason || 'ABORT RECORDING');
+	}
 
 	if (program && program._stream) {
 		program._stream.req.abort();
@@ -486,8 +630,9 @@ function stopRecording(programId) {
 // ストレージチェック
 function storageChecker() {
 
-	disk.check(config.recordedDir, (err, info) => {
-		if(err) {
+	getDiskUsage(config.recordedDir, (err, info) => {
+		if (err) {
+			util.log('WARNING: Storage check failed: ' + err.message);
 			return;
 		}
 
@@ -505,7 +650,7 @@ function storageChecker() {
 			// 2. アクション
 			if (storageLowSpaceAction === "stop") {
 				// 録画停止
-				recording.forEach(program => stopRecording(program.id));
+				recording.forEach(program => stopRecording(program.id, 'LOW STORAGE'));
 			} else if (storageLowSpaceAction === "remove") {
 				// 削除
 				if (recorded.length > 0) {
@@ -585,7 +730,8 @@ chinachu.jsonWatcher(
 
 		// 録画中止処理
 		data.filter(program => !!program.abort).forEach(program => {
-			stopRecording(program.id);
+			stopRecording(program.id, 'ABORT RECORDING');
+			removeRecording(program.id, 'ABORT RECORDING');
 		});
 	},
 	{ create: [], now: false }
