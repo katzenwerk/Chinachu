@@ -1,0 +1,7 @@
+{
+  "/": {
+    "script": "match",
+    "methods": ["get"],
+    "types": ["json"]
+  }
+}

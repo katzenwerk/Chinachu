@@ -11,6 +11,7 @@ const PID_FILE = __dirname + '/data/scheduler.pid';
 const CONFIG_FILE = __dirname + '/config.json';
 const RULES_FILE = __dirname + '/rules.json';
 const RESERVES_DATA_FILE = __dirname + '/data/reserves.json';
+const RESERVES2_DATA_FILE = __dirname + '/data/reserves2.json';
 const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
 
 // 標準モジュールのロード
@@ -123,19 +124,212 @@ function isRunning(callback) {
 	return void 0;
 }
 
+// (function) write json atomically
+function writeJsonAtomic(file, data) {
+	var tmp = file + '.' + process.pid + '.tmp';
+
+	try {
+		fs.writeFileSync(tmp, JSON.stringify(data));
+		fs.renameSync(tmp, file);
+	} catch (e) {
+		try {
+			if (fs.existsSync(tmp)) {
+				fs.unlinkSync(tmp);
+			}
+		} catch (_) {}
+
+		throw e;
+	}
+}
+
+// (function) read json array
+function readJsonArray(file) {
+	if (!fs.existsSync(file)) {
+		return [];
+	}
+
+	try {
+		var data = JSON.parse(fs.readFileSync(file, { encoding: 'utf8' }) || '[]');
+
+		if (data instanceof Array === false) {
+			util.log('WARNING: `' + file + '`の内容が配列ではありません');
+			return [];
+		}
+
+		return data;
+	} catch (e) {
+		util.log('WARNING: `' + file + '`のロードに失敗しました: ' + e.message);
+		return [];
+	}
+}
+
+// (function) make reserves2 key
+function makeReserves2Key(program) {
+	if (!program) {
+		return '';
+	}
+
+	var key = program.key;
+
+	if (typeof key === 'string' && key !== '') {
+		return key;
+	}
+
+	var channel = program.channel || {};
+	var channelId = channel.id || program.channelId || '';
+	var start = parseInt(program.start, 10);
+	var seconds = parseInt(program.seconds, 10);
+
+	if (!channelId || !start || !seconds) {
+		return '';
+	}
+
+	return [channelId, start, seconds].join('|');
+}
+
+// (function) decorate reserves2 entry
+function decorateReserves2Entry(reserve, now) {
+	var entry = Object.assign({}, reserve);
+	var key = makeReserves2Key(entry);
+
+	entry.source = entry.source || 'scheduler';
+	entry.origId = entry.origId || entry.programId || entry.id || '';
+	entry.key = key;
+	entry.snapshotAt = now;
+	entry.updatedAt = now;
+
+	return entry;
+}
+
+// (function) remake reserves2
+function remakeReserves2(currentReserves2, activeReserves, now) {
+	var keepMillis = 30 * 24 * 60 * 60 * 1000;
+	var threshold = now - keepMillis;
+	var map = {};
+
+	/*
+	 * reserves2 の扱い:
+	 *   - 過去分(end < now)は30日以内なら保持する
+	 *   - 30日より前に終了したものは削除する
+	 *   - 現在/未来分(end >= now)は activeReserves、つまり reserves.json と同じ内容を正とする
+	 *
+	 * これにより、未来の予約ルール変更・解除で reserves.json から消えたものは
+	 * reserves2 側にも残り続けない。
+	 */
+	currentReserves2.forEach(function (reserve) {
+		if (!reserve) {
+			return;
+		}
+
+		var end = parseInt(reserve.end, 10);
+
+		if (!end) {
+			return;
+		}
+
+		if (end < threshold) {
+			return;
+		}
+
+		if (end >= now) {
+			return;
+		}
+
+		var key = makeReserves2Key(reserve);
+
+		if (!key) {
+			return;
+		}
+
+		reserve.key = key;
+		map[key] = reserve;
+	});
+
+	activeReserves.forEach(function (reserve) {
+		if (!reserve) {
+			return;
+		}
+
+		var key = makeReserves2Key(reserve);
+
+		if (!key) {
+			return;
+		}
+
+		map[key] = decorateReserves2Entry(reserve, now);
+	});
+
+	return Object.keys(map).map(function (key) {
+		return map[key];
+	}).sort(function (a, b) {
+		return parseInt(a.start || 0, 10) - parseInt(b.start || 0, 10);
+	});
+}
+
 // (function) remake reserves
 function outputReserves() {
 	util.log('WRITE: ' + RESERVES_DATA_FILE);
 
+	var now = new Date().getTime();
 	var array = [];
 
 	reserves.forEach(function (reserve) {
-		if (reserve.end < new Date().getTime()) { return; }
+		if (reserve.end < now) { return; }
 
 		array.push(reserve);
 	});
 
+	// Chinachu本体・Web側の更新検知互換性を優先し、元版と同じ直接書き込みにする
 	fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(array));
+
+	// reserves2 は副次出力。失敗しても本体の reserves.json 更新と後続フックを止めない
+	try {
+		util.log('WRITE: ' + RESERVES2_DATA_FILE);
+
+		var currentReserves2 = readJsonArray(RESERVES2_DATA_FILE);
+		var reserves2Array = remakeReserves2(currentReserves2, array, now);
+
+		writeJsonAtomic(RESERVES2_DATA_FILE, reserves2Array);
+	} catch (e) {
+		util.log('WARNING: `' + RESERVES2_DATA_FILE + '`の保存に失敗しました: ' + (e && e.stack ? e.stack : e));
+	}
+}
+
+// (function) update match ledger
+function updateMatchLedger() {
+	var appMatchingFile = __dirname + '/app-matching.js';
+	var recordedDataFile = __dirname + '/data/recorded.json';
+	var matchDataFile = __dirname + '/data/match.json';
+	var commandProcess;
+
+	try {
+		if (!fs.existsSync(appMatchingFile)) {
+			util.log('WARNING: `' + appMatchingFile + '`が存在しないため match.json 更新をスキップしました');
+			return;
+		}
+
+		util.log('RUN: ' + appMatchingFile);
+
+		commandProcess = child_process.spawnSync(process.execPath, [
+			appMatchingFile,
+			'--recorded', recordedDataFile,
+			'--reserves2', RESERVES2_DATA_FILE,
+			'--output', matchDataFile
+		], {
+			cwd: __dirname,
+			stdio: 'inherit'
+		});
+
+		if (commandProcess.error) {
+			throw commandProcess.error;
+		}
+
+		if (commandProcess.status !== 0) {
+			util.log('WARNING: match.json の更新に失敗しました: exit status=' + commandProcess.status);
+		}
+	} catch (e) {
+		util.log('WARNING: match.json の更新に失敗しました: ' + (e && e.stack ? e.stack : e));
+	}
 }
 
 // scheduler
@@ -313,6 +507,15 @@ function scheduler() {
 		a = matches[i];
 
 		if (!a.isDuplicate) {
+            for (let j = rules.length - 1; j >= 0; j--) {
+	            const rule = rules[j];
+	            if (chinachu.programMatchesRule(rule, a, config.normalizationForm)) {
+		            a.ruleId = rule.id !== undefined ? rule.id : j; // 逆順なので index は j
+		            break;
+	            }
+            }
+
+            a.programId = a.id;
 			reserves.push(a);
 
 			if (a.isSkip) {
@@ -345,6 +548,7 @@ function scheduler() {
 
 	if (!opts.get('s')) {
 		outputReserves();
+		updateMatchLedger();
 		// schedulerEnd フック
 		if (config.schedulerEndCommand) {
 			commandProcess = child_process.spawn(config.schedulerEndCommand, [process.pid, RULES_FILE, RESERVES_DATA_FILE, SCHEDULE_DATA_FILE, matches.length.toString(10), duplicateCount.toString(10), conflictCount.toString(10), skipCount.toString(10), reservedCount.toString(10)]);
