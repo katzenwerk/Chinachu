@@ -388,6 +388,13 @@ function mergeOldNew(oldEntry, newEntry, logger) {
 		return newEntry;
 	}
 
+	if (oldEntry.status === "RECORDED" && !hasRecordedEvidence(newEntry)) {
+		if (logger) {
+			logger("KEEP_RECORDED_STATUS: " + oldEntry.status + " over " + newEntry.status);
+		}
+		return oldEntry;
+	}
+
 	if (newEntry.status === "RECORDED") {
 		return newEntry;
 	}
@@ -951,10 +958,21 @@ function readJsonArray(file, options) {
 		throw new Error("file not found: " + file);
 	}
 
-	text = fs.readFileSync(file, { encoding: "utf8" }).replace(/^\uFEFF/, "");
-	data = JSON.parse(text || "[]");
+	try {
+		text = fs.readFileSync(file, { encoding: "utf8" }).replace(/^\uFEFF/, "");
+		data = JSON.parse(text || "[]");
+	} catch (error) {
+		if (options.allowInvalid) {
+			console.error("WARNING: invalid JSON ignored: " + file + " (" + error.message + ")");
+			return [];
+		}
+		throw error;
+	}
 
 	if (!Array.isArray(data)) {
+		if (options.allowInvalid) {
+			console.error("WARNING: JSON array expected, ignored: " + file);
+		}
 		return [];
 	}
 
@@ -964,6 +982,23 @@ function readJsonArray(file, options) {
 function ensureParentDirectory(file) {
 	var dir = path.dirname(path.resolve(file));
 	mkdirp.sync(dir);
+}
+
+function writeJsonAtomic(file, data) {
+	var tmp = file + "." + process.pid + ".tmp";
+
+	try {
+		fs.writeFileSync(tmp, JSON.stringify(data));
+		fs.renameSync(tmp, file);
+	} catch (error) {
+		try {
+			if (fs.existsSync(tmp)) {
+				fs.unlinkSync(tmp);
+			}
+		} catch (_) {}
+
+		throw error;
+	}
 }
 
 function printSummary(summary, output) {
@@ -1027,7 +1062,7 @@ function main() {
 		}
 
 		oldMatchPath = options.oldMatch || options.output;
-		oldResults = options.initialBuild ? [] : readJsonArray(oldMatchPath, { allowMissing: true });
+		oldResults = options.initialBuild ? [] : readJsonArray(oldMatchPath, { allowMissing: true, allowInvalid: true });
 		recordedList = readJsonArray(options.recorded, { allowMissing: true });
 		reserves2List = readJsonArray(options.reserves2, { allowMissing: true });
 
@@ -1043,7 +1078,7 @@ function main() {
 		});
 
 		ensureParentDirectory(options.output);
-		fs.writeFileSync(options.output, JSON.stringify(ledger.results));
+		writeJsonAtomic(options.output, ledger.results);
 
 		printSummary(ledger.summary, options.output);
 	} catch (error) {
@@ -1080,5 +1115,6 @@ module.exports = {
 	buildMatchItem: buildMatchItem,
 	buildMatchLedger: buildMatchLedger,
 	parseArgs: parseArgs,
-	readJsonArray: readJsonArray
+	readJsonArray: readJsonArray,
+	writeJsonAtomic: writeJsonAtomic
 };

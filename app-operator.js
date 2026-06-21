@@ -463,8 +463,11 @@ function prepRecord(program) {
 
 			// リトライ
 			setTimeout(() => {
-				recording.splice(recording.indexOf(program), 1);
-				fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));
+				const recordingIndex = recording.indexOf(program);
+				if (recordingIndex !== -1) {
+					recording.splice(recordingIndex, 1);
+					writeRecordingData();
+				}
 			}, 5000);
 		});
 
