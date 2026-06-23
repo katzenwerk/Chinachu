@@ -270,6 +270,20 @@ P = Class.create(P, {
 				}).entity
 			};
 
+			row.cell.action = {
+				sortAlt: i,
+				element: new sakura.ui.Button({
+					label  : '中止',
+					icon   : './icons/cross.png',
+					onClick: function(e) {
+						if (e && e.stop) {
+							e.stop();
+						}
+						new chinachu.ui.StopRecord(program.id);
+					}
+				}).entity
+			};
+
 			rows.push(row);
 		});
 

@@ -149,6 +149,11 @@
 					"title": "Program",
 					"icon" : "./icons/film.png"
 				},
+				"view2": {
+					"label": "Program",
+					"title": "Program",
+					"icon" : "./icons/film.png"
+				},
 
 				"watch": {
 					"label": "Watch",

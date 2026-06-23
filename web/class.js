@@ -124,9 +124,414 @@
 	};
 
 	// inputType
+	var createTextElement = function _createTextElement(tagName, text, attr) {
+		var element = new Element(tagName, attr || {});
+		element.appendChild(document.createTextNode((typeof text === 'undefined' || text === null) ? '' : String(text)));
+		return element;
+	};
+
+	var normalizeArray = function _normalizeArray(val) {
+		if (!val) {
+			return [];
+		}
+		if (Object.prototype.toString.call(val) === '[object Array]') {
+			return val.compact ? val.compact() : val;
+		}
+		return [val];
+	};
+
+	var getChannelsForSelector = function _getChannelsForSelector() {
+		var channels = normalizeArray(global.chinachu.schedule);
+		var typeOrder = {
+			GR : 1,
+			BS : 2,
+			CS : 3,
+			SKY: 4
+		};
+
+		channels = channels.slice(0);
+		channels.sort(function (a, b) {
+			var aType = typeOrder[a.type] || 99;
+			var bType = typeOrder[b.type] || 99;
+			var aName = a.name || a.channel || a.id || '';
+			var bName = b.name || b.channel || b.id || '';
+
+			if (aType !== bType) {
+				return aType - bType;
+			}
+			if ((a.channel || '') !== (b.channel || '')) {
+				return String(a.channel || '').localeCompare(String(b.channel || ''));
+			}
+			return String(aName).localeCompare(String(bName));
+		});
+
+		return channels;
+	};
+
+	var getChannelSelectorValues = function _getChannelSelectorValues(ch, values) {
+		var keys = [];
+		if (ch.id) {
+			keys.push(String(ch.id));
+		}
+		if (ch.channel) {
+			keys.push(String(ch.channel));
+		}
+		if (ch.type && (typeof ch.sid !== 'undefined')) {
+			keys.push(String(ch.type) + '_' + String(ch.sid));
+		}
+
+		var i;
+		for (i = 0; i < keys.length; i++) {
+			if (values.indexOf(keys[i]) !== -1) {
+				return true;
+			}
+		}
+
+		return false;
+	};
+
+	var makeChannelSelectorMeta = function _makeChannelSelectorMeta(ch) {
+		var type = ch.type || '-';
+		var sid = (typeof ch.sid === 'undefined' || ch.sid === null) ? '-' : String(ch.sid);
+		var channel = (typeof ch.channel === 'undefined' || ch.channel === null) ? '' : String(ch.channel);
+		var channelDigits = channel.replace(/\D/g, '');
+
+		if (type === 'GR' && channelDigits !== '') {
+			return type + sid;
+		}
+
+		return type + sid;
+	};
+
+
+	var createChannelSelectorLogo = function _createChannelSelectorLogo(ch, id) {
+		var createFallback = function _createFallback() {
+			return createTextElement('span', '▣', { className: 'channel-selector-logo' }).setStyle({
+				width      : '22px',
+				minWidth   : '22px',
+				height     : '18px',
+				lineHeight  : '18px',
+				textAlign  : 'center',
+				marginRight: '5px',
+				fontSize   : '10px',
+				opacity    : '0.8',
+				flex       : '0 0 auto'
+			});
+		};
+
+		var channelId = String(id || (ch && ch.id) || '');
+		var logo;
+
+		if (!ch || ch.hasLogoData !== true || channelId === '') {
+			return createFallback();
+		}
+
+		logo = new Element('img', {
+			className: 'channel-selector-logo',
+			src      : './api/channel/' + encodeURIComponent(channelId) + '/logo.png'
+		}).setStyle({
+			width      : '34px',
+			minWidth   : '34px',
+			height     : '22px',
+			objectFit  : 'contain',
+			marginRight: '6px',
+			flex       : '0 0 auto'
+		});
+
+		logo.observe('error', function () {
+			logo.replace(createFallback());
+		});
+
+		return logo;
+	};
+
+	var openChannelSelector = function _openChannelSelector(title, currentValues, onApply, sourceElement) {
+		var values = normalizeArray(currentValues).map(function (v) {
+			return String(v);
+		});
+		var selected = {};
+		var channels = getChannelsForSelector();
+		var getBaseModalWidth = function _getBaseModalWidth(el) {
+			var node = el;
+			var width = 0;
+			var rect;
+			var i = 0;
+
+			while (node && node !== document.body && i < 16) {
+				if (node.getBoundingClientRect) {
+					rect = node.getBoundingClientRect();
+
+					if (rect.width > width && rect.width > 600 && rect.width < window.innerWidth - 40) {
+						width = rect.width;
+					}
+				}
+
+				node = node.parentNode;
+				i++;
+			}
+
+			if (!width) {
+				width = Math.min(1180, Math.max(760, window.innerWidth - 220));
+			}
+
+			return Math.floor(width);
+		};
+		var baseSelectorWidth = getBaseModalWidth(sourceElement);
+		var selectorWidth = Math.max(760, Math.min(baseSelectorWidth - 24, window.innerWidth - 220));
+
+		var content = new Element('div', { className: 'channel-selector' }).setStyle({
+			width     : '100%',
+			maxWidth  : '100%',
+			boxSizing : 'border-box',
+			overflowX : 'hidden'
+		});
+		var toolbar = new Element('div', { className: 'channel-selector-toolbar' }).setStyle({
+			marginBottom: '8px',
+			display     : 'flex',
+			alignItems  : 'center',
+			gap         : '8px',
+			width       : '100%',
+			boxSizing   : 'border-box'
+		});
+		var search = new Element('input', {
+			type       : 'text',
+			placeholder: '検索'
+		}).setStyle({
+			width    : '260px',
+			maxWidth : 'calc(100% - 100px)',
+			boxSizing: 'border-box'
+		});
+		var typeSelect = new Element('select').setStyle({
+			width: '90px'
+		});
+		var columnCount = 4;
+
+		if (selectorWidth < 1000) {
+			columnCount = 3;
+		}
+		if (selectorWidth < 740) {
+			columnCount = 2;
+		}
+		if (selectorWidth < 520) {
+			columnCount = 1;
+		}
+
+		var grid = new Element('div', { className: 'channel-selector-grid' }).setStyle({
+			display            : 'grid',
+			gridTemplateColumns: 'repeat(' + columnCount + ', minmax(0, 1fr))',
+			gap                : '4px 4px',
+			maxHeight          : 'calc(100vh - 260px)',
+			paddingRight       : '30px',
+			paddingLeft       : '10px',
+			overflowY          : 'auto',
+			overflowX          : 'hidden',
+			boxSizing           : 'border-box',
+			width              : '100%',
+			maxWidth           : '100%'
+		});
+		var i;
+
+		['すべて', 'GR', 'BS', 'CS', 'SKY'].each(function (type) {
+			var option = new Element('option', { value: type === 'すべて' ? '' : type });
+			option.appendChild(document.createTextNode(type));
+			typeSelect.insert(option);
+		});
+
+		for (i = 0; i < channels.length; i++) {
+			if (getChannelSelectorValues(channels[i], values)) {
+				selected[String(channels[i].id)] = true;
+			}
+		}
+
+		var render = function _render() {
+			var keyword = String(search.value || '').toLowerCase();
+			var filterType = String(typeSelect.value || '');
+
+			grid.update();
+
+			channels.each(function (ch) {
+				var id = String(ch.id || '');
+				var name = String(ch.name || ch.channel || ch.id || '');
+				var meta = makeChannelSelectorMeta(ch);
+				var haystack = [
+					id,
+					name,
+					ch.type || '',
+					ch.channel || '',
+					meta
+				].join(' ').toLowerCase();
+
+				if (filterType && ch.type !== filterType) {
+					return;
+				}
+				if (keyword && haystack.indexOf(keyword) === -1) {
+					return;
+				}
+
+				var label = new Element('div', { className: 'channel-selector-item' }).setStyle({
+					display     : 'flex',
+					alignItems  : 'center',
+					minHeight   : '30px',
+					padding     : '3px 5px',
+					border      : '1px solid #ccc',
+					borderRadius: '3px',
+					cursor      : 'pointer',
+					boxSizing   : 'border-box',
+					overflow    : 'hidden',
+					userSelect  : 'none',
+					minWidth    : '0',
+					maxWidth    : '100%',
+					width       : '100%'
+				});
+
+				var logo = createChannelSelectorLogo(ch, id);
+				var text = new Element('span', { className: 'channel-selector-text' }).setStyle({
+					display    : 'flex',
+					alignItems : 'center',
+					whiteSpace : 'nowrap',
+					overflow   : 'hidden',
+					fontSize   : '11px',
+					lineHeight  : '1.25',
+					minWidth   : '0',
+					width      : '100%',
+					flex       : '1 1 auto'
+				});
+				var nameSpan = createTextElement('span', name, { className: 'channel-selector-name' }).setStyle({
+					marginRight : '3px',
+					overflow    : 'hidden',
+					textOverflow: 'ellipsis',
+					whiteSpace  : 'nowrap',
+					minWidth    : '0',
+					flex        : '1 1 auto'
+				});
+				var metaSpan = createTextElement('span', meta, { className: 'channel-selector-meta' }).setStyle({
+					opacity   : '0.75',
+					marginLeft: '5px',
+					minWidth  : '52px',
+					textAlign : 'right',
+					fontSize  : '10px',
+					whiteSpace: 'nowrap',
+					flex      : '0 0 auto'
+				});
+
+				var updateSelectedStyle = function _updateSelectedStyle() {
+					if (selected[id]) {
+						label.setStyle({
+							border    : '2px solid #0b7d77',
+							padding   : '2px 4px',
+							background: '#e9f6f4'
+						});
+					} else {
+						label.setStyle({
+							border    : '1px solid #ccc',
+							padding   : '3px 5px',
+							background: '#fff'
+						});
+					}
+				};
+
+				label.observe('click', function () {
+					if (selected[id]) {
+						delete selected[id];
+					} else {
+						selected[id] = true;
+					}
+					updateSelectedStyle();
+				});
+
+				label.writeAttribute('title', [
+					name,
+					meta,
+					'channel: ' + (ch.channel || '-'),
+					'id: ' + id,
+					'nid: ' + (typeof ch.nid === 'undefined' ? '-' : ch.nid)
+				].join(' / '));
+
+				text.insert(nameSpan);
+				text.insert(metaSpan);
+
+				label.insert(logo);
+				label.insert(text);
+				updateSelectedStyle();
+
+				grid.insert(label);
+			});
+		};
+
+		search.observe('keyup', render);
+		typeSelect.observe('change', render);
+
+		toolbar.insert(search);
+		toolbar.insert(typeSelect);
+		content.insert(toolbar);
+		content.insert(grid);
+
+		render();
+
+		var modal = new flagrate.Modal({
+			title  : title || 'チャンネル選択',
+			element: content,
+			buttons: [
+				{
+					label  : '反映',
+					className: 'primary-teal',
+					onSelect: function (e, modal) {
+						var result = [];
+
+						channels.each(function (ch) {
+							var id = String(ch.id || '');
+							if (selected[id]) {
+								result.push(id);
+							}
+						});
+
+						onApply(result);
+						modal.close();
+					}
+				},
+				{
+					label: 'キャンセル',
+					onSelect: function (e, modal) {
+						modal.close();
+					}
+				}
+			]
+		}).show();
+
+		setTimeout(function () {
+			var width = selectorWidth;
+			var node = content.parentNode;
+			var rect;
+			var i = 0;
+
+			while (node && node !== document.body && i < 8) {
+				if (node.getBoundingClientRect && node.setStyle) {
+					rect = node.getBoundingClientRect();
+
+					if (rect.width > 0 && rect.width < window.innerWidth - 80) {
+						node.setStyle({
+							width    : width + 'px',
+							maxWidth : 'calc(100vw - 220px)',
+							boxSizing: 'border-box'
+						});
+					}
+				}
+
+				node = node.parentNode;
+				i++;
+			}
+
+			content.setStyle({
+				width    : '100%',
+				maxWidth : '100%',
+				boxSizing: 'border-box'
+			});
+		}, 0);
+	};
+
 	var formInputTypeChannels = {
 		create: function () {
-			return flagrate.createTokenizer({
+			var tokenizer = flagrate.createTokenizer({
 				placeholder: '...',
 				tokenize: function (input) {
 					var candidates = global.chinachu.schedule.pluck('id').concat(global.chinachu.schedule.pluck('channel'));
@@ -149,6 +554,68 @@
 					return candidates;
 				}
 			});
+			var wrapper = new Element('div', { className: 'channel-tokenizer-with-selector' }).setStyle({
+				display   : 'flex',
+				alignItems: 'center',
+				gap       : '6px',
+				width     : '100%'
+			});
+			var button = new Element('button', {
+				type     : 'button',
+				className: 'channel-selector-button'
+			}).setStyle({
+				minWidth: '56px'
+			});
+
+			button.appendChild(document.createTextNode('選択'));
+
+			if (tokenizer.setStyle) {
+				tokenizer.setStyle({
+					flex: '1 1 auto'
+				});
+			} else if (tokenizer.element && tokenizer.element.setStyle) {
+				tokenizer.element.setStyle({
+					flex: '1 1 auto'
+				});
+			}
+
+			if (tokenizer.insertTo) {
+				tokenizer.insertTo(wrapper);
+			} else {
+				wrapper.insert(tokenizer.element || tokenizer);
+			}
+
+			wrapper.insert(button);
+
+			button.observe('click', function () {
+				openChannelSelector('チャンネル選択', tokenizer.getValues(), function (values) {
+					tokenizer.setValues(values);
+				}, wrapper);
+			});
+
+			wrapper.getValues = function () {
+				return tokenizer.getValues();
+			};
+			wrapper.setValues = function (val) {
+				tokenizer.setValues(val || []);
+				return wrapper;
+			};
+			wrapper.enable = function () {
+				if (tokenizer.enable) {
+					tokenizer.enable();
+				}
+				button.disabled = false;
+				return wrapper;
+			};
+			wrapper.disable = function () {
+				if (tokenizer.disable) {
+					tokenizer.disable();
+				}
+				button.disabled = true;
+				return wrapper;
+			};
+
+			return wrapper;
 		},
 		getVal: function () {
 			return this.element.getValues();
@@ -1314,7 +1781,7 @@
 							buttons: [
 								{
 									label  : '変更',
-									color  : '@pink',
+									className: 'primary-teal',
 									onSelect: function (e, modal) {
 										e.targetButton.disable();
 
@@ -1548,7 +2015,7 @@
 					buttons: [
 						{
 							label  : '作成',
-							color  : '@pink',
+							className: 'primary-teal',
 							onSelect: function(e, modal) {
 								e.targetButton.disable();
 
@@ -1785,7 +2252,7 @@
 					buttons: [
 						{
 							label  : '作成',
-							color  : '@pink',
+							className: 'primary-teal',
 							onSelect: function(e, modal) {
 								e.targetButton.disable();
 

@@ -7,21 +7,164 @@ P = Class.create(P, {
 		this.initToolbar();
 		this.draw();
 
+		this.onPageLeft = function() {
+			this.movePage(-1);
+		}.bind(this);
+
+		this.onPageRight = function() {
+			this.movePage(1);
+		}.bind(this);
+
+		sakura.shortcut.add("Left", this.onPageLeft, {
+			protectInput: true
+		});
+
+		sakura.shortcut.add("Right", this.onPageRight, {
+			protectInput: true
+		});
+
 		this.onNotify = this.refresh.bindAsEventListener(this);
 		document.observe('chinachu:rules', this.onNotify);
+		document.observe('chinachu:reserves', this.onNotify);
 
 		return this;
 	}
 	,
 	deinit: function() {
 
+		sakura.shortcut.remove("Left");
+		sakura.shortcut.remove("Right");
+
 		document.stopObserving('chinachu:rules', this.onNotify);
+		document.stopObserving('chinachu:reserves', this.onNotify);
 
 		return this;
 	}
 	,
 	refresh: function() {
 
+		this.drawMain();
+
+		return this;
+	}
+	,
+	getPageNumber: function() {
+
+		var page = 1;
+		var match;
+
+		if (this.self.query && typeof this.self.query.page !== 'undefined') {
+			page = parseInt(this.self.query.page, 10) || 1;
+		} else {
+			match = (window.location.hash || '').match(/(?:[?&]|\/)page=(\d+)/);
+
+			if (match) {
+				page = parseInt(match[1], 10) || 1;
+			}
+		}
+
+		if (page < 1) {
+			page = 1;
+		}
+
+		return page;
+	}
+	,
+	getGridPagePosition: function() {
+
+		if (!this.grid) {
+			return this.getPageNumber() - 1;
+		}
+
+		if (typeof this.grid.pagePosition === 'number') {
+			return this.grid.pagePosition;
+		}
+
+		if (typeof this.grid._pagePosition === 'number') {
+			return this.grid._pagePosition;
+		}
+
+		return this.getPageNumber() - 1;
+	}
+	,
+	setGridPagePosition: function(pagePosition, render) {
+
+		if (!this.grid) {
+			return this;
+		}
+
+		pagePosition = parseInt(pagePosition, 10) || 0;
+
+		if (pagePosition < 0) {
+			pagePosition = 0;
+		}
+
+		this.grid.pagePosition = pagePosition;
+		this.grid._pagePosition = pagePosition;
+
+		if (render !== false) {
+			if (typeof this.grid._requestRender === 'function') {
+				this.grid._requestRender();
+			} else if (typeof this.grid._render === 'function') {
+				this.grid._render();
+			}
+		}
+
+		return this;
+	}
+	,
+	updatePageHash: function() {
+
+		var currentPage = this.getGridPagePosition() + 1;
+
+		this.app.pm._lastHash = '!/rules/list/?page=' + currentPage;
+		history.replaceState(null, null, '#' + this.app.pm._lastHash);
+
+		return this;
+	}
+	,
+	movePage: function(delta) {
+
+		var currentPosition = this.getGridPagePosition();
+		var nextPosition = currentPosition + delta;
+		var rowsPerPage = 25;
+		var rowCount = global.chinachu.rules ? global.chinachu.rules.length : 0;
+		var maxPosition;
+
+		if (!this.grid) {
+			return this;
+		}
+
+		if (this.grid.numberOfRowsPerPage) {
+			rowsPerPage = this.grid.numberOfRowsPerPage;
+		}
+
+		maxPosition = Math.max(0, Math.ceil(rowCount / rowsPerPage) - 1);
+
+		if (nextPosition < 0) {
+			nextPosition = 0;
+		}
+
+		if (nextPosition > maxPosition) {
+			nextPosition = maxPosition;
+		}
+
+		if (nextPosition === currentPosition) {
+			return this;
+		}
+
+		/*
+		 * flagrate.Grid の内部描画メソッドへ直接触ると版差が出るため、
+		 * ルール一覧では page 値を更新してから drawMain() を再実行する。
+		 * drawMain() -> _drawMainWithCounts() -> grid.splice() の既存描画経路を使う。
+		 */
+		if (!this.self.query) {
+			this.self.query = {};
+		}
+
+		this.self.query.page = (nextPosition + 1).toString(10);
+		this.setGridPagePosition(nextPosition, false);
+		this.updatePageHash();
 		this.drawMain();
 
 		return this;
@@ -184,6 +327,7 @@ P = Class.create(P, {
 		this.grid = new flagrate.Grid({
 			multiSelect: true,
 			pagination : true,
+			numberOfRowsPerPage: 25,
 			fill       : true,
 			cols: [
 				{
@@ -197,6 +341,10 @@ P = Class.create(P, {
 					label: '放送波',
 					width: 70
 				},
+                {   key  : 'reserve_count',
+                    label: '予約数',
+                    width: 50
+                },
 				{
 					key  : 'categories',
 					label: 'ジャンル',
@@ -257,8 +405,13 @@ P = Class.create(P, {
 			onDeselect: this.updateToolbar.bind(this),
 			onDblClick: function(e, row) {
 				new chinachu.ui.EditRule(global.chinachu.rules.indexOf(row.data));
-			}.bind(this)
+			}.bind(this),
+	onRendered: function () {
+		this.updatePageHash();
+	}.bind(this)
 		}).insertTo(this.view.content);
+
+		this.setGridPagePosition(this.getPageNumber() - 1, false);
 
 		this.drawMain();
 
@@ -266,7 +419,31 @@ P = Class.create(P, {
 	}
 	,
 	drawMain: function() {
+        new Ajax.Request('./api/reserves.json', {
+	        method: 'get',
+	        onSuccess: function(res) {
+		        var reserves = res.responseJSON;
 
+		        // ruleIdごとに予約数を集計
+		        var reserveCounts = {};
+		        var skipCounts = {};
+                reserves.forEach(function(r) {
+                    if (typeof r.ruleId === 'number' && !r.isSkip) {
+                        reserveCounts[r.ruleId] = (reserveCounts[r.ruleId] || 0) + 1;
+                    }
+                    if (typeof r.ruleId === 'number' && r.iskip ==false) {
+                        skipCounts[r.ruleId] = (skipCounts[r.ruleId] || 0) + 1;
+                    }
+
+                });
+
+		        // メイン描画処理を別関数に切り出して呼ぶ
+		        this._drawMainWithCounts(reserveCounts);
+	        }.bind(this)
+        });
+    }
+    ,
+	_drawMainWithCounts: function(reserveCounts) {
 		var rows = [];
 
 		global.chinachu.rules.each(function(rule, i) {
@@ -311,6 +488,11 @@ P = Class.create(P, {
 					text     : 'any'
 				};
 			}
+            row.cell.reserve_count = {
+	            html: '<a href="#!/reserves/list/page=0&rule=' + i + '" title="このルールの予約一覧を見る" target=_blank onclick="event.stopPropagation();">'
+	                + (reserveCounts[i] || 0).toString(10)
+	                + '</a>'
+            };
 
 			if (rule.channels) {
 				row.cell.channels = {
@@ -460,6 +642,8 @@ P = Class.create(P, {
 
 			rows.push(row);
 		});
+
+		this.setGridPagePosition(this.getPageNumber() - 1, false);
 
 		this.grid.splice(0, void 0, rows).each(function(row) {
 			this.grid.deselect(row);

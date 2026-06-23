@@ -131,7 +131,7 @@
 				key: 'day+0',
 				ui : new sakura.ui.Button({
 					className: 'day',
-					label  : (date.getMonth() + 1) + '/' + date.getDate() + '(' + days[date.getDay()] + ') ' + date.getHours() + '時~',
+					label  : (date.getMonth() + 1) + '/' + date.getDate() + '(' + days[date.getDay()] + ') ' + date.getHours() + '時～',
 					onClick: function () {
 						this.self.query.day = '0';
 						location.hash = '!/schedule/table/' + Object.toQueryString(this.self.query) + '/';
@@ -249,7 +249,7 @@
 							buttons: [
 								{
 									label: '適用',
-									color: '@pink',
+									className: 'primary-teal',
 									onSelect: function (e, modal) {
 
 										var result = form.getResult();
@@ -562,7 +562,7 @@
 				this.view.drawerFoot.update(
 					new flagrate.Button({
 						label   : '番組詳細',
-						color   : '@pink',
+						className: 'primary-teal',
 						onSelect: function () {
 							location.hash = '!/program/view/id=' + this.data.target.id + '/';
 						}.bind(this)

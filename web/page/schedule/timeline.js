@@ -313,7 +313,7 @@ P = Class.create(P, {
 			this.view.drawerFoot.update(
 				new flagrate.Button({
 					label   : '番組詳細',
-					color   : '@pink',
+					className: 'primary-teal',
 					onSelect: function() {
 						window.location.hash = '!/program/view/id=' + this.data.target.id + '/';
 					}.bind(this)

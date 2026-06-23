@@ -148,7 +148,7 @@
 		flagrate.createElement("a", {
 			"class": "navbar-brand",
 			href: "#!/dashboard/top/"
-		}).insert("Chinachu<i>γ</i>").insertTo(navbarHeader);
+		}).insert("Chinachu<span class='chinachu-rune'>ᚦ</span>").insertTo(navbarHeader);
 
 		var navbar = flagrate.createElement("div", { id: "navbar", "class": "navbar-collapse collapse" }).insertTo(app.view.header);
 		var nav = flagrate.createElement("ul", { "class": "nav navbar-nav" }).insertTo(navbar);
@@ -258,7 +258,44 @@
 			app.view.mainBody.entity.removeClassName('overline');
 		}
 	};
+	app.f.isInputFocused = function _isInputFocused() {
+		var el = document.activeElement;
 
+		if (!el) {
+			return false;
+		}
+
+		var tagName = (el.tagName || '').toLowerCase();
+
+		return (
+			tagName === 'input' ||
+			tagName === 'textarea' ||
+			tagName === 'select' ||
+			el.isContentEditable
+		);
+	};
+
+	app.f.moveHashPage = function _moveHashPage(delta) {
+		if (app.f.isInputFocused()) {
+			return false;
+		}
+
+		var hash = window.location.hash || '';
+		var match = hash.match(/page=(\d+)/);
+		var currentPage = match ? parseInt(match[1], 10) : 0;
+		var nextPage = currentPage + delta;
+
+		if (isNaN(nextPage) || nextPage < 0) {
+			return false;
+		}
+
+		if (hash.match(/page=\d+/)) {
+			window.location.hash = hash.replace(/page=\d+/, 'page=' + nextPage);
+			return true;
+		}
+
+		return false;
+	};
 	app.f.getProgramById = function _getProgramById(id) {
 		for (var i = 0; i < app.chinachu.recording.length; i++) {
 			if ((app.chinachu.recording[i].id === id) && (app.chinachu.recording[i].pid)) {
@@ -471,8 +508,70 @@
 		});
 	};
 
+	var getMatchProgramForRecordedBadge = function _getMatchProgramForRecordedBadge(item) {
+		return item.program || item.recorded || item.reserve || {};
+	};
+
+	var isFinishedMatchForRecordedBadge = function _isFinishedMatchForRecordedBadge(item) {
+		var program = getMatchProgramForRecordedBadge(item);
+		var start = program.start || 0;
+		var seconds = program.seconds || 0;
+		var end = program.end || (start + (seconds * 1000));
+
+		return end > 0 && Date.now() > end;
+	};
+
+	var updateRecordedBadgeFromMatch = function _updateRecordedBadgeFromMatch() {
+		new Ajax.Request('./api/match.json', {
+			method: 'get',
+			onSuccess: function (t) {
+				var items = [];
+				var rec = 0;
+				var ng = 0;
+
+				try {
+					items = t.responseText.evalJSON();
+				} catch (e) {
+					items = [];
+				}
+
+				if (!Object.isArray(items)) {
+					items = [];
+				}
+
+				items.each(function (item) {
+					if (!isFinishedMatchForRecordedBadge(item)) {
+						return;
+					}
+
+					if (item.status === 'RECORDED') {
+						rec++;
+					} else if (item.status === 'MISSED') {
+						ng++;
+					}
+				});
+
+				if ($('category-recorded-badge')) {
+					$('category-recorded-badge').writeAttribute('title', '録画済 / NG');
+					$('category-recorded-badge').update(
+						rec.toString(10) +
+						'/<span style="color:#ff6b9a;font-weight:bold;">' +
+						ng.toString(10) +
+						'</span>'
+					);
+				}
+			},
+			onFailure: function () {
+				if ($('category-recorded-badge')) {
+					$('category-recorded-badge').writeAttribute('title', 'match.json を取得できませんでした');
+					$('category-recorded-badge').update('-/<span style="color:#ff6b9a;font-weight:bold;">-</span>');
+				}
+			}
+		});
+	};
+
 	document.observe('chinachu:recorded', function (e) {
-		$("category-recorded-badge").update(e.memo.length.toString(10));
+		updateRecordedBadgeFromMatch();
 
 		if (app.stat.lastRecordedCount) {
 			if (app.stat.lastRecordedCount < e.memo.length) {

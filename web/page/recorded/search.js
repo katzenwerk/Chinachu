@@ -6,7 +6,21 @@ P = Class.create(P, {
 
 		this.initToolbar();
 		this.draw();
+		this.onPageLeft = function() {
+			this.movePage(-1);
+		}.bind(this);
 
+		this.onPageRight = function() {
+			this.movePage(1);
+		}.bind(this);
+
+		sakura.shortcut.add("Left", this.onPageLeft, {
+			protectInput: true
+		});
+
+		sakura.shortcut.add("Right", this.onPageRight, {
+			protectInput: true
+		});
 		this.onNotify = this.refresh.bindAsEventListener(this);
 		document.observe('chinachu:recorded', this.onNotify);
 
@@ -14,7 +28,8 @@ P = Class.create(P, {
 	}
 	,
 	deinit: function() {
-
+		sakura.shortcut.remove("Left");
+		sakura.shortcut.remove("Right");
 		document.stopObserving('chinachu:recorded', this.onNotify);
 
 		return this;
@@ -41,6 +56,183 @@ P = Class.create(P, {
 		return this;
 	}
 	,
+	getRowsPerPage: function() {
+
+		return 25;
+	}
+	,
+	getPagePosition: function() {
+
+		var page = 1;
+
+		if (this.self.query && typeof this.self.query.page !== 'undefined') {
+			page = parseInt(this.self.query.page, 10);
+		}
+
+		if (isNaN(page) || page < 1) {
+			page = 1;
+		}
+
+		return page - 1;
+	}
+	,
+	isMatchedSearchProgram: function(program) {
+
+		var nf;
+		var queryTitleNorm;
+		var queryDescNorm;
+
+		if (!program) {
+			return false;
+		}
+
+		if (this.self.query.pgid && this.self.query.pgid !== program.id) return false;
+		if (this.self.query.chid && this.self.query.chid !== program.channel.id) return false;
+		if (this.self.query.cat && this.self.query.cat !== program.category) return false;
+		if (this.self.query.type && this.self.query.type !== program.channel.type) return false;
+
+		if (global.chinachu.status.feature) {
+			nf = global.chinachu.status.feature.normalizationForm;
+		}
+
+		if (nf) {
+			if (this.self.query.title) {
+				queryTitleNorm = this.self.query.title.normalize(nf);
+				if (program.title.normalize(nf).match(queryTitleNorm) === null) return false;
+			}
+
+			if (this.self.query.desc) {
+				queryDescNorm = this.self.query.desc.normalize(nf);
+				if (!program.detail || program.detail.normalize(nf).match(queryDescNorm) === null) return false;
+			}
+		} else {
+			if (this.self.query.title && program.title.match(this.self.query.title) === null) return false;
+			if (this.self.query.desc && (!program.detail || program.detail.match(this.self.query.desc) === null)) return false;
+		}
+
+		if (this.self.query.start || this.self.query.end) {
+			var ruleStart = parseInt(this.self.query.start || 0, 10);
+			var ruleEnd   = parseInt(this.self.query.end || 24, 10);
+
+			var progStart = new Date(program.start).getHours();
+			var progEnd   = new Date(program.end).getHours();
+
+			if (progStart > progEnd) {
+				progEnd += 24;
+			}
+
+			if (ruleStart > ruleEnd) {
+				if ((ruleStart > progStart) && (ruleEnd < progEnd)) return false;
+			} else {
+				if ((ruleStart > progStart) || (ruleEnd < progEnd)) return false;
+			}
+		}
+
+		return true;
+	}
+	,
+	getFilteredProgramCount: function() {
+
+		var count = 0;
+		var program;
+
+		for (var i = 0, l = global.chinachu.recorded.length; i < l; i++) {
+			program = global.chinachu.recorded[i];
+
+			if (this.isMatchedSearchProgram(program)) {
+				count++;
+			}
+		}
+
+		return count;
+	}
+	,
+	getMaxPagePosition: function() {
+
+		var count = this.getFilteredProgramCount();
+		var rowsPerPage = this.getRowsPerPage();
+		var maxPagePosition = Math.ceil(count / rowsPerPage) - 1;
+
+		if (isNaN(maxPagePosition) || maxPagePosition < 0) {
+			maxPagePosition = 0;
+		}
+
+		return maxPagePosition;
+	}
+	,
+	updatePageHash: function() {
+
+		var pagePosition = this.getPagePosition();
+
+		this.self.query.page = (pagePosition + 1).toString(10);
+
+		this.app.pm._lastHash = '!/recorded/search/' + Object.toQueryString(this.self.query) + '/';
+		history.replaceState(null, null, '#' + this.app.pm._lastHash);
+
+		return this;
+	}
+	,
+	setPagePosition: function(pagePosition, redraw) {
+
+		var maxPagePosition = this.getMaxPagePosition();
+
+		pagePosition = parseInt(pagePosition, 10);
+
+		if (isNaN(pagePosition) || pagePosition < 0) {
+			pagePosition = 0;
+		}
+
+		if (pagePosition > maxPagePosition) {
+			pagePosition = maxPagePosition;
+		}
+
+		this.self.query.page = (pagePosition + 1).toString(10);
+
+		if (this.grid) {
+			this.grid._pagePosition = pagePosition;
+		}
+
+		this.updatePageHash();
+
+		if (redraw) {
+			this.drawMain();
+		}
+
+		return this;
+	}
+	,
+	movePage: function(delta) {
+
+		var currentPagePosition = this.getPagePosition();
+		var nextPagePosition;
+
+		if (this.grid && typeof this.grid._pagePosition !== 'undefined') {
+			currentPagePosition = parseInt(this.grid._pagePosition, 10);
+
+			if (isNaN(currentPagePosition) || currentPagePosition < 0) {
+				currentPagePosition = this.getPagePosition();
+			}
+		}
+
+		nextPagePosition = currentPagePosition + delta;
+
+		if (nextPagePosition < 0) {
+			nextPagePosition = 0;
+		}
+
+		if (nextPagePosition > this.getMaxPagePosition()) {
+			nextPagePosition = this.getMaxPagePosition();
+		}
+
+		if (nextPagePosition === currentPagePosition) {
+			return false;
+		}
+
+		this.setPagePosition(nextPagePosition, true);
+
+		return true;
+	}
+	,
 	draw: function() {
 
 		this.view.content.className = '';
@@ -50,6 +242,7 @@ P = Class.create(P, {
 			multiSelect  : false,
 			disableSelect: true,
 			pagination   : true,
+			numberOfRowsPerPage: this.getRowsPerPage(),
 			fill         : true,
 			cols: [
 				{
@@ -87,8 +280,20 @@ P = Class.create(P, {
 			],
 			onClick: function(e, row) {
 				window.location.href = '#!/program/view/id=' + row.data.id + '/';
+			}.bind(this),
+			onRendered: function() {
+				var pagePosition = parseInt(this.grid._pagePosition, 10);
+
+				if (isNaN(pagePosition) || pagePosition < 0) {
+					pagePosition = 0;
+				}
+
+				this.self.query.page = (pagePosition + 1).toString(10);
+				this.updatePageHash();
 			}.bind(this)
 		}).insertTo(this.view.content);
+
+		this.setPagePosition(this.getPagePosition(), false);
 
 		if (!this.self.query.skip) {
 			this.viewSearchModal();
@@ -304,6 +509,8 @@ P = Class.create(P, {
 			rows.push(row);
 		});
 
+		this.setPagePosition(this.getPagePosition(), false);
+
 		this.grid.splice(0, null, rows);
 
 		return this;
@@ -316,7 +523,7 @@ P = Class.create(P, {
 			buttons: [
 				{
 					label   : '検索',
-					color   : '@pink',
+					className: 'primary-teal',
 					onSelect: function(e, modal) {
 						e.targetButton.disable();
 
@@ -324,6 +531,7 @@ P = Class.create(P, {
 
 						this.self.query = Object.extend(this.self.query, result);
 						this.self.query.skip = 1;
+						this.self.query.page = 1;
 
 						modal.close();
 

@@ -15,7 +15,7 @@ P = Class.create(P, {
 				buttons: [
 					{
 						label: 'ダッシュボード',
-						color: '@pink',
+						className: 'primary-teal',
 						onSelect: function(e, modal) {
 							window.location.hash = '!/dashboard/top/';
 						}
@@ -96,7 +96,7 @@ P = Class.create(P, {
 		if (/Android|iPhone|iPad/.test(navigator.userAgent) === true || canPlayVideo === false) {
 			buttons.push({
 				label  : '再生 (VLC)',
-				color  : '@pink',
+				className: 'primary-teal',
 				onSelect: function(e, modal) {
 
 					this.form.validate(function (success) {
@@ -121,7 +121,7 @@ P = Class.create(P, {
 		} else {
 			buttons.push({
 				label  : '再生',
-				color  : '@pink',
+				className: 'primary-teal',
 				onSelect: function(e, modal) {
 
 					this.form.validate(function (success) {

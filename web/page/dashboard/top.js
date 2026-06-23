@@ -120,41 +120,118 @@ P = Class.create(P, {
 
 			var ch = flagrate.createElement("div", {
 				"class": "channel label-type-" + channel.type
+			}).setStyle({
+				display   : "flex",
+				alignItems: "center",
+				width     : "100%",
+				minWidth  : "0",
+				overflow  : "hidden",
+				boxSizing : "border-box",
+				padding   : "2px 4px"
 			}).insertTo(card);
 
+			var chMain = flagrate.createElement("span", {
+				"class": "channel-main"
+			}).setStyle({
+				display   : "flex",
+				alignItems: "center",
+				minWidth  : "0",
+				flex      : "1 1 auto",
+				overflow  : "hidden"
+			}).insertTo(ch);
+
 			if (channel.hasLogoData === true) {
-				ch.addClassName("has-logo");
-				ch.setStyle({
-					backgroundImage: "url(./api/channel/" + channel.id + "/logo.png)"
-				});
+				flagrate.createElement("img", {
+					"class": "channel-logo",
+					src    : "./api/channel/" + channel.id + "/logo.png"
+				}).setStyle({
+					width      : "26px",
+					height     : "16px",
+					objectFit  : "contain",
+					marginRight: "4px",
+					flex       : "0 0 auto"
+				}).insertTo(chMain);
 			}
 
-			ch.insert('<a href="#!/search/top/skip=1&chid=' + channel.id + '">' + channel.name + '</a>');
+			flagrate.createElement("a", {
+				href: "#!/search/top/skip=1&chid=" + channel.id
+			}).setStyle({
+				display     : "block",
+				minWidth    : "0",
+				overflow    : "hidden",
+				whiteSpace  : "nowrap",
+				textOverflow: "ellipsis",
+				flex        : "1 1 auto"
+			}).insertText(channel.name).insertTo(chMain);
 
-			flagrate.createButton({
-				className: "live",
-				label: "ライブ視聴",
-				onSelect: function () {
-					location.hash = "!/channel/watch/id=" + channel.id;
-				}
-			}).insertTo(ch);
+			var liveButton = flagrate.createElement("button", {
+				"class": "live channel-live-button",
+				type   : "button",
+				title  : "ライブ視聴"
+			}).setStyle({
+				flex       : "0 0 auto",
+				marginLeft : "auto",
+				padding    : "1px 6px",
+				fontSize   : "10px",
+				lineHeight  : "1.2",
+				minWidth   : "34px",
+				maxWidth   : "42px",
+				whiteSpace : "nowrap",
+				overflow   : "hidden",
+				boxSizing  : "border-box",
+				cursor     : "pointer"
+			}).insertText("視聴").insertTo(ch);
+
+			liveButton.observe("click", function () {
+				location.hash = "!/channel/watch/id=" + channel.id;
+			});
 
 			flagrate.createProgress({
 				value: Date.now() - onair.start,
 				max: onair.end - onair.start
 			}).insertTo(card);
 
-			flagrate.createButton({
-				className: "program",
-				labelHTML: "<span class='label-cat-" + onair.category + "'>" + onair.category + "</span>" + onair.title,
-				color: "@transparent",
-				attribute: {
-					title: onair.fullTitle + "\n\n" + onair.detail.truncate(300)
-				},
-				onSelect: function () {
-					location.hash = "!/program/view/id=" + onair.id;
-				}
+			var programButton = flagrate.createElement("div", {
+				"class": "program channel-program-button",
+				title  : onair.fullTitle + "\n\n" + onair.detail.truncate(300)
+			}).setStyle({
+				display   : "block",
+				width     : "100%",
+				boxSizing : "border-box",
+				padding   : "4px 6px 5px 6px",
+				textAlign : "left",
+				overflow  : "hidden",
+				cursor    : "pointer",
+				minHeight : "36px"
 			}).insertTo(card);
+
+			programButton.observe("click", function () {
+				location.hash = "!/program/view/id=" + onair.id;
+			});
+
+			flagrate.createElement("div", {
+				"class": "program-category-line"
+			}).setStyle({
+				display    : "block",
+				margin     : "0 0 3px 0",
+				padding    : "0",
+				lineHeight : "1.1",
+				whiteSpace : "nowrap",
+				overflow   : "hidden"
+			}).insert(
+				"<span class='label-cat-" + onair.category + "'>" + onair.category + "</span>"
+			).insertTo(programButton);
+
+			flagrate.createElement("div", {
+				"class": "program-title-line"
+			}).setStyle({
+				display     : "block",
+				maxWidth    : "100%",
+				overflow    : "hidden",
+				whiteSpace  : "nowrap",
+				textOverflow: "ellipsis",
+				lineHeight  : "1.25"
+			}).insertText(onair.title).insertTo(programButton);
 		});
 
 		return this;
@@ -192,13 +269,226 @@ P = Class.create(P, {
 
 	drawRecorded: function () {
 
-		this.drawPrograms(
-			"RECORDED".__(),
-			"recorded",
-			"panel-success",
-			this.r3R,
-			global.chinachu.recorded
-		);
+		new Ajax.Request('./api/match.json', {
+			method: 'get',
+			onSuccess: function (t) {
+				var items = [];
+
+				try {
+					items = t.responseText.evalJSON();
+				} catch (e) {
+					items = [];
+				}
+
+				if (!Object.isArray(items)) {
+					items = [];
+				}
+
+				this.drawMatchRecorded(
+					"RECORDED".__(),
+					"recorded",
+					"panel-success",
+					this.r3R,
+					items
+				);
+			}.bind(this),
+			onFailure: function () {
+				this.drawMatchRecorded(
+					"RECORDED".__(),
+					"recorded",
+					"panel-success",
+					this.r3R,
+					[]
+				);
+			}.bind(this)
+		});
+
+		return this;
+	},
+
+	getMatchProgram: function (item) {
+
+		return item.program || item.recorded || item.reserve || {};
+	},
+
+	getMatchEnd: function (item) {
+
+		var program = this.getMatchProgram(item);
+		var start = program.start || 0;
+		var seconds = program.seconds || 0;
+
+		return program.end || (start + (seconds * 1000));
+	},
+
+	isFinishedMatch: function (item) {
+
+		var end = this.getMatchEnd(item);
+
+		return end > 0 && Date.now() > end;
+	},
+
+	getRecordedHistoryCounts: function (items) {
+
+		var counts = { recorded: 0, ng: 0 };
+
+		(items || []).each(function (item) {
+			if (!this.isFinishedMatch(item)) {
+				return;
+			}
+
+			if (item.status === 'RECORDED') {
+				counts.recorded++;
+			} else if (item.status === 'MISSED') {
+				counts.ng++;
+			}
+		}.bind(this));
+
+		return counts;
+	},
+
+	getRecordedHistoryItems: function (items) {
+
+		return (items || []).findAll(function (item) {
+			if (!this.isFinishedMatch(item)) {
+				return false;
+			}
+
+			return item.status === 'RECORDED' || item.status === 'MISSED';
+		}.bind(this));
+	},
+
+	drawMatchRecorded: function (title, type, className, container, matchItems) {
+
+		container.update();
+
+		var panel = flagrate.createElement("div", {
+			"class": "panel " + className
+		}).insertTo(container);
+
+		var counts = this.getRecordedHistoryCounts(matchItems);
+		var heading = flagrate.createElement("div", {
+			"class": "panel-heading"
+		}).insertTo(panel);
+
+		heading.insertText(title + ' 録画済 ' + counts.recorded.toString(10) + ' / ');
+		flagrate.createElement("span", {
+			"class": "recorded-history-ng-count",
+			title: 'NG'
+		}).setStyle({
+			color     : '#d33',
+			fontWeight: 'bold'
+		}).insertText('NG ' + counts.ng.toString(10)).insertTo(heading);
+
+		var programs = this.getRecordedHistoryItems(matchItems);
+
+		if (programs.length === 0) {
+			return this;
+		}
+
+		programs.sort(function (a, b) {
+			var pa = a.program || a.recorded || a.reserve || {};
+			var pb = b.program || b.recorded || b.reserve || {};
+			return (pb.start || 0) - (pa.start || 0);
+		});
+
+		var ul = flagrate.createElement("ul", { "class": "list-group" }).insertTo(panel);
+		var hasMore = false;
+
+		programs.each(function (item, i) {
+			if (i > 10) {
+				hasMore = true;
+				throw $break;
+			}
+
+			var program = this.getMatchProgram(item);
+			var channel = item.channel || program.channel || {};
+			var result = item.recordingResult || {};
+			var key = item.key || [channel.id || '-', program.start || 0, program.seconds || 0].join('|');
+			var titleText = program.title || result.title || '-';
+			var fullTitle = program.fullTitle || titleText;
+			var detail = program.detail || '';
+			var flags = program.flags || [];
+
+			var li = flagrate.createElement("li", {
+				"class": "list-group-item" + (item.status === 'MISSED' ? ' conflict' : ''),
+				title: fullTitle + "\n\n" + String(detail).truncate(300)
+			}).insertTo(ul);
+
+			li.onclick = function () {
+				location.hash = "!/program/view/key=" + encodeURIComponent(key) + "/";
+			};
+
+			var lineTitle = flagrate.createElement("div", { "class": "title" }).insertTo(li);
+			var titleTextHtml = String(titleText).escapeHTML();
+
+			if (item.status === 'MISSED') {
+				titleTextHtml = '<span class="recorded-history-ng-title" style="color:#d33;font-weight:bold;">' + titleTextHtml + '</span>';
+			}
+
+			lineTitle.insert(
+				"<span class='label-cat-" + (program.category || 'etc') + "'>" + (program.category || 'etc') + "</span>" +
+				(flags.invoke ? flags.invoke('sub', /.+/, '<span rel="#{0}">#{0}</span>').join('') : '') +
+				titleTextHtml
+			);
+
+			if (program.episode) {
+				lineTitle.insert('<span class="episode">#' + program.episode + '</span>');
+			}
+
+			var dt = new chinachu.ui.DynamicTime({
+				tagName: 'span',
+				type   : 'full',
+				time   : this.getMatchEnd(item)
+			}).entity;
+			li.insert(dt);
+
+			li.insert(
+				'<span class="label label-type-' + (channel.type || '-') + '">' +
+				(channel.type || '-') + ': ' + String(channel.name || '-').escapeHTML() + '</span>'
+			);
+
+			flagrate.createContextMenu({
+				target: li,
+				items : [
+					{
+						label   : '録画結果詳細...',
+						icon    : './icons/document-page-next.png',
+						onSelect: function () {
+							location.hash = "!/program/view/key=" + encodeURIComponent(key) + "/";
+						}
+					},
+					'------------------------------------------',
+					{
+						label   : 'タイトルをコピー...',
+						onSelect: function () {
+							chinachu.ui.copyStr(titleText);
+						}
+					},
+					{
+						label   : '説明をコピー...',
+						onSelect: function () {
+							chinachu.ui.copyStr(detail);
+						}
+					},
+					'------------------------------------------',
+					{
+						label   : 'Google検索',
+						icon    : './icons/ui-search-field.png',
+						onSelect: function () {
+							window.open("https://www.google.com/search?q=" + titleText);
+						}
+					}
+				]
+			});
+		}.bind(this));
+
+		if (hasMore) {
+			flagrate.createElement("div", {
+				"class": "panel-footer"
+			}).insert(
+				'<span class="glyphicon glyphicon-chevron-right"></span> <a href="#!/' + type + '/list/">すべて表示</a>'
+			).insertTo(panel);
+		}
 
 		return this;
 	},

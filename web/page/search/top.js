@@ -14,6 +14,21 @@ P = Class.create(P, {
 
 		this.initToolbar();
 		this.draw();
+		this.onPageLeft = function() {
+			this.movePage(-1);
+		}.bind(this);
+
+		this.onPageRight = function() {
+			this.movePage(1);
+		}.bind(this);
+
+		sakura.shortcut.add("Left", this.onPageLeft, {
+			protectInput: true
+		});
+
+		sakura.shortcut.add("Right", this.onPageRight, {
+			protectInput: true
+		});
 
 		this.onNotify = this.refresh.bindAsEventListener(this);
 		document.observe('chinachu:schedule', this.onNotify);
@@ -22,7 +37,8 @@ P = Class.create(P, {
 	}
 	,
 	deinit: function() {
-
+		sakura.shortcut.remove("Left");
+		sakura.shortcut.remove("Right");
 		document.stopObserving('chinachu:schedule', this.onNotify);
 
 		return this;
@@ -49,6 +65,188 @@ P = Class.create(P, {
 		return this;
 	}
 	,
+	getRowsPerPage: function() {
+
+		return 25;
+	}
+	,
+	getPagePosition: function() {
+
+		var page = 1;
+
+		if (this.self.query && typeof this.self.query.page !== 'undefined') {
+			page = parseInt(this.self.query.page, 10);
+		}
+
+		if (isNaN(page) || page < 1) {
+			page = 1;
+		}
+
+		return page - 1;
+	}
+	,
+	isMatchedSearchProgram: function(program, time) {
+
+		var nf;
+		var queryTitleNorm;
+		var queryDescNorm;
+
+		if (!program) {
+			return false;
+		}
+
+		if (program.end < time) return false;
+
+		if (this.self.query.pgid && this.self.query.pgid !== program.id) return false;
+		if (this.self.query.chid && this.self.query.chid !== program.channel.id) return false;
+		if (this.self.query.cat && this.self.query.cat !== program.category) return false;
+		if (this.self.query.type && this.self.query.type !== program.channel.type) return false;
+
+		if (global.chinachu.status.feature) {
+			nf = global.chinachu.status.feature.normalizationForm;
+		}
+
+		if (nf) {
+			if (this.self.query.title) {
+				queryTitleNorm = this.self.query.title.normalize(nf);
+				if (program.fullTitle.normalize(nf).match(queryTitleNorm) === null) return false;
+			}
+
+			if (this.self.query.desc) {
+				queryDescNorm = this.self.query.desc.normalize(nf);
+				if (!program.detail || program.detail.normalize(nf).match(queryDescNorm) === null) return false;
+			}
+		} else {
+			if (this.self.query.title && program.fullTitle.match(this.self.query.title) === null) return false;
+			if (this.self.query.desc && (!program.detail || program.detail.match(this.self.query.desc) === null)) return false;
+		}
+
+		if (this.self.query.start || this.self.query.end) {
+			var ruleStart = parseInt(this.self.query.start || 0, 10);
+			var ruleEnd   = parseInt(this.self.query.end || 24, 10);
+
+			var progStart = new Date(program.start).getHours();
+			var progEnd   = new Date(program.end).getHours();
+
+			if (progStart > progEnd) {
+				progEnd += 24;
+			}
+
+			if (ruleStart > ruleEnd) {
+				if ((ruleStart > progStart) && (ruleEnd < progEnd)) return false;
+			} else {
+				if ((ruleStart > progStart) || (ruleEnd < progEnd)) return false;
+			}
+		}
+
+		return true;
+	}
+	,
+	getFilteredProgramCount: function() {
+
+		var time = new Date().getTime();
+		var count = 0;
+		var program;
+
+		for (var i = 0, l = global.chinachu.schedule.length; i < l; i++) {
+			for (var j = 0, m = global.chinachu.schedule[i].programs.length; j < m; j++) {
+				program = global.chinachu.schedule[i].programs[j];
+
+				if (this.isMatchedSearchProgram(program, time)) {
+					count++;
+				}
+			}
+		}
+
+		return count;
+	}
+	,
+	getMaxPagePosition: function() {
+
+		var count = this.getFilteredProgramCount();
+		var rowsPerPage = this.getRowsPerPage();
+		var maxPagePosition = Math.ceil(count / rowsPerPage) - 1;
+
+		if (isNaN(maxPagePosition) || maxPagePosition < 0) {
+			maxPagePosition = 0;
+		}
+
+		return maxPagePosition;
+	}
+	,
+	updatePageHash: function() {
+
+		var pagePosition = this.getPagePosition();
+
+		this.self.query.page = (pagePosition + 1).toString(10);
+
+		this.app.pm._lastHash = '!/search/top/' + Object.toQueryString(this.self.query) + '/';
+		history.replaceState(null, null, '#' + this.app.pm._lastHash);
+
+		return this;
+	}
+	,
+	setPagePosition: function(pagePosition, redraw) {
+
+		var maxPagePosition = this.getMaxPagePosition();
+
+		pagePosition = parseInt(pagePosition, 10);
+
+		if (isNaN(pagePosition) || pagePosition < 0) {
+			pagePosition = 0;
+		}
+
+		if (pagePosition > maxPagePosition) {
+			pagePosition = maxPagePosition;
+		}
+
+		this.self.query.page = (pagePosition + 1).toString(10);
+
+		if (this.grid) {
+			this.grid._pagePosition = pagePosition;
+		}
+
+		this.updatePageHash();
+
+		if (redraw) {
+			this.drawMain();
+		}
+
+		return this;
+	}
+	,
+	movePage: function(delta) {
+
+		var currentPagePosition = this.getPagePosition();
+		var nextPagePosition;
+
+		if (this.grid && typeof this.grid._pagePosition !== 'undefined') {
+			currentPagePosition = parseInt(this.grid._pagePosition, 10);
+
+			if (isNaN(currentPagePosition) || currentPagePosition < 0) {
+				currentPagePosition = this.getPagePosition();
+			}
+		}
+
+		nextPagePosition = currentPagePosition + delta;
+
+		if (nextPagePosition < 0) {
+			nextPagePosition = 0;
+		}
+
+		if (nextPagePosition > this.getMaxPagePosition()) {
+			nextPagePosition = this.getMaxPagePosition();
+		}
+
+		if (nextPagePosition === currentPagePosition) {
+			return false;
+		}
+
+		this.setPagePosition(nextPagePosition, true);
+
+		return true;
+	}
+	,
 	draw: function() {
 
 		this.view.content.className = '';
@@ -58,6 +256,7 @@ P = Class.create(P, {
 			multiSelect  : false,
 			disableSelect: true,
 			pagination   : true,
+			numberOfRowsPerPage: this.getRowsPerPage(),
 			fill         : true,
 			cols: [
 				{
@@ -97,29 +296,18 @@ P = Class.create(P, {
 				window.location.href = '#!/program/view/id=' + row.data.id + '/';
 			},
 			onRendered: function() {
+				var pagePosition = parseInt(this.grid._pagePosition, 10);
 
-				this.self.query.page = this.grid._pagePosition;
-
-				if (Prototype.Browser.Gecko) {
-					if (typeof this.self.query.title !== 'undefined' && /^[%A-Z0-9]+$/.test(this.self.query.title) === false) {
-						this.self.query.title = encodeURIComponent(this.self.query.title);
-					}
-					if (typeof this.self.query.desc !== 'undefined' && /^[%A-Z0-9]+$/.test(this.self.query.desc) === false) {
-						this.self.query.desc = encodeURIComponent(this.self.query.desc);
-					}
-
-					location.hash = '!/search/top/' + Object.toQueryString(this.self.query) + '/';
-					this.app.pm._lastHash = location.hash.match(/^#(.+)$/)[1];
-				} else {
-					this.app.pm._lastHash = '!/search/top/' + Object.toQueryString(this.self.query) + '/';
-					history.replaceState(null, null, '#' + this.app.pm._lastHash);
+				if (isNaN(pagePosition) || pagePosition < 0) {
+					pagePosition = 0;
 				}
+
+				this.self.query.page = (pagePosition + 1).toString(10);
+				this.updatePageHash();
 			}.bind(this)
 		}).insertTo(this.view.content);
 
-		if (this.self.query.page) {
-			this.grid._pagePosition = parseInt(this.self.query.page, 10);
-		}
+		this.setPagePosition(this.getPagePosition(), false);
 
 		if (!this.self.query.skip) {
 			this.viewSearchModal();
@@ -130,7 +318,38 @@ P = Class.create(P, {
 		return this;
 	}
 	,
+
 	drawMain: function() {
+	    var time = new Date().getTime();
+	    var self = this;
+
+	    try {
+	        // global.chinachu.reservesから予約情報をマッピング
+	        self.reservedMap = {};
+	        if (Array.isArray(global.chinachu.reserves)) {
+	            global.chinachu.reserves.forEach(function(r) {
+	            var key = r.programId || r.id;
+	                if (key) {
+	                    self.reservedMap[key] = {
+	                        isSkip: !!r.isSkip,              // isSkipが無くてもfalseになるように
+	                        isManualReserved: !!r.isManualReserved,
+	                        id: r.id
+	                    };
+	                }
+	            });
+	        }
+	    } catch (e) {
+	        console.error('予約情報処理中にエラー:', e);
+	        self.reservedMap = {};
+	    }
+
+	    // 予約情報をセット後、検索結果描画処理を呼ぶ
+	    self._drawSearchResults(time);
+	},
+
+	_drawSearchResults: function(time) {
+        var self = this;
+
 
 		var time = new Date().getTime();
 
@@ -145,7 +364,6 @@ P = Class.create(P, {
 		if (global.chinachu.status.feature) {
 			nf = global.chinachu.status.feature.normalizationForm;
 		}
-
 		// query.title, query.descの正規化をキャッシュ
 		var query_title_norm, query_desc_norm;
 		if (nf) {
@@ -204,145 +422,218 @@ P = Class.create(P, {
 
 		programs.each(function(program, i) {
 
-			var row = {
-				data: program,
-				cell: {
-					id: {
-						className: 'id',
-						sortAlt  : i,
-						text     : program.id
-					}
-				},
-				menuItems: [
-					{
-						label   : '予約...',
-						icon    : './icons/plus-circle.png',
-						onSelect: function() {
-							new chinachu.ui.Reserve(program.id);
-						}
-					},
-					'------------------------------------------',
-					{
-						label   : 'ルール作成...',
-						icon    : './icons/regular-expression.png',
-						onSelect: function() {
-							new chinachu.ui.CreateRuleByProgram(program.id);
-						}
-					},
-					'------------------------------------------',
-					{
-						label   : 'ツイート...',
-						icon    : 'https://abs.twimg.com/favicons/favicon.ico',
-						onSelect: function() {
-							var left = (screen.width - 640) / 2;
-							var top  = (screen.height - 265) / 2;
+		    // ★追加: 予約情報参照（self.reservedMap は drawMain で作成している想定）
+		    var reserveInfo = null;
+		    if (self && self.reservedMap) {
+		        // program.id が数値／文字列どちらでも拾えるよう両方チェック
+		        reserveInfo = self.reservedMap[program.id] || self.reservedMap[String(program.id)] || self.reservedMap[program.programId] || self.reservedMap[String(program.programId)] || null;
+		    }
+		    var isReserved = !!reserveInfo;
+		    var isSkip = reserveInfo && !!reserveInfo.isSkip;
+			var isManualReserved = reserveInfo && !!reserveInfo.isManualReserved;
+			var menuItems = [];
+		    if (!isReserved) {
+		        // 未予約
+		        menuItems.push({
+		            label   : '予約...',
+		            icon    : './icons/plus-circle.png',
+		            onSelect: function() {
+		                new chinachu.ui.Reserve(program.id);
+		            }
+		        });
+		    } else {
+		        // 予約済み
+		        if (isManualReserved) {
+		            // 手動予約
+		            menuItems.push({
+		                label   : '予約取消...',
+		                icon    : './icons/cross-script.png',
+		                onSelect: function() {
+		                    new chinachu.ui.Unreserve(program.id);
+		                }
+		            });
+		        } else {
+		            // ルール予約
+		            if (isSkip) {
+		                menuItems.push({
+		                    label   : 'スキップの取消...',
+		                    icon    : './icons/tick-circle.png',
+		                    onSelect: function() {
+		                        new chinachu.ui.Unskip(program.id);
+		                    }
+		                });
+		            } else {
+		                menuItems.push({
+		                    label   : 'スキップ...',
+		                    icon    : './icons/exclamation-red.png',
+		                    onSelect: function() {
+		                        new chinachu.ui.Skip(program.id);
+		                    }
+		                });
+		            }
+		        }
+		    }
 
-							var tweetWindow = window.open(
-								'https://twitter.com/share?url=&text=' + encodeURIComponent(chinachu.util.scotify(program)),
-								'chinachu-tweet-' + program.id,
-								'width=640,height=265,left=' + left + ',top=' + top + ',menubar=no'
-							);
-						}
-					},
-					'------------------------------------------',
-					{
-						label   : 'SCOT形式でコピー...',
-						onSelect: function(e) {
-							chinachu.ui.copyStr(chinachu.util.scotify(program));
-						}
-					},
-					{
-						label   : 'IDをコピー...',
-						onSelect: function() {
-							chinachu.ui.copyStr(program.id);
-						}
-					},
-					{
-						label   : 'タイトルをコピー...',
-						onSelect: function() {
-							chinachu.ui.copyStr(program.title);
-						}
-					},
-					{
-						label   : '説明をコピー...',
-						onSelect: function() {
-							chinachu.ui.copyStr(program.detail);
-						}
-					},
-					'------------------------------------------',
-					{
-						label   : '関連サイト',
-						icon    : './icons/document-page-next.png',
-						onSelect: function() {
-							window.open("https://www.google.com/search?btnI=I'm+Feeling+Lucky&q=" + program.title);
-						}
-					},
-					{
-						label   : 'Google検索',
-						icon    : './icons/ui-search-field.png',
-						onSelect: function() {
-							window.open("https://www.google.com/search?q=" + program.title);
-						}
-					},
-					{
-						label   : 'Wikipedia',
-						icon    : './icons/book-open-text-image.png',
-						onSelect: function() {
-							window.open("https://ja.wikipedia.org/wiki/" + program.title);
-						}
-					}
-				]
-			};
+		    // メニュー区切り線
+		    menuItems.push('------------------------------------------');
 
-			row.cell.type = {
-				sortAlt  : program.channel.type,
-				className: 'types',
-				html     : '<span class="label-type-' + program.channel.type + '">' + program.channel.type + '</span>'
-			};
+		    // その他メニューは共通
+		    menuItems = menuItems.concat([
+		        {
+		            label   : 'ルール作成...',
+		            icon    : './icons/regular-expression.png',
+		            onSelect: function() {
+		                new chinachu.ui.CreateRuleByProgram(program.id);
+		            }
+		        },
+		        '------------------------------------------',
+		        {
+		            label   : 'ツイート...',
+		            icon    : 'https://abs.twimg.com/favicons/favicon.ico',
+		            onSelect: function() {
+		                var left = (screen.width - 640) / 2;
+		                var top  = (screen.height - 265) / 2;
+		                window.open(
+		                    'https://twitter.com/share?url=&text=' + encodeURIComponent(chinachu.util.scotify(program)),
+		                    'chinachu-tweet-' + program.id,
+		                    'width=640,height=265,left=' + left + ',top=' + top + ',menubar=no'
+		                );
+		            }
+		        },
+		        '------------------------------------------',
+		        {
+		            label   : 'SCOT形式でコピー...',
+		            onSelect: function(e) {
+		                chinachu.ui.copyStr(chinachu.util.scotify(program));
+		            }
+		        },
+		        {
+		            label   : 'IDをコピー...',
+		            onSelect: function() {
+		                chinachu.ui.copyStr(program.id);
+		            }
+		        },
+		        {
+		            label   : 'タイトルをコピー...',
+		            onSelect: function() {
+		                chinachu.ui.copyStr(program.title);
+		            }
+		        },
+		        {
+		            label   : '説明をコピー...',
+		            onSelect: function() {
+		                chinachu.ui.copyStr(program.detail);
+		            }
+		        },
+		        '------------------------------------------',
+		        {
+		            label   : '関連サイト',
+		            icon    : './icons/document-page-next.png',
+		            onSelect: function() {
+		                window.open("https://www.google.com/search?btnI=I'm+Feeling+Lucky&q=" + program.title);
+		            }
+		        },
+		        {
+		            label   : 'Google検索',
+		            icon    : './icons/ui-search-field.png',
+		            onSelect: function() {
+		                window.open("https://www.google.com/search?q=" + program.title);
+		            }
+		        },
+		        {
+		            label   : 'Wikipedia',
+		            icon    : './icons/book-open-text-image.png',
+		            onSelect: function() {
+		                window.open("https://ja.wikipedia.org/wiki/" + program.title);
+		            }
+		        }
+		    ]);
 
-			row.cell.category = {
-				sortAlt    : program.category,
-				className  : 'categories',
-				html       : '<span class="label-cat-' + program.category + '">' + program.category + '</span>'
-			};
+		    var row = {
+		        data: program,
+		        cell: {
+		            id: {
+		                className: 'id',
+		                sortAlt  : i,
+		                text     : program.id
+		            }
+		        },
+		        // menuItems は元のまま（今回は変更しない）
+		        menuItems: menuItems
 
-			row.cell.channel = {
-				sortAlt    : program.channel.id,
-				text       : program.channel.name,
-				attribute  : {
-					title: program.channel.id
-				}
-			};
+		    };
 
-			var titleHtml = program.flags.invoke('sub', /.+/, '<span class="flag #{0}">#{0}</span>').join('') + program.title;
-			if (program.subTitle && program.title.indexOf(program.subTitle) === -1) {
-				titleHtml += '<span class="subtitle">' + program.subTitle + '</span>';
-			}
-			if (typeof program.episode !== 'undefined' && program.episode !== null) {
-				titleHtml += '<span class="episode">#' + program.episode + '</span>';
-			}
-			titleHtml += '<span class="id">#' + program.id + '</span>';
+		    row.cell.type = {
+		        sortAlt  : program.channel.type,
+		        className: 'types',
+		        html     : '<span class="label-type-' + program.channel.type + '">' + program.channel.type + '</span>'
+		    };
 
-			row.cell.title = {
-				sortAlt    : program.title,
-				html       : titleHtml,
-				attribute  : {
-					title: program.fullTitle + ' - ' + program.detail
-				}
-			};
+		    row.cell.category = {
+		        sortAlt    : program.category,
+		        className  : 'categories',
+		        html       : '<span class="label-cat-' + program.category + '">' + program.category + '</span>'
+		    };
 
-			row.cell.duration = {
-				sortAlt    : program.seconds,
-				text       : program.seconds / 60 + 'm'
-			};
+		    row.cell.channel = {
+		        sortAlt    : program.channel.id,
+		        text       : program.channel.name,
+		        attribute  : {
+		            title: program.channel.id
+		        }
+		    };
 
-			row.cell.datetime = {
-				sortAlt    : program.start,
-				text       : chinachu.dateToString(new Date(program.start))
-			};
+		    // --- タイトル HTML 組み立て（元のロジック） ---
+		    var titleHtml = program.flags.invoke('sub', /.+/, '<span class="flag #{0}">#{0}</span>').join('') + program.title;
+		    if (program.subTitle && program.title.indexOf(program.subTitle) === -1) {
+		        titleHtml += '<span class="subtitle">' + program.subTitle + '</span>';
+		    }
+		    if (typeof program.episode !== 'undefined' && program.episode !== null) {
+		        titleHtml += '<span class="episode">#' + program.episode + '</span>';
+		    }
+		    titleHtml += '<span class="id">#' + program.id + '</span>';
 
-			rows.push(row);
+
+
+		    // ★追加: 予約／スキップラベルの挿入（表示位置はタイトルの先頭）
+		    if (isManualReserved) {
+		            titleHtml = '<span class="label-cat-etc">手動</span><font color="gray"> ' + titleHtml + '</font>';
+		    }else{
+
+			    if (isReserved) {
+			        if (isSkip) {
+			            // スキップ中：予約済一覧で使われているクラスを流用
+			            titleHtml = '<span class="label-cat-etc">スキップ</span><font color="gray"> ' + titleHtml + '</font>';
+			        } else {
+			            // 予約済：既存のUIに合わせるため label-cat-variety を使用（必要ならCSSで調整）
+			            titleHtml = '<span class="label-cat-variety">予約済</span> ' + titleHtml;
+			        }
+			    }
+		    }
+		    // --- タイトルここまで ---
+
+		    row.cell.title = {
+		        sortAlt    : program.title,
+		        html       : titleHtml,
+		        attribute  : {
+		            title: program.fullTitle + ' - ' + program.detail
+		        }
+		    };
+
+		    row.cell.duration = {
+		        sortAlt    : program.seconds,
+		        text       : program.seconds / 60 + 'm'
+		    };
+
+		    row.cell.datetime = {
+		        sortAlt    : program.start,
+		        text       : chinachu.dateToString(new Date(program.start))
+		    };
+
+		    rows.push(row);
 		});
+
+		this.setPagePosition(this.getPagePosition(), false);
 
 		this.grid.splice(0, void 0, rows);
 
@@ -364,7 +655,7 @@ P = Class.create(P, {
 			buttons: [
 				{
 					label   : '検索',
-					color   : '@pink',
+					className: 'primary-teal',
 					onSelect: function(e, modal) {
 						e.targetButton.disable();
 
@@ -375,7 +666,7 @@ P = Class.create(P, {
 
 						this.self.query = Object.extend(this.self.query, result);
 						this.self.query.skip = 1;
-						this.self.query.page = 0;
+						this.self.query.page = 1;
 
 						modal.close();
 
