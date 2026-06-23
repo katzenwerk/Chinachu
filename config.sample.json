@@ -2,12 +2,27 @@
   "uid": null,
   "gid": "video",
   "mirakurunPath": "http+unix://%2Fvar%2Frun%2Fmirakurun.sock/",
-
-  "recordedDir" : "./recorded/",
-
+  "recordedDir": "./recorded/",
+  "temporaryDir": null,
+  "recordedFormat": "[<date:yymmdd-HHMM>][<type><channel>][<channel-name>]<title>.m2ts",
+  "recordedCommand": "",
+  "recordedNameReplaceEnclosingCharacters": false,
+  "recordedNameEnclosingCharacterMap": {},
+  "normalizationForm": "NFKC",
   "vaapiEnabled": false,
   "vaapiDevice": "/dev/dri/renderD128",
-
+  "recordingPriority": 2,
+  "conflictedPriority": 1,
+  "handoffPrepSeconds": 20,
+  "storageLowSpaceThresholdMB": 3000,
+  "storageLowSpaceAction": "remove",
+  "storageLowSpaceNotifyTo": null,
+  "storageLowSpaceCommand": "",
+  "matchRetentionDays": 90,
+  "reserves2RetentionDays": 90,
+  "recordedHistoryRetentionDays": 90,
+  "matchKeepRecordedSnapshot": true,
+  "programViewShowMatchDebug": false,
   "excludeServices": [
     3273701416,
     3232728088,
@@ -17,7 +32,6 @@
     3239123993,
     3273601408
   ],
-
   "serviceOrder": [
     3273601024,
     3273601025,
@@ -25,27 +39,22 @@
     3273701033,
     3273701034
   ],
-
+  "wuiOpenServer": true,
+  "wuiOpenHost": null,
+  "wuiOpenPort": 20772,
+  "wuiHost": "0.0.0.0",
+  "wuiPort": null,
   "wuiUsers": [
     "chinachu:yoshikawa"
   ],
-  "wuiAllowCountries": ["JP"],
-
-  "wuiPort": null,
-  "wuiHost": "0.0.0.0",
+  "wuiAllowCountries": [
+    "JP"
+  ],
   "wuiTlsKeyPath": null,
   "wuiTlsCertPath": null,
   "wuiTlsRequestCert": false,
   "wuiTlsRejectUnauthorized": true,
   "wuiTlsCaPath": null,
-  "wuiOpenServer": true,
-  "wuiOpenPort": 20772,
-  "wuiXFF": false,
   "wuiMdnsAdvertisement": true,
-
-  "recordedFormat": "[<date:yymmdd-HHMM>][<type><channel>][<channel-name>]<title>.m2ts",
-  "storageLowSpaceThresholdMB": 3000,
-  "storageLowSpaceAction": "remove",
-  "storageLowSpaceNotifyTo": null,
-  "storageLowSpaceCommand": ""
+  "wuiXFF": false
 }

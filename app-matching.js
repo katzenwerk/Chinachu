@@ -3,21 +3,10 @@
 
 var fs = require("fs");
 var path = require("path");
-var mkdirp;
-try {
-	mkdirp = require("mkdirp");
-} catch (error) {
-	mkdirp = {
-		sync: function (dir) {
-			fs.mkdirSync(dir, { recursive: true });
-		}
-	};
-}
-
-var TEMP_RECORDING_MARK = "【録画中】";
 var MS_PER_DAY = 24 * 60 * 60 * 1000;
 var JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 var DEFAULT_KEEP_MONTHS = 3;
+var DEFAULT_RETENTION_DAYS = 365;
 var DEFAULT_READ_DAYS = 14;
 
 function safeInt(value, defaultValue) {
@@ -31,6 +20,66 @@ function safeInt(value, defaultValue) {
 
 function safeBool(value) {
 	return value == null ? false : !!value;
+}
+
+function readConfigFile(file) {
+	if (!file || !fs.existsSync(file)) {
+		return {};
+	}
+
+	try {
+		return JSON.parse(fs.readFileSync(file, { encoding: "utf8" }).replace(/^\uFEFF/, "") || "{}");
+	} catch (error) {
+		console.error("WARNING: invalid config ignored: " + file + " (" + error.message + ")");
+		return {};
+	}
+}
+
+function getRetentionDays(config, name, defaultDays) {
+	var value = config && typeof config === "object" ? Number(config[name]) : NaN;
+
+	if (!Number.isFinite(value)) {
+		return defaultDays;
+	}
+
+	value = Math.floor(value);
+
+	if (value < 0) {
+		return defaultDays;
+	}
+
+	return value;
+}
+
+function shouldKeepRecordedSnapshot(config) {
+	return !config || config.matchKeepRecordedSnapshot !== false;
+}
+
+function isTemporaryRecordingPath(filePath, config) {
+	var temporaryDir;
+	var resolvedFilePath;
+	var resolvedTemporaryDir;
+
+	if (!filePath || !config || typeof config !== "object") {
+		return false;
+	}
+
+	temporaryDir = config.temporaryDir;
+
+	/*
+	 * temporaryDir が明示設定されていない環境では判定しない。
+	 * recordedDir のみの運用では、ファイル名に「録画中」等が含まれていても
+	 * TEMP_RECORDING_PATH とは扱わない。
+	 */
+	if (typeof temporaryDir !== "string" || temporaryDir.trim() === "") {
+		return false;
+	}
+
+	resolvedFilePath = path.resolve(process.cwd(), filePath);
+	resolvedTemporaryDir = path.resolve(process.cwd(), temporaryDir.trim());
+
+	return resolvedFilePath === resolvedTemporaryDir ||
+		resolvedFilePath.indexOf(resolvedTemporaryDir + path.sep) === 0;
 }
 
 function cloneJson(value) {
@@ -366,13 +415,14 @@ function getRecordingPath(entry) {
 	return "";
 }
 
-function mergeOldNew(oldEntry, newEntry, logger) {
+function mergeOldNew(oldEntry, newEntry, logger, config) {
 	if (oldEntry.status === "RECORDED" && newEntry.status === "RECORDED") {
 		var oldPath = getRecordingPath(oldEntry);
 		var newPath = getRecordingPath(newEntry);
-		var oldIsFinal = typeof oldPath === "string" && oldPath && oldPath.indexOf(TEMP_RECORDING_MARK) === -1;
-		var newIsTemp = typeof newPath === "string" && newPath.indexOf(TEMP_RECORDING_MARK) !== -1;
-		var newIsFinal = typeof newPath === "string" && newPath && newPath.indexOf(TEMP_RECORDING_MARK) === -1;
+		var oldIsTemp = isTemporaryRecordingPath(oldPath, config);
+		var newIsTemp = isTemporaryRecordingPath(newPath, config);
+		var oldIsFinal = typeof oldPath === "string" && oldPath && !oldIsTemp;
+		var newIsFinal = typeof newPath === "string" && newPath && !newIsTemp;
 
 		if (oldIsFinal && newIsTemp) {
 			if (logger) {
@@ -538,36 +588,136 @@ function buildReservationMeta(reserve, hasReserve) {
 	};
 }
 
-function buildRecordingResult(recorded, nowMs) {
-	var path;
+function buildRecordingResult(recorded, nowMs, keepSnapshot) {
+	var output;
+	var recPath;
 	var start;
 	var seconds;
+	var channel;
 
 	if (!recorded || typeof recorded !== "object") {
 		return null;
 	}
 
-	path = recorded.recorded || recorded.path || "";
+	recPath = recorded.recorded || recorded.path || "";
 	start = safeInt(recorded.start, 0);
 	seconds = safeInt(recorded.seconds, 0);
+	channel = toChannelDictFromRecorded(recorded);
 
-	return {
+	output = {
 		hasRecorded: true,
-		id: recorded.id || recorded.origId || "",
-		recordedId: recorded.id || recorded.origId || "",
-		origId: recorded.origId || recorded.id || "",
-		path: path,
-		recorded: path,
+		id: recorded.id || recorded.origId || recorded.programId || "",
+		recordedId: recorded.id || recorded.origId || recorded.programId || "",
+		origId: recorded.origId || recorded.id || recorded.programId || "",
+		programId: recorded.programId || recorded.id || recorded.origId || "",
+		path: recPath,
+		recorded: recPath,
 		start: start,
 		end: safeInt(recorded.end, 0) || (start + seconds * 1000),
 		seconds: seconds,
 		title: recorded.title || "",
+		fullTitle: recorded.fullTitle || recorded.title || "",
+		detail: recorded.detail || "",
+		description: recorded.description || "",
+		category: recorded.category || null,
+		channel: normalizeChannel(channel),
+		subTitle: typeof recorded.subTitle === "undefined" ? null : cloneJson(recorded.subTitle),
+		episode: typeof recorded.episode === "undefined" ? null : cloneJson(recorded.episode),
+		flags: Array.isArray(recorded.flags) ? cloneJson(recorded.flags) : [],
+		extra: typeof recorded.extra === "undefined" ? null : cloneJson(recorded.extra),
 		command: recorded.command || "",
 		tuner: recorded.tuner ? cloneJson(recorded.tuner) : null,
 		priority: typeof recorded.priority === "undefined" ? null : recorded.priority,
+		recordedFormat: recorded.recordedFormat || "",
 		fileExists: null,
 		fileSize: null,
-		cleanupState: path ? "active" : "unknown",
+		cleanupState: recPath ? "active" : "unknown",
+		snapshotAt: nowMs
+	};
+
+	if (keepSnapshot !== false) {
+		output.snapshot = cloneJson(recorded);
+	}
+
+	return output;
+}
+
+function getProgramIds(value) {
+	var ids = [];
+	var candidates = [
+		value && value.id,
+		value && value.origId,
+		value && value.programId,
+		value && value.recordedId
+	];
+
+	candidates.forEach(function (id) {
+		if (typeof id !== "undefined" && id !== null && String(id) !== "" && ids.indexOf(String(id)) === -1) {
+			ids.push(String(id));
+		}
+	});
+
+	return ids;
+}
+
+function hasIdIntersection(a, b) {
+	var ai = getProgramIds(a);
+	var bi = getProgramIds(b);
+	var i;
+
+	for (i = 0; i < ai.length; i++) {
+		if (bi.indexOf(ai[i]) !== -1) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+function buildMatchMeta(status, key, recorded, reserve, hasRecorded, hasReserve, exactMatch, nearMatch, nowMs, config) {
+	var warnings = [];
+	var matchedBy;
+	var confidence;
+
+	if (hasRecorded && hasReserve && exactMatch) {
+		matchedBy = "canonical-key";
+		confidence = "exact";
+	} else if (hasRecorded && hasReserve && nearMatch) {
+		matchedBy = "near";
+		confidence = "near";
+	} else if (hasRecorded && !hasReserve) {
+		matchedBy = "recorded-only";
+		confidence = "recorded-only";
+		warnings.push("NO_RESERVATION_MATCH");
+	} else if (!hasRecorded && hasReserve) {
+		matchedBy = "reserve-only";
+		confidence = "reserve-only";
+		if (status === "MISSED") {
+			warnings.push("NO_RECORDED_MATCH");
+		}
+		if (status === "SKIPPED_ONLY") {
+			warnings.push("RESERVE_SKIPPED");
+		}
+	} else {
+		matchedBy = null;
+		confidence = "none";
+	}
+
+	if (hasRecorded && hasReserve && !hasIdIntersection(recorded, reserve)) {
+		warnings.push("PROGRAM_ID_MISMATCH");
+	}
+
+	if (hasRecorded && recorded && isTemporaryRecordingPath(recorded.recorded || recorded.path || "", config)) {
+		warnings.push("TEMP_RECORDING_PATH");
+	}
+
+	return {
+		key: key,
+		status: status,
+		matchedBy: matchedBy,
+		confidence: confidence,
+		hasMismatch: warnings.length > 0,
+		warnings: warnings,
 		snapshotAt: nowMs
 	};
 }
@@ -580,12 +730,13 @@ function buildSources(programSource, hasReserve, hasRecorded) {
 	};
 }
 
-function buildMatchItem(status, key, recorded, reserve, channel, hasRecorded, hasReserve, isSkip, exactMatch, nearMatch, nowMs) {
+function buildMatchItem(status, key, recorded, reserve, channel, hasRecorded, hasReserve, isSkip, exactMatch, nearMatch, nowMs, keepRecordedSnapshot, config) {
 	var preferRecorded = !!hasRecorded;
 	var programSource = hasRecorded && hasReserve ? "recorded+reserves2" : hasRecorded ? "recorded" : "reserves2";
 	var program = mergeProgram(recorded, reserve, preferRecorded, channel);
-	var recordingResult = hasRecorded ? buildRecordingResult(recorded, nowMs) : null;
+	var recordingResult = hasRecorded ? buildRecordingResult(recorded, nowMs, keepRecordedSnapshot) : null;
 	var reservationMeta = buildReservationMeta(reserve, hasReserve);
+	var matchMeta = buildMatchMeta(status, key, recorded, reserve, hasRecorded, hasReserve, exactMatch, nearMatch, nowMs, config);
 
 	return {
 		status: status,
@@ -594,6 +745,7 @@ function buildMatchItem(status, key, recorded, reserve, channel, hasRecorded, ha
 		program: program,
 		reservationMeta: reservationMeta,
 		recordingResult: recordingResult,
+		matchMeta: matchMeta,
 		recd_flg: buildRecdFlg(hasRecorded, hasReserve, isSkip, exactMatch, nearMatch),
 		sources: buildSources(programSource, hasReserve, hasRecorded),
 		snapshotAt: nowMs
@@ -607,8 +759,11 @@ function buildMatchLedger(options) {
 	var recordedAll = Array.isArray(options.recordedList) ? options.recordedList : [];
 	var reserves2All = Array.isArray(options.reserves2List) ? options.reserves2List : [];
 	var nowMs = safeInt(options.nowMs, Date.now());
+	var keepDays = safeInt(options.keepDays, DEFAULT_RETENTION_DAYS);
 	var keepMonths = safeInt(options.keepMonths, DEFAULT_KEEP_MONTHS);
 	var readDays = safeInt(options.readDays, DEFAULT_READ_DAYS);
+	var keepRecordedSnapshot = options.keepRecordedSnapshot !== false;
+	var config = options.config || {};
 	var initialBuild = !!options.initialBuild;
 	var logger = options.logger || null;
 	var stats = {
@@ -618,7 +773,7 @@ function buildMatchLedger(options) {
 		reserves2KeyMismatchSample: null
 	};
 
-	var keepCutoffMs = initialBuild ? 0 : monthStartNMonthsAgoMs(nowMs, keepMonths);
+	var keepCutoffMs = initialBuild || keepDays === 0 ? 0 : dayStartNDaysAgoMs(nowMs, keepDays);
 	var updateCutoffMs = initialBuild ? 0 : dayStartNDaysAgoMs(nowMs, readDays);
 
 	if (initialBuild) {
@@ -702,7 +857,9 @@ function buildMatchLedger(options) {
 				isSkip,
 				true,
 				false,
-				nowMs
+				nowMs,
+				keepRecordedSnapshot,
+				config
 			);
 
 			return;
@@ -719,7 +876,9 @@ function buildMatchLedger(options) {
 			false,
 			false,
 			false,
-			nowMs
+			nowMs,
+			keepRecordedSnapshot,
+			config
 		);
 	});
 
@@ -755,7 +914,9 @@ function buildMatchLedger(options) {
 			isSkip,
 			false,
 			false,
-			nowMs
+			nowMs,
+			keepRecordedSnapshot,
+			config
 		);
 	});
 
@@ -804,7 +965,7 @@ function buildMatchLedger(options) {
 		var oldEntry = prunedOldByKey[key];
 		var newEntry = windowByKey[key];
 
-		mergedByKey[key] = oldEntry ? mergeOldNew(oldEntry, newEntry, logger) : newEntry;
+		mergedByKey[key] = oldEntry ? mergeOldNew(oldEntry, newEntry, logger, config) : newEntry;
 	});
 
 	var results = Object.keys(mergedByKey).map(function (key) {
@@ -820,11 +981,12 @@ function buildMatchLedger(options) {
 		summary: {
 			nowMs: nowMs,
 			initialBuild: initialBuild,
+			keepDays: keepDays,
 			keepMonths: keepMonths,
 			readDays: readDays,
 			keepCutoffMs: keepCutoffMs,
 			updateCutoffMs: updateCutoffMs,
-			keepCutoffJst: initialBuild ? null : formatJstMinute(keepCutoffMs),
+			keepCutoffJst: initialBuild || keepDays === 0 ? null : formatJstMinute(keepCutoffMs),
 			updateCutoffJst: initialBuild ? null : formatJstMinute(updateCutoffMs),
 			recordedAll: recordedAll.length,
 			reserves2All: reserves2All.length,
@@ -842,6 +1004,71 @@ function buildMatchLedger(options) {
 	};
 }
 
+function getRecordedEndMs(program) {
+	var start;
+	var seconds;
+
+	if (!program || typeof program !== "object") {
+		return 0;
+	}
+
+	if (safeInt(program.end, 0) > 0) {
+		return safeInt(program.end, 0);
+	}
+
+	start = safeInt(program.start, 0);
+	seconds = safeInt(program.seconds, 0);
+
+	if (start > 0 && seconds > 0) {
+		return start + seconds * 1000;
+	}
+
+	return start;
+}
+
+function cleanupRecordedHistory(recordedList, days, nowMs) {
+	var cutoff;
+	var kept = [];
+	var removed = [];
+
+	if (!Array.isArray(recordedList)) {
+		recordedList = [];
+	}
+
+	if (!Number.isFinite(Number(days)) || Number(days) <= 0) {
+		return {
+			enabled: false,
+			days: days,
+			cutoffMs: null,
+			kept: recordedList.slice(),
+			removed: [],
+			removedCount: 0
+		};
+	}
+
+	cutoff = dayStartNDaysAgoMs(nowMs, Math.floor(Number(days)));
+
+	recordedList.forEach(function (program) {
+		var end = getRecordedEndMs(program);
+
+		if (!end || end >= cutoff) {
+			kept.push(program);
+		} else {
+			removed.push(program);
+		}
+	});
+
+	return {
+		enabled: true,
+		days: Math.floor(Number(days)),
+		cutoffMs: cutoff,
+		cutoffJst: formatJstMinute(cutoff),
+		kept: kept,
+		removed: removed,
+		removedCount: removed.length
+	};
+}
+
 function usage() {
 	console.log([
 		"Usage:",
@@ -853,7 +1080,10 @@ function usage() {
 		"  --old-match <path>   existing match.json path used as the merge base",
 		"  --output <path>      comparison output path; required",
 		"  --read-days <days>   update window in days (default: 14)",
-		"  --keep-months <n>    keep range in months from JST month start (default: 3)",
+		"  --keep-days <days>   keep match range in days (default: 365; 0 disables cleanup)",
+		"  --keep-months <n>    compatibility option; converted to roughly n*31 days",
+		"  --recorded-history-days <days>  keep recorded.json history in days (default: config/default; 0 disables cleanup)",
+		"  --config <path>      config.json path (default: ./config.json)",
 		"  --now <value>        current time override, epoch milliseconds or ISO date",
 		"  --initial-build      build from all recorded/reserves2 input and ignore old match",
 		"  --help              show this help"
@@ -868,6 +1098,9 @@ function parseArgs(argv) {
 		output: null,
 		readDays: DEFAULT_READ_DAYS,
 		keepMonths: DEFAULT_KEEP_MONTHS,
+		keepDays: null,
+		recordedHistoryDays: null,
+		config: path.join(__dirname, "config.json"),
 		initialBuild: false,
 		nowMs: Date.now()
 	};
@@ -915,8 +1148,20 @@ function parseArgs(argv) {
 		case "--read-days":
 			options.readDays = safeInt(value, DEFAULT_READ_DAYS);
 			break;
+		case "--keep-days":
+			options.keepDays = safeInt(value, DEFAULT_RETENTION_DAYS);
+			break;
 		case "--keep-months":
 			options.keepMonths = safeInt(value, DEFAULT_KEEP_MONTHS);
+			if (options.keepDays === null) {
+				options.keepDays = Math.max(0, options.keepMonths * 31);
+			}
+			break;
+		case "--recorded-history-days":
+			options.recordedHistoryDays = safeInt(value, DEFAULT_RETENTION_DAYS);
+			break;
+		case "--config":
+			options.config = value;
 			break;
 		case "--now":
 			options.nowMs = parseNow(value);
@@ -952,9 +1197,17 @@ function readJsonArray(file, options) {
 	options = options || {};
 
 	if (!file || !fs.existsSync(file)) {
+		if (options.createIfMissing) {
+			ensureParentDirectory(file);
+			fs.writeFileSync(file, "[]");
+			console.log("INIT JSON: " + file);
+			return [];
+		}
+
 		if (options.allowMissing) {
 			return [];
 		}
+
 		throw new Error("file not found: " + file);
 	}
 
@@ -972,8 +1225,10 @@ function readJsonArray(file, options) {
 	if (!Array.isArray(data)) {
 		if (options.allowInvalid) {
 			console.error("WARNING: JSON array expected, ignored: " + file);
+			return [];
 		}
-		return [];
+
+		throw new Error("JSON array expected: " + file);
 	}
 
 	return data;
@@ -981,7 +1236,7 @@ function readJsonArray(file, options) {
 
 function ensureParentDirectory(file) {
 	var dir = path.dirname(path.resolve(file));
-	mkdirp.sync(dir);
+	fs.mkdirSync(dir, { recursive: true });
 }
 
 function writeJsonAtomic(file, data) {
@@ -1007,7 +1262,8 @@ function printSummary(summary, output) {
 	console.log("keep_cutoff_month_start(JST): " + (summary.keepCutoffJst || "disabled"));
 	console.log("update_cutoff_day_start(JST): " + (summary.updateCutoffJst || "disabled"));
 	console.log("read_days: " + summary.readDays);
-	console.log("keep_months: " + summary.keepMonths);
+	console.log("keep_days: " + summary.keepDays);
+	console.log("keep_months_compat: " + summary.keepMonths);
 	console.log("recorded_all: " + summary.recordedAll);
 	console.log("reserves2_all: " + summary.reserves2All);
 	console.log("recorded_win: " + summary.recordedWindow);
@@ -1048,6 +1304,8 @@ function main() {
 	var recordedList;
 	var reserves2List;
 	var ledger;
+	var config;
+	var cleanup;
 
 	try {
 		options = parseArgs(process.argv);
@@ -1061,18 +1319,29 @@ function main() {
 			throw new Error("--output is required so production match.json is not overwritten accidentally");
 		}
 
+		config = readConfigFile(options.config);
+		if (options.keepDays === null) {
+			options.keepDays = getRetentionDays(config, "matchRetentionDays", DEFAULT_RETENTION_DAYS);
+		}
+		if (options.recordedHistoryDays === null) {
+			options.recordedHistoryDays = getRetentionDays(config, "recordedHistoryRetentionDays", DEFAULT_RETENTION_DAYS);
+		}
+
 		oldMatchPath = options.oldMatch || options.output;
-		oldResults = options.initialBuild ? [] : readJsonArray(oldMatchPath, { allowMissing: true, allowInvalid: true });
-		recordedList = readJsonArray(options.recorded, { allowMissing: true });
-		reserves2List = readJsonArray(options.reserves2, { allowMissing: true });
+		oldResults = options.initialBuild ? [] : readJsonArray(oldMatchPath, { createIfMissing: true, allowInvalid: true });
+		recordedList = readJsonArray(options.recorded, { createIfMissing: true });
+		reserves2List = readJsonArray(options.reserves2, { createIfMissing: true });
 
 		ledger = buildMatchLedger({
 			oldResults: oldResults,
 			recordedList: recordedList,
 			reserves2List: reserves2List,
 			nowMs: options.nowMs,
+			keepDays: options.keepDays,
 			keepMonths: options.keepMonths,
 			readDays: options.readDays,
+			keepRecordedSnapshot: shouldKeepRecordedSnapshot(config),
+			config: config,
 			initialBuild: options.initialBuild,
 			logger: console.log
 		});
@@ -1080,7 +1349,17 @@ function main() {
 		ensureParentDirectory(options.output);
 		writeJsonAtomic(options.output, ledger.results);
 
+		cleanup = cleanupRecordedHistory(recordedList, options.recordedHistoryDays, options.nowMs);
+		if (cleanup.enabled && cleanup.removedCount > 0) {
+			writeJsonAtomic(options.recorded, cleanup.kept);
+		}
+
 		printSummary(ledger.summary, options.output);
+		if (cleanup.enabled) {
+			console.log("RECORDED_HISTORY_CLEANUP days=" + cleanup.days + " cutoff=" + cleanup.cutoffJst + " keep=" + cleanup.kept.length + " removed=" + cleanup.removedCount);
+		} else {
+			console.log("RECORDED_HISTORY_CLEANUP disabled");
+		}
 	} catch (error) {
 		console.error("ERROR: " + error.message);
 		process.exitCode = 1;
@@ -1092,11 +1371,14 @@ if (require.main === module) {
 }
 
 module.exports = {
-	TEMP_RECORDING_MARK: TEMP_RECORDING_MARK,
 	DEFAULT_KEEP_MONTHS: DEFAULT_KEEP_MONTHS,
+	DEFAULT_RETENTION_DAYS: DEFAULT_RETENTION_DAYS,
 	DEFAULT_READ_DAYS: DEFAULT_READ_DAYS,
 	safeInt: safeInt,
 	safeBool: safeBool,
+	readConfigFile: readConfigFile,
+	getRetentionDays: getRetentionDays,
+	shouldKeepRecordedSnapshot: shouldKeepRecordedSnapshot,
 	makeCanonicalKeyFromFields: makeCanonicalKeyFromFields,
 	makeCanonicalKey: makeCanonicalKey,
 	makeKeyFromRecorded: makeKeyFromRecorded,
@@ -1112,9 +1394,12 @@ module.exports = {
 	mergeProgram: mergeProgram,
 	buildReservationMeta: buildReservationMeta,
 	buildRecordingResult: buildRecordingResult,
+	buildMatchMeta: buildMatchMeta,
 	buildMatchItem: buildMatchItem,
+	isTemporaryRecordingPath: isTemporaryRecordingPath,
 	buildMatchLedger: buildMatchLedger,
 	parseArgs: parseArgs,
+	cleanupRecordedHistory: cleanupRecordedHistory,
 	readJsonArray: readJsonArray,
 	writeJsonAtomic: writeJsonAtomic
 };

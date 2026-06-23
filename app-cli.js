@@ -15,6 +15,18 @@ var RECORDED_DATA_FILE  = __dirname + '/data/recorded.json';
 // 標準モジュールのロード
 var fs            = require('fs');
 var util          = require('util');
+
+// Node.js 24 では util.log / util.error が存在しないため、旧Chinachu互換のログ関数を補う
+if (typeof util.log !== 'function') {
+	util.log = function () {
+		console.log(new Date().toISOString() + ' - ' + Array.prototype.join.call(arguments, ' '));
+	};
+}
+if (typeof util.error !== 'function') {
+	util.error = function () {
+		console.error(Array.prototype.join.call(arguments, ' '));
+	};
+}
 var net           = require('net');
 var child_process = require('child_process');
 

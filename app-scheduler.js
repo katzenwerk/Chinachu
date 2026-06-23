@@ -12,6 +12,8 @@ const CONFIG_FILE = __dirname + '/config.json';
 const RULES_FILE = __dirname + '/rules.json';
 const RESERVES_DATA_FILE = __dirname + '/data/reserves.json';
 const RESERVES2_DATA_FILE = __dirname + '/data/reserves2.json';
+const RECORDED_DATA_FILE = __dirname + '/data/recorded.json';
+const MATCH_DATA_FILE = __dirname + '/data/match.json';
 const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
 
 // 標準モジュールのロード
@@ -19,6 +21,13 @@ const path = require('path');
 const url = require("url");
 const fs = require('fs');
 const util = require('util');
+
+// Node.js 24 では util.log が存在しないため、旧Chinachu互換のログ関数を補う
+if (typeof util.log !== 'function') {
+	util.log = function () {
+		console.log(new Date().toISOString() + ' - ' + Array.prototype.join.call(arguments, ' '));
+	};
+}
 const child_process = require('child_process');
 
 // ディレクトリチェック
@@ -98,7 +107,13 @@ function createPidFile() {
 }
 
 function deletePidFile() {
-	fs.unlinkSync(PID_FILE);
+	try {
+		if (fs.existsSync(PID_FILE)) {
+			fs.unlinkSync(PID_FILE);
+		}
+	} catch (e) {
+		util.log('WARNING: `' + PID_FILE + '`の削除に失敗しました: ' + e.message);
+	}
 }
 
 // scheduler is running?
@@ -108,7 +123,14 @@ function isRunning(callback) {
 		var pid = fs.readFileSync(PID_FILE, { encoding: 'utf8' });
 		pid = pid.trim();
 
-		child_process.exec('ps h -p ' + pid, function (err, stdout) {
+		if (/^[0-9]+$/.test(pid) === false) {
+			util.log('WARNING: `' + PID_FILE + '`の内容が不正です');
+			deletePidFile();
+			callback(false);
+			return void 0;
+		}
+
+		child_process.execFile('ps', ['h', '-p', pid], function (err, stdout) {
 
 			if (stdout === '') {
 				deletePidFile();
@@ -143,23 +165,80 @@ function writeJsonAtomic(file, data) {
 }
 
 // (function) read json array
-function readJsonArray(file) {
+function readJsonArray(file, options) {
+	var text;
+	var data;
+
+	options = options || {};
+
 	if (!fs.existsSync(file)) {
+		if (options.createIfMissing) {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, '[]');
+			util.log('INIT JSON: ' + file);
+		}
+
 		return [];
 	}
 
 	try {
-		var data = JSON.parse(fs.readFileSync(file, { encoding: 'utf8' }) || '[]');
+		text = fs.readFileSync(file, { encoding: 'utf8' }).replace(/^\uFEFF/, '');
+		data = JSON.parse(text || '[]');
+	} catch (e) {
+		if (options.allowInvalid) {
+			util.log('WARNING: `' + file + '`のロードに失敗しました: ' + e.message);
+			return [];
+		}
 
-		if (data instanceof Array === false) {
+		throw e;
+	}
+
+	if (data instanceof Array === false) {
+		if (options.allowInvalid) {
 			util.log('WARNING: `' + file + '`の内容が配列ではありません');
 			return [];
 		}
 
-		return data;
-	} catch (e) {
-		util.log('WARNING: `' + file + '`のロードに失敗しました: ' + e.message);
-		return [];
+		throw new Error('`' + file + '`の内容が配列ではありません');
+	}
+
+	return data;
+}
+
+
+// (function) get retention days from config
+function getRetentionDays(name, defaultDays) {
+	var value = Number(config[name]);
+
+	if (!Number.isFinite(value)) {
+		return defaultDays;
+	}
+
+	value = Math.floor(value);
+
+	if (value < 0) {
+		return defaultDays;
+	}
+
+	return value;
+}
+
+// (function) normalize allowEndLack
+function normalizeAllowEndLack(value) {
+	return value === true;
+}
+
+// (function) apply reserve option from matched rule
+function applyRuleReserveOptions(reserve, rule, fallbackRuleId) {
+	if (!reserve || !rule) {
+		return;
+	}
+
+	reserve.ruleId = rule.id !== undefined ? rule.id : fallbackRuleId;
+	reserve.allowEndLack = normalizeAllowEndLack(rule.allowEndLack);
+
+	if (typeof rule.recorded_format !== 'undefined') {
+		reserve.recordedFormat = rule.recorded_format;
 	}
 }
 
@@ -203,14 +282,18 @@ function decorateReserves2Entry(reserve, now) {
 
 // (function) remake reserves2
 function remakeReserves2(currentReserves2, activeReserves, now) {
-	var keepMillis = 30 * 24 * 60 * 60 * 1000;
-	var threshold = now - keepMillis;
+	var keepDays = getRetentionDays('reserves2RetentionDays', 365);
+	var keepMillis = keepDays > 0 ? keepDays * 24 * 60 * 60 * 1000 : 0;
+	var threshold = keepMillis > 0 ? now - keepMillis : 0;
 	var map = {};
+
+	util.log('RESERVES2 RETENTION DAYS: ' + (keepDays > 0 ? keepDays : 'disabled'));
 
 	/*
 	 * reserves2 の扱い:
-	 *   - 過去分(end < now)は30日以内なら保持する
-	 *   - 30日より前に終了したものは削除する
+	 *   - 過去分(end < now)は reserves2RetentionDays 以内なら保持する
+	 *   - reserves2RetentionDays より前に終了したものは削除する
+	 *   - reserves2RetentionDays が 0 の場合は整理しない
 	 *   - 現在/未来分(end >= now)は activeReserves、つまり reserves.json と同じ内容を正とする
 	 *
 	 * これにより、未来の予約ルール変更・解除で reserves.json から消えたものは
@@ -227,7 +310,7 @@ function remakeReserves2(currentReserves2, activeReserves, now) {
 			return;
 		}
 
-		if (end < threshold) {
+		if (keepMillis > 0 && end < threshold) {
 			return;
 		}
 
@@ -286,7 +369,7 @@ function outputReserves() {
 	try {
 		util.log('WRITE: ' + RESERVES2_DATA_FILE);
 
-		var currentReserves2 = readJsonArray(RESERVES2_DATA_FILE);
+		var currentReserves2 = readJsonArray(RESERVES2_DATA_FILE, { createIfMissing: true });
 		var reserves2Array = remakeReserves2(currentReserves2, array, now);
 
 		writeJsonAtomic(RESERVES2_DATA_FILE, reserves2Array);
@@ -298,8 +381,8 @@ function outputReserves() {
 // (function) update match ledger
 function updateMatchLedger() {
 	var appMatchingFile = __dirname + '/app-matching.js';
-	var recordedDataFile = __dirname + '/data/recorded.json';
-	var matchDataFile = __dirname + '/data/match.json';
+	var recordedDataFile = RECORDED_DATA_FILE;
+	var matchDataFile = MATCH_DATA_FILE;
 	var commandProcess;
 
 	try {
@@ -308,13 +391,18 @@ function updateMatchLedger() {
 			return;
 		}
 
+		readJsonArray(recordedDataFile, { createIfMissing: true });
+		readJsonArray(RESERVES2_DATA_FILE, { createIfMissing: true });
+		readJsonArray(matchDataFile, { createIfMissing: true });
+
 		util.log('RUN: ' + appMatchingFile);
 
 		commandProcess = child_process.spawnSync(process.execPath, [
 			appMatchingFile,
 			'--recorded', recordedDataFile,
 			'--reserves2', RESERVES2_DATA_FILE,
-			'--output', matchDataFile
+			'--output', matchDataFile,
+			'--config', CONFIG_FILE
 		], {
 			cwd: __dirname,
 			stdio: 'inherit'
@@ -329,6 +417,14 @@ function updateMatchLedger() {
 		}
 	} catch (e) {
 		util.log('WARNING: match.json の更新に失敗しました: ' + (e && e.stack ? e.stack : e));
+	}
+}
+
+// (function) run epgEnd hook
+function runEpgEndCommand() {
+	if (config.epgEndCommand) {
+		const commandProcess = child_process.spawn(config.epgEndCommand, [process.pid, RULES_FILE, RESERVES_DATA_FILE, SCHEDULE_DATA_FILE]);
+		util.log('SPAWN: ' + config.epgEndCommand + ' (pid=' + commandProcess.pid + ')');
 	}
 }
 
@@ -361,7 +457,7 @@ function scheduler() {
 		});
 	});
 
-	reserves = JSON.parse(fs.readFileSync(RESERVES_DATA_FILE, { encoding: 'utf8' }) || '[]');//読み込む
+	reserves = readJsonArray(RESERVES_DATA_FILE, { createIfMissing: true });//読み込む
 
 	var typeNum = {};
 
@@ -507,15 +603,17 @@ function scheduler() {
 		a = matches[i];
 
 		if (!a.isDuplicate) {
-            for (let j = rules.length - 1; j >= 0; j--) {
-	            const rule = rules[j];
-	            if (chinachu.programMatchesRule(rule, a, config.normalizationForm)) {
-		            a.ruleId = rule.id !== undefined ? rule.id : j; // 逆順なので index は j
-		            break;
-	            }
-            }
+			// 予約へルール由来の情報を継承する
+			a.allowEndLack = false;
+			for (let j = rules.length - 1; j >= 0; j--) {
+				const rule = rules[j];
+				if (chinachu.programMatchesRule(rule, a, config.normalizationForm)) {
+					applyRuleReserveOptions(a, rule, j);
+					break;
+				}
+			}
 
-            a.programId = a.id;
+			a.programId = a.id;
 			reserves.push(a);
 
 			if (a.isSkip) {
@@ -530,14 +628,6 @@ function scheduler() {
 		}
 	}
 
-	// ruleにもしあればreserveにrecordedFormatを追加
-	reserves.forEach(function (reserve) {
-		rules.forEach(function (rule) {
-			if (typeof rule.recorded_format !== 'undefined' && chinachu.programMatchesRule(rule, reserve, config.normalizationForm)) {
-				reserve.recordedFormat = rule.recorded_format;
-			}
-		});
-	});
 
 	// results
 	util.log('MATCHES: ' + matches.length.toString(10));
@@ -686,7 +776,7 @@ function convertPrograms(p, ch) {
 				epinum = parseInt(epinumStr, 10);
 			}
 
-			if (epinum === null && flags.has('新') !== -1) {
+			if (epinum === null && flags.has('新') === true) {
 				epinum = 1;
 			}
 		}
@@ -800,12 +890,16 @@ function getEpgFromMirakurun(path) {
 
 			util.log('Mirakurun -> tuners: ' + tuners.length);
 
-			writeOut(channels, scheduler);
+			writeOut(channels, function () {
+				runEpgEndCommand();
+				scheduler();
+			});
 		})
 		.catch(e => {
 
 			util.log('Mirakurun -> Error:');
 			console.error(e);
+			process.exit(1);
 		});
 }
 
@@ -880,10 +974,5 @@ isRunning(running => {
 		}
 
 		getEpgFromMirakurun(mirakurunPath);
-
-		if (config.epgEndCommand) {
-			const commandProcess = child_process.spawn(config.epgEndCommand, [process.pid, RULES_FILE, RESERVES_DATA_FILE, SCHEDULE_DATA_FILE]);
-			util.log('SPAWN: ' + config.epgEndCommand + ' (pid=' + commandProcess.pid + ')');
-		}
 	}
 });

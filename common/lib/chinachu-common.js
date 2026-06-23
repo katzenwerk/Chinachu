@@ -157,7 +157,89 @@ exports.createTimeout = function (a, b) {
 	};
 };
 
-exports.formatRecordedName = function (program, name) {
+var DEFAULT_ENCLOSING_CHARACTER_MAP = {
+	'🈀': '[ほか]',
+	'🈁': '[ココ]',
+	'🈂': '[サ]',
+	'🈐': '[手]',
+	'🈑': '[字]',
+	'🈒': '[双]',
+	'🈓': '[デ]',
+	'🈔': '[二]',
+	'🈕': '[多]',
+	'🈖': '[解]',
+	'🈗': '[天]',
+	'🈘': '[交]',
+	'🈙': '[映]',
+	'🈚': '[無]',
+	'🈛': '[料]',
+	'🈜': '[前]',
+	'🈝': '[後]',
+	'🈞': '[再]',
+	'🈟': '[新]',
+	'🈠': '[初]',
+	'🈡': '[終]',
+	'🈢': '[生]',
+	'🈣': '[販]',
+	'🈤': '[声]',
+	'🈥': '[吹]',
+	'🈦': '[演]',
+	'🈧': '[投]',
+	'🈨': '[捕]',
+	'🈩': '[一]',
+	'🈪': '[三]',
+	'🈫': '[遊]',
+	'🈬': '[左]',
+	'🈭': '[中]',
+	'🈮': '[右]',
+	'🈯': '[指]',
+	'🈰': '[走]',
+	'🈱': '[打]',
+	'🈲': '[禁]',
+	'🈳': '[空]',
+	'🈴': '[合]',
+	'🈵': '[満]',
+	'🈶': '[有]',
+	'🈷': '[月]',
+	'🈸': '[申]',
+	'🈹': '[割]',
+	'🈺': '[営]',
+	'🈻': '[配]',
+	'🉐': '[得]',
+	'🉑': '[可]',
+	'㊙': '[秘]',
+	'㊗': '[祝]'
+};
+
+exports.replaceEnclosingCharacters = function (value, map) {
+	var text = String(value || '');
+	var replacementMap = {};
+	var key;
+
+	for (key in DEFAULT_ENCLOSING_CHARACTER_MAP) {
+		if (DEFAULT_ENCLOSING_CHARACTER_MAP.hasOwnProperty(key)) {
+			replacementMap[key] = DEFAULT_ENCLOSING_CHARACTER_MAP[key];
+		}
+	}
+
+	if (map && typeof map === 'object') {
+		for (key in map) {
+			if (map.hasOwnProperty(key) && typeof map[key] === 'string') {
+				replacementMap[key] = map[key];
+			}
+		}
+	}
+
+	Object.keys(replacementMap).forEach(function (mark) {
+		text = text.split(mark).join(replacementMap[mark]);
+	});
+
+	return text;
+};
+
+exports.formatRecordedName = function (program, name, options) {
+	options = options || {};
+
 	name = name.replace(/<([^>]+)>/g, function (z, a) {
 
 		// date:
@@ -208,6 +290,10 @@ exports.formatRecordedName = function (program, name) {
 		// category
 		if (a.match(/^category$/) !== null) { return program.category; }
 	});
+
+	if (options.replaceEnclosingCharacters === true || options.needToReplaceEnclosingCharacters === true) {
+		name = exports.replaceEnclosingCharacters(name, options.enclosingCharacterMap);
+	}
 
 	var info = path.parse(name);
 	var limit = 255 - Buffer.byteLength(info.ext);

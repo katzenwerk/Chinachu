@@ -24,6 +24,13 @@ const config = require(CONFIG_FILE);
 const path = require('path');
 const fs = require('fs');
 const util = require('util');
+
+// Node.js 24 では util.log が存在しないため、旧Chinachu互換のログ関数を補う
+if (typeof util.log !== 'function') {
+	util.log = function () {
+		console.log(new Date().toISOString() + ' - ' + Array.prototype.join.call(arguments, ' '));
+	};
+}
 const child_process = require('child_process');
 const url = require('url');
 const querystring = require('querystring');
@@ -53,12 +60,21 @@ const WUI_LOG_FILE = !!process.env.pm_id ? apps[0].out_file : (__dirname + '/log
 const OPERATOR_LOG_FILE = !!process.env.pm_id ? apps[1].out_file : (__dirname + '/log/operator');
 const OPERATOR_PID_FILE = (() => {
 	if (process.env.pm_id) {
-		const jlist = JSON.parse(child_process.execSync("pm2 jlist"));
-		const proc = jlist.find(_proc => _proc.name === "chinachu-operator");
-		return proc.pm2_env.pm_pid_path;
-	} else {
-		return "/var/run/chinachu-operator.pid";
+		try {
+			const jlist = JSON.parse(child_process.execSync("pm2 jlist"));
+			const proc = jlist.find(_proc => _proc.name === "chinachu-operator");
+
+			if (proc && proc.pm2_env && proc.pm2_env.pm_pid_path) {
+				return proc.pm2_env.pm_pid_path;
+			}
+
+			util.log("WARNING: PM2 process `chinachu-operator` was not found. operator status will be shown as stopped.");
+		} catch (e) {
+			util.log("WARNING: failed to inspect PM2 process list: " + e.message);
+		}
 	}
+
+	return "/var/run/chinachu-operator.pid";
 })();
 
 // SIGQUIT
@@ -841,7 +857,7 @@ function ioServer(socket) {
 
 		// Base64デコード
 		try {
-			auth = new Buffer(auth, 'base64').toString('ascii');
+			auth = Buffer.from(auth, 'base64').toString('ascii');
 		} catch (e) {
 			socket.disconnect();
 			return;

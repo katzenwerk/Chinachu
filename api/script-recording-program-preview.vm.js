@@ -55,9 +55,9 @@
 			
 			if (request.type === 'txt') {
 				if (vcodec === 'mjpeg') {
-					response.end('data:image/jpeg;base64,' + new Buffer(stdout, 'binary').toString('base64'));
+					response.end('data:image/jpeg;base64,' + Buffer.from(stdout, 'binary').toString('base64'));
 				} else if (vcodec === 'png') {
-					response.end('data:image/png;base64,' + new Buffer(stdout, 'binary').toString('base64'));
+					response.end('data:image/png;base64,' + Buffer.from(stdout, 'binary').toString('base64'));
 				}
 			} else {
 				response.end(stdout, 'binary');
