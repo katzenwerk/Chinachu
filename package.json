@@ -38,9 +38,8 @@
     "swagger-client": "github:kanreisa/swagger-js#feature/unix-domain-socket"
   },
   "devDependencies": {
-    "mocha": "^6.2.3",
-    "should": "*",
-    "sinon": "^7.5.0"
+    "mocha": "^11.7.6",
+    "should": "*"
   },
   "scripts": {
     "test": "mocha -R spec"
