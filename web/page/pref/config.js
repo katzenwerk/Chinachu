@@ -322,7 +322,7 @@ P = Class.create(P, {
 	},
 
 	selectInput: function _selectInput(key, options, emptyLabel) {
-		var select = new Element('select').setStyle({ width: '180px' });
+		var select = new Element('select').setStyle({ width: '360px', maxWidth: '100%', boxSizing: 'border-box' });
 		var current = this.data.config[key];
 		var empty = new Element('option', { value: '' }).update(emptyLabel || '(未指定)');
 		select.insert(empty);
@@ -369,22 +369,22 @@ P = Class.create(P, {
 		panel.body.insert(this.createFieldRow('recordedDir', 'recordedDir', this.textInput('recordedDir'), '録画保存先。相対パスまたはフルパス。'));
 		panel.body.insert(this.createFieldRow('temporaryDir', 'temporaryDir', this.textInput('temporaryDir'), '録画中や一時処理で使う保存先。recordedDir と分ける場合に指定。'));
 		panel.body.insert(this.createFieldRow('recordedFormat', 'recordedFormat', this.textInput('recordedFormat'), '録画ファイル名フォーマット。番組名、日時、チャンネル名などを使った保存名の規則。'));
-		panel.body.insert(this.createFieldRow('recordedNameReplaceEnclosingCharacters', null, this.checkboxInput('recordedNameReplaceEnclosingCharacters'), '録画ファイル名に含まれる番組表の囲み文字を [字] [再] [新] などの表記へ置換します。録画ファイル名だけに効き、番組データ自体は変更しません。'));
-		panel.body.insert(this.createFieldRow('recordedNameEnclosingCharacterMap', 'recordedNameEnclosingCharacterMap', this.textareaInput('recordedNameEnclosingCharacterMap', 4), '囲み文字置換の追加・上書き用JSONオブジェクト。例: {"🈑":"[字]","🈞":"[再]","SS":"[SS]"}。通常は空欄で既定mapを使用します。'));
+		panel.body.insert(this.createFieldRow('recordedNameReplaceEnclosingCharacters', null, this.checkboxInput('recordedNameReplaceEnclosingCharacters'), '録画ファイル名に含まれる番組表の囲み文字を、[字] [再] [新] などの表記へ置き換えます。対象例: 🈑→[字]、🈞→[再]、🈟→[新]、🈡→[終]、🈓→[デ]、🈔→[二]、🈕→[多]、🈖→[解]、🈙→[映]、㊙→[秘]、㊗→[祝] など。録画ファイル名だけに効き、番組データ自体は変更しません。'));
+		panel.body.insert(this.createFieldRow('recordedNameEnclosingCharacterMap', 'recordedNameEnclosingCharacterMap', this.textareaInput('recordedNameEnclosingCharacterMap', 4), '囲み文字置換の追加・上書き用JSONオブジェクトです。空欄の場合は既定の置き換え一覧を使用します。指定したキーは既定値へ追加・上書きされます。例: {"🈑":"[字幕]","SS":"[SS]"}'));
 		panel.body.insert(this.createFieldRow('recordedCommand', 'recordedCommand', this.textareaInput('recordedCommand', 3), '録画コマンド。空欄ならChinachu標準の録画処理を使用。独自ffmpeg/rivarun等を使う場合のみ指定。'));
 		panel.body.insert(this.createFieldRow('normalizationForm', 'normalizationForm', this.selectInput('normalizationForm', [
-			{ value: 'NFC', label: 'NFC - 正準合成' },
-			{ value: 'NFD', label: 'NFD - 正準分解' },
-			{ value: 'NFKC', label: 'NFKC - 互換分解後に合成' },
-			{ value: 'NFKD', label: 'NFKD - 互換分解' }
-		], '(無変換)'), '予約ルール照合時の文字列正規化。録画ファイル名の置換とは別です。未指定なら変換しません。NFKCは全角英数・互換文字なども寄せるため日本語の表記揺れ対策に向きますが、見た目や文字幅が変わる場合があります。'));
+			{ value: 'NFC', label: 'NFC - くっつける・標準' },
+			{ value: 'NFD', label: 'NFD - バラバラにする' },
+			{ value: 'NFKC', label: 'NFKC - 見た目もそろえて・くっつける（既定）' },
+			{ value: 'NFKD', label: 'NFKD - 見た目もそろえて・バラバラにする' }
+		], '(未指定: NFKC)'), '予約ルールと番組情報をマッチさせるため、比較前に全角・半角などの文字の取扱いをそろえる設定です。既定はNFKCです。\nNFC: 「か」+「゛」を1文字の「が」にします。一般的なWebサイトやシステムでよく使われる形です。\nNFD: 1文字の「が」を「か」+「゛」に分けます。Macのファイルシステム内部処理などで見られる形です。\nNFKC: 全角/半角の違いや特殊記号を普通の文字に寄せてからくっつけます。検索や入力フォームの表記ゆれ対策向きです。\nNFKD: 特殊記号を普通の文字に寄せたうえで、さらにバラバラに分けます。録画ファイル名の置換とは別です。'));
 		panel.body.insert(this.createFieldRow('storageLowSpaceThresholdMB', 'storageLowSpaceThresholdMB', this.numberInput('storageLowSpaceThresholdMB'), '空き容量の閾値(MB)。この値を下回った場合に storageLowSpaceAction が動作対象になります。'));
 		panel.body.insert(this.createFieldRow('storageLowSpaceAction', 'storageLowSpaceAction', this.selectInput('storageLowSpaceAction', [
-			{ value: 'none', label: 'none - ログのみ' },
+			{ value: 'none', label: 'none - ログのみ（削除しない）' },
 			{ value: 'stop', label: 'stop - 録画中番組を停止' },
-			{ value: 'remove', label: 'remove - 古い録画を削除' }
-		], '(未指定)'), '閾値を下回ったときの本体動作。removeは自動削除を伴うため注意。storageLowSpaceCommand と storageLowSpaceNotifyTo はこの値とは独立して動作します。'));
-		panel.body.insert(this.createFieldRow('storageLowSpaceNotifyTo', 'storageLowSpaceNotifyTo', this.textInput('storageLowSpaceNotifyTo'), '旧メール通知の送信先。nodemailer依存を外す場合は無効化対象。今後はWebhookや外部コマンド通知へ置き換え推奨です。'));
+			{ value: 'remove', label: 'remove' }
+		], '(未指定)'), '空き容量が閾値を下回ったときの本体動作です。removeは config.recordedDir 直下の通常ファイルから、最も古い .ts / .m2ts を1件だけ削除します。サブフォルダ、シンボリックリンク、リンク先、別マウント配下は追跡しません。これらを使う構成では remove を使わず、none と storageLowSpaceCommand 等で個別対応してください。storageLowSpaceCommand と storageLowSpaceNotifyTo はこの値とは独立して動作します。'));
+		panel.body.insert(this.createFieldRow('storageLowSpaceNotifyTo', 'storageLowSpaceNotifyTo', this.textInput('storageLowSpaceNotifyTo'), '空き容量が閾値を下回ったときに送るメール通知の宛先です。storageLowSpaceAction が remove の場合は、config.recordedDir 直下の最も古い .ts / .m2ts を1件削除する処理とは別に通知します。旧メール通知のため、今後はWebhookや外部コマンド通知への置き換え推奨です。'));
 		panel.body.insert(this.createFieldRow('storageLowSpaceCommand', 'storageLowSpaceCommand', this.textareaInput('storageLowSpaceCommand', 3), '空き容量不足時に実行するコマンド。Slack/Webhook通知スクリプトや削除処理を外部化する場合に使用します。'));
 		return panel;
 	},
@@ -415,85 +415,33 @@ P = Class.create(P, {
 	},
 
 	createServiceSection: function _createServiceSection() {
-		var panel = this.createPanel('サービス設定', 'Mirakurun /api/services を直接読み込み、excludeServices / serviceOrder へ保存します。除外は一覧カードから選択します。');
-		var toolbar = new Element('div').setStyle({
+		var panel = this.createPanel('サービス設定', 'Mirakurun /api/services を読み込み、excludeServices / serviceOrder へ保存します。除外サービスはボタンから一覧画面を開いて選択します。');
+		var buttonRow = new Element('div').setStyle({
 			display: 'flex',
-			gap: '6px',
+			gap: '4px',
 			alignItems: 'center',
 			marginBottom: '8px',
 			flexWrap: 'wrap'
 		});
-		var search = new Element('input', { type: 'text', placeholder: '検索' }).setStyle({ width: '240px' });
-		var typeSelect = new Element('select').setStyle({ width: '90px' });
-		var onlyExcluded = new Element('label').setStyle({ margin: '0 8px 0 0' });
-		var onlyNonType1 = new Element('label').setStyle({ margin: '0 8px 0 0' });
-		var grid = new Element('div', { className: 'config2-service-grid' }).setStyle({
-			display: 'grid',
-			gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-			gap: '5px',
-			maxHeight: '420px',
-			overflowY: 'auto',
-			border: '1px solid #ddd',
-			padding: '6px',
-			background: '#fafafa'
-		});
-		var loadButton = new Element('button', { type: 'button' }).update('Mirakurunから読み込む').setStyle({ marginRight: '4px' });
-		var selectNonType1Button = new Element('button', { type: 'button' }).update('type != 1 を除外選択').setStyle({ marginRight: '4px' });
-		var clearExcludeButton = new Element('button', { type: 'button' }).update('除外をクリア').setStyle({ marginRight: '4px' });
-		var clearOrderButton = new Element('button', { type: 'button' }).update('順序をクリア');
+		var selectButton = new Element('button', { type: 'button' }).update('除外サービスを選択');
 		var summary = new Element('div').setStyle({ fontSize: '12px', color: '#666', margin: '6px 0' });
 
-		['すべて', 'GR', 'BS', 'CS', 'SKY'].each(function (type) {
-			var opt = new Element('option', { value: type === 'すべて' ? '' : type }).update(type);
-			typeSelect.insert(opt);
-		});
-		onlyExcluded.insert(new Element('input', { type: 'checkbox' }));
-		onlyExcluded.insert(' 除外のみ');
-		onlyNonType1.insert(new Element('input', { type: 'checkbox' }));
-		onlyNonType1.insert(' type!=1');
-
-		this.view.serviceSearch = search;
-		this.view.serviceTypeSelect = typeSelect;
-		this.view.serviceOnlyExcluded = onlyExcluded.down('input');
-		this.view.serviceOnlyNonType1 = onlyNonType1.down('input');
-		this.view.serviceGrid = grid;
 		this.view.serviceSummary = summary;
+		this.view.serviceGrid = null;
+		this.view.serviceSearch = null;
+		this.view.serviceTypeSelect = null;
+		this.view.serviceOnlyExcluded = null;
+		this.view.serviceOnlyNonType1 = null;
 
-		toolbar.insert(search);
-		toolbar.insert(typeSelect);
-		toolbar.insert(onlyExcluded);
-		toolbar.insert(onlyNonType1);
-		panel.body.insert(toolbar);
-		panel.body.insert(new Element('div').setStyle({ marginBottom: '6px' }).insert(loadButton).insert(selectNonType1Button).insert(clearExcludeButton).insert(clearOrderButton));
+		buttonRow.insert(selectButton);
+		panel.body.insert(buttonRow);
 		panel.body.insert(summary);
-		panel.body.insert(grid);
 
-		search.observe('keyup', this.renderServices.bind(this));
-		typeSelect.observe('change', this.renderServices.bind(this));
-		this.view.serviceOnlyExcluded.observe('change', this.renderServices.bind(this));
-		this.view.serviceOnlyNonType1.observe('change', this.renderServices.bind(this));
-
-		loadButton.observe('click', function () {
-			this.loadServices();
-		}.bind(this));
-		selectNonType1Button.observe('click', function () {
-			this.data.services.each(function (svc) {
-				if (Number(svc.serviceType) !== 1) {
-					svc.excluded = true;
-				}
-			});
-			this.renderServices();
-		}.bind(this));
-		clearExcludeButton.observe('click', function () {
-			this.data.services.each(function (svc) { svc.excluded = false; });
-			this.renderServices();
-		}.bind(this));
-		clearOrderButton.observe('click', function () {
-			this.data.services.each(function (svc) { svc.order = ''; });
-			this.renderServices();
+		selectButton.observe('click', function () {
+			this.openServiceSelectorWithLoad();
 		}.bind(this));
 
-		this.renderServices();
+		this.updateServiceSummary();
 		return panel;
 	},
 
@@ -514,23 +462,26 @@ P = Class.create(P, {
 		return panel;
 	},
 
-	loadServices: function _loadServices() {
+	loadServices: function _loadServices(callback) {
 		var path = String(this.data.config.mirakurunPath || '').replace(/\/$/, '');
 		if (!path) {
 			flagrate.createModal({ title: 'Mirakurun未設定', text: 'mirakurunPath が未設定です。JSON貼り付けで読み込むか、mirakurunPath を設定してください。' }).open();
+			if (callback) { callback(false); }
 			return;
 		}
 
 		new Ajax.Request(path + '/api/services', {
 			method: 'get',
 			onSuccess: function (t) {
-				this.readServicesFromText(t.responseText);
+				var ok = this.readServicesFromText(t.responseText);
+				if (callback) { callback(ok === true); }
 			}.bind(this),
 			onFailure: function (t) {
 				flagrate.createModal({
 					title: 'サービス取得失敗',
 					text : 'Mirakurun /api/services の取得に失敗しました (' + t.status + ')。ブラウザから直接読めない場合は、Chinachu側に中継APIを追加する必要があります。'
 				}).open();
+				if (callback) { callback(false); }
 			}.bind(this)
 		});
 	},
@@ -541,15 +492,16 @@ P = Class.create(P, {
 			raw = text.evalJSON();
 		} catch (e) {
 			flagrate.createModal({ title: 'JSON解析失敗', text: 'services JSON の解析に失敗しました。' }).open();
-			return;
+			return false;
 		}
 		if (!Object.isArray(raw)) {
 			flagrate.createModal({ title: '形式エラー', text: 'services JSON は配列である必要があります。' }).open();
-			return;
+			return false;
 		}
 		this.data.services = this.normalizeServices(raw);
 		this.data.serviceLoaded = true;
 		this.renderServices();
+		return true;
 	},
 
 	normalizeServices: function _normalizeServices(raw) {
@@ -592,9 +544,211 @@ P = Class.create(P, {
 		return result;
 	},
 
+	updateServiceSummary: function _updateServiceSummary() {
+		if (!this.view.serviceSummary) { return; }
+		if (!this.data.services || this.data.services.length === 0) {
+			this.view.serviceSummary.update('services 未読込');
+			return;
+		}
+		this.view.serviceSummary.update('services: ' + this.data.services.length + ' 件 / 除外選択: ' + this.data.services.findAll(function (s) { return s.excluded === true; }).length + ' 件');
+	},
+
+	openServiceSelectorWithLoad: function _openServiceSelectorWithLoad() {
+		var loadingModal;
+
+		if (this.data.services && this.data.services.length > 0) {
+			this.openServiceSelector();
+			return;
+		}
+
+		loadingModal = flagrate.createModal({
+			title: 'services 読込中',
+			text : 'Mirakurun から services を読み込んでいます...'
+		}).open();
+
+		this.loadServices(function (ok) {
+			try { loadingModal.close(); } catch (e) {}
+			if (ok === true) {
+				this.openServiceSelector();
+			}
+		}.bind(this));
+	},
+
+
+	openServiceSelector: function _openServiceSelector() {
+		var wrapper;
+		var toolbar;
+		var selectNonType1Button;
+		var clearExcludeButton;
+		var clearOrderButton;
+		var summary;
+		var listWrap;
+		var modal;
+		var getColumnCount;
+		var render;
+
+		if (!this.data.services || this.data.services.length === 0) {
+			flagrate.createModal({ title: 'services 未読込', text: '先に Mirakurun から services を読み込んでください。' }).open();
+			return;
+		}
+
+		wrapper = new Element('div').setStyle({
+			width: '100%',
+			maxWidth: '100%',
+			boxSizing: 'border-box',
+			minWidth: '0',
+			overflowX: 'hidden'
+		});
+		toolbar = new Element('div').setStyle({
+			display: 'flex',
+			gap: '6px',
+			alignItems: 'center',
+			marginBottom: '6px',
+			flexWrap: 'wrap',
+			maxWidth: '100%',
+			boxSizing: 'border-box'
+		});
+		selectNonType1Button = new Element('button', { type: 'button' }).update('特殊サービスを除外');
+		clearExcludeButton = new Element('button', { type: 'button' }).update('除外をクリア');
+		clearOrderButton = new Element('button', { type: 'button' }).update('順序をクリア');
+		summary = new Element('div').setStyle({ fontSize: '12px', color: '#666', margin: '4px 0 6px' });
+		listWrap = new Element('div', { className: 'config2-service-list-wrap' }).setStyle({
+			width: '100%',
+			maxWidth: '100%',
+			boxSizing: 'border-box',
+			minWidth: '0',
+			overflowX: 'hidden',
+			overflowY: 'auto',
+			maxHeight: 'calc(100vh - 260px)',
+			border: '1px solid #ddd',
+			padding: '6px',
+			background: '#fafafa'
+		});
+
+		getColumnCount = function _getColumnCount() {
+			var width = window.innerWidth || document.documentElement.clientWidth || 1024;
+
+			// 幅の実測値は flagrate.Modal 内部の要素と見た目の白枠でズレる場合があるため、
+			// ここでは列数だけをビューポート幅から安全側に決める。
+			// table-layout: fixed により、列は白枠内へ均等に収める。
+			if (width >= 900) {
+				return 3;
+			}
+			if (width >= 620) {
+				return 2;
+			}
+			return 1;
+		};
+
+		toolbar.insert(selectNonType1Button);
+		toolbar.insert(clearExcludeButton);
+		toolbar.insert(clearOrderButton);
+		wrapper.insert(toolbar);
+		wrapper.insert(summary);
+		wrapper.insert(listWrap);
+
+		render = function () {
+			var count = 0;
+			var columns = getColumnCount();
+			var table = new Element('table').setStyle({
+				width: '100%',
+				maxWidth: '100%',
+				tableLayout: 'fixed',
+				borderCollapse: 'separate',
+				borderSpacing: '5px',
+				boxSizing: 'border-box'
+			});
+			var tbody = new Element('tbody');
+			var row = null;
+			var col = 0;
+
+			listWrap.update();
+			this.data.services.each(function (svc) {
+				var cell;
+				if (col === 0) {
+					row = new Element('tr');
+					tbody.insert(row);
+				}
+				cell = new Element('td').setStyle({
+					width: (100 / columns).toString(10) + '%',
+					verticalAlign: 'top',
+					padding: '0',
+					boxSizing: 'border-box',
+					minWidth: '0',
+					maxWidth: '0',
+					overflow: 'hidden'
+				});
+				cell.insert(this.createServiceCard(svc, render));
+				row.insert(cell);
+				count++;
+				col++;
+				if (col >= columns) {
+					col = 0;
+				}
+			}.bind(this));
+
+			if (row && col > 0) {
+				while (col < columns) {
+					row.insert(new Element('td').setStyle({ padding: '0' }));
+					col++;
+				}
+			}
+
+			table.insert(tbody);
+			listWrap.insert(table);
+			summary.update('表示: ' + count + ' 件 / 除外選択: ' + this.data.services.findAll(function (s) { return s.excluded === true; }).length + ' 件');
+			this.updateServiceSummary();
+			this.updateRawPreview();
+		}.bind(this);
+
+		selectNonType1Button.observe('click', function () {
+			this.data.services.each(function (svc) {
+				if (Number(svc.serviceType) !== 1) {
+					svc.excluded = true;
+				}
+			});
+			render();
+		}.bind(this));
+		clearExcludeButton.observe('click', function () {
+			this.data.services.each(function (svc) { svc.excluded = false; });
+			render();
+		}.bind(this));
+		clearOrderButton.observe('click', function () {
+			this.data.services.each(function (svc) { svc.order = ''; });
+			render();
+		}.bind(this));
+
+		modal = flagrate.createModal({
+			title: '除外サービス選択',
+			text: '',
+			buttons: [
+				{
+					label: '閉じる',
+					onSelect: function (e, modal) { modal.close(); }
+				}
+			]
+		}).open();
+
+		// モーダル外枠の幅を無理に広げず、flagrate が作った白枠の実幅内だけで描画する。
+		modal.content.update();
+		modal.content.setStyle({
+			boxSizing: 'border-box',
+			maxWidth: '100%',
+			overflowX: 'hidden'
+		});
+		modal.content.insert(wrapper);
+
+		// flagrate.Modal のDOM反映後に実測する。即時描画だと幅が小さく取られ、1列判定になる場合がある。
+		setTimeout(render, 0);
+	},
+
+
 	renderServices: function _renderServices() {
 		var grid = this.view.serviceGrid;
-		if (!grid) { return; }
+		if (!grid) {
+			this.updateServiceSummary();
+			return;
+		}
 		var keyword = this.view.serviceSearch ? String(this.view.serviceSearch.value || '').toLowerCase() : '';
 		var filterType = this.view.serviceTypeSelect ? String(this.view.serviceTypeSelect.value || '') : '';
 		var onlyExcluded = this.view.serviceOnlyExcluded && this.view.serviceOnlyExcluded.checked;
@@ -629,70 +783,152 @@ P = Class.create(P, {
 		}
 	},
 
-	createServiceCard: function _createServiceCard(svc) {
+
+	createServiceLogo: function _createServiceLogo(svc) {
+		var basePath = String(this.data.config.mirakurunPath || '').replace(/\/$/, '');
+		var box = new Element('span', { className: 'config2-service-logo' }).setStyle({
+			width: '32px',
+			minWidth: '32px',
+			height: '24px',
+			display: 'inline-flex',
+			alignItems: 'center',
+			justifyContent: 'center',
+			border: '1px solid #ddd',
+			background: '#fff',
+			boxSizing: 'border-box',
+			overflow: 'hidden',
+			fontSize: '11px',
+			color: '#999'
+		});
+		var img;
+
+		if (!svc.hasLogoData || !basePath || /^http\+unix:/.test(basePath) || /^http:\/\/unix:/.test(basePath)) {
+			box.update('□');
+			return box;
+		}
+
+		img = new Element('img', {
+			src: basePath + '/api/services/' + svc.id + '/logo',
+			alt: String(svc.name || '')
+		}).setStyle({
+			maxWidth: '30px',
+			maxHeight: '22px',
+			display: 'block'
+		});
+		img.observe('error', function () {
+			box.update('▣');
+		});
+		box.insert(img);
+		return box;
+	},
+
+	createServiceCard: function _createServiceCard(svc, onChange) {
 		var card = new Element('div', { className: 'config2-service-card' }).setStyle({
 			display: 'flex',
-			alignItems: 'center',
-			gap: '6px',
-			padding: svc.excluded ? '5px 6px' : '6px 7px',
+			alignItems: 'flex-start',
+			gap: '5px',
+			padding: svc.excluded ? '4px 5px' : '5px 6px',
 			border: svc.excluded ? '2px solid #0b7d77' : '1px solid #ccc',
 			background: svc.excluded ? '#e9f6f4' : '#fff',
 			borderRadius: '3px',
 			boxSizing: 'border-box',
-			minWidth: '0'
+			minWidth: '0',
+			maxWidth: '100%',
+			overflow: 'hidden',
+			cursor: 'pointer'
 		});
-		var check = new Element('input', { type: 'checkbox' });
-		var icon = new Element('span').setStyle({
-			width: '28px',
-			minWidth: '28px',
-			textAlign: 'center',
-			fontSize: '12px',
-			opacity: svc.hasLogoData ? '1' : '0.45'
-		}).update(svc.hasLogoData ? '▣' : '□');
-		var name = new Element('div').setStyle({
+		var check = new Element('input', { type: 'checkbox' }).setStyle({
+			marginTop: '4px',
+			flex: '0 0 auto'
+		});
+		var icon = this.createServiceLogo(svc).setStyle({
+			marginTop: '0',
+			flex: '0 0 auto'
+		});
+		var body = new Element('div').setStyle({
 			flex: '1 1 auto',
 			minWidth: '0',
 			overflow: 'hidden'
 		});
+		var firstLine = new Element('div').setStyle({
+			display: 'flex',
+			alignItems: 'center',
+			gap: '6px',
+			minWidth: '0'
+		});
 		var title = new Element('div').setStyle({
+			flex: '1 1 auto',
+			minWidth: '0',
 			whiteSpace: 'nowrap',
 			overflow: 'hidden',
 			textOverflow: 'ellipsis',
 			fontWeight: svc.excluded ? 'bold' : 'normal'
 		}).update(String(svc.name || '').escapeHTML());
+		var orderWrap = new Element('label').setStyle({
+			display: 'inline-flex',
+			alignItems: 'center',
+			gap: '3px',
+			fontSize: '11px',
+			color: '#666',
+			whiteSpace: 'nowrap',
+			flex: '0 0 auto',
+			margin: '0'
+		});
 		var meta = new Element('div').setStyle({
 			fontSize: '11px',
 			color: '#666',
 			whiteSpace: 'nowrap',
 			overflow: 'hidden',
-			textOverflow: 'ellipsis'
-		}).update((svc.type + '/' + svc.channel + ' SID' + svc.serviceId + ' type:' + svc.serviceType + ' id:' + svc.id).escapeHTML());
+			textOverflow: 'ellipsis',
+			marginTop: '1px'
+		}).update((svc.channel + ' SID' + svc.serviceId + ' type:' + svc.serviceType).escapeHTML());
 		var order = new Element('input', { type: 'number', min: '1', placeholder: '-' }).setStyle({
-			width: '54px',
-			boxSizing: 'border-box'
+			width: '42px',
+			boxSizing: 'border-box',
+			height: '20px'
 		});
+
+		var refresh = function () {
+			if (typeof onChange === 'function') {
+				onChange();
+			} else {
+				this.renderServices();
+			}
+		}.bind(this);
 
 		check.checked = svc.excluded === true;
 		order.value = svc.order ? String(svc.order) : '';
 
 		check.observe('change', function () {
 			svc.excluded = check.checked;
-			this.renderServices();
+			refresh();
 		}.bind(this));
 		order.observe('change', function () {
 			svc.order = String(order.value || '');
+			refresh();
 		}.bind(this));
 		order.observe('keyup', function () {
 			svc.order = String(order.value || '');
+			refresh();
+		}.bind(this));
+		card.observe('click', function (e) {
+			var tag = e.target && e.target.tagName;
+			if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'SELECT' || tag === 'TEXTAREA') {
+				return;
+			}
+			svc.excluded = !svc.excluded;
+			refresh();
 		}.bind(this));
 
-		name.insert(title);
-		name.insert(meta);
+		orderWrap.insert('順');
+		orderWrap.insert(order);
+		firstLine.insert(title);
+		firstLine.insert(orderWrap);
+		body.insert(firstLine);
+		body.insert(meta);
 		card.insert(check);
 		card.insert(icon);
-		card.insert(name);
-		card.insert(new Element('span').setStyle({ fontSize: '11px', color: '#666' }).update('順'));
-		card.insert(order);
+		card.insert(body);
 		card.writeAttribute('title', [svc.name, svc.type + '/' + svc.channel, 'SID:' + svc.serviceId, 'network:' + svc.networkId, 'service type:' + svc.serviceType, 'id:' + svc.id].join(' / '));
 		return card;
 	},
