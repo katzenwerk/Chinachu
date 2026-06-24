@@ -772,6 +772,128 @@ function stopRecording(programId, reason) {
 	}
 }
 
+
+// 容量不足時の削除対象拡張子か確認する
+function isStorageCleanupTargetFile(filePath) {
+	const ext = path.extname(filePath).toLowerCase();
+	return ext === '.ts' || ext === '.m2ts';
+}
+
+// 現在録画中の保存先パス一覧を取得する
+function getRecordingPathSet() {
+	const paths = new Set();
+
+	for (let i = 0, l = recording.length; i < l; i++) {
+		if (!recording[i] || !recording[i].recorded) {
+			continue;
+		}
+
+		paths.add(path.resolve(recording[i].recorded));
+	}
+
+	return paths;
+}
+
+// config.recordedDir 直下の古い録画ファイルを1件探す
+// サブディレクトリ、シンボリックリンク、リンク先、別マウント配下は追わない
+function findOldestRecordedFileInRecordedDir() {
+	const baseDir = config.recordedDir;
+	let entries;
+	let oldest = null;
+	const recordingPaths = getRecordingPathSet();
+
+	try {
+		entries = fs.readdirSync(baseDir);
+	} catch (e) {
+		util.log('WARNING: Storage cleanup scan failed: ' + e.message);
+		return null;
+	}
+
+	for (let i = 0, l = entries.length; i < l; i++) {
+		const filePath = path.join(baseDir, entries[i]);
+		let stats;
+
+		try {
+			stats = fs.lstatSync(filePath);
+		} catch (e) {
+			util.log('WARNING: Storage cleanup stat failed: ' + filePath + ' (' + e.message + ')');
+			continue;
+		}
+
+		if (!stats.isFile()) {
+			continue;
+		}
+
+		if (stats.isSymbolicLink && stats.isSymbolicLink()) {
+			continue;
+		}
+
+		if (!isStorageCleanupTargetFile(filePath)) {
+			continue;
+		}
+
+		if (recordingPaths.has(path.resolve(filePath))) {
+			continue;
+		}
+
+		if (oldest === null || stats.mtimeMs < oldest.mtimeMs) {
+			oldest = {
+				path: filePath,
+				mtimeMs: stats.mtimeMs,
+				size: stats.size
+			};
+		}
+	}
+
+	return oldest;
+}
+
+// 実ファイル削除後、recorded.json 側に同一パスの記録が残っていれば整合更新する
+// 削除対象の選定には recorded 台帳を使わない
+function removeRecordedLedgerEntriesByPath(filePath) {
+	const resolvedFilePath = path.resolve(filePath);
+	let changed = false;
+
+	for (let i = recorded.length - 1; i >= 0; i--) {
+		if (!recorded[i] || !recorded[i].recorded) {
+			continue;
+		}
+
+		if (path.resolve(recorded[i].recorded) !== resolvedFilePath) {
+			continue;
+		}
+
+		recorded.splice(i, 1);
+		changed = true;
+	}
+
+	if (changed) {
+		fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
+		util.log('WRITE: ' + RECORDED_DATA_FILE);
+		updateMatchLedger('recorded cleanup');
+	}
+}
+
+// 容量不足時に config.recordedDir 直下の最古 ts/m2ts を1件削除する
+function removeOldestRecordedFileInRecordedDir() {
+	const target = findOldestRecordedFileInRecordedDir();
+
+	if (!target) {
+		util.log('WARNING: Storage cleanup target not found in recordedDir root.');
+		return false;
+	}
+
+	try {
+		fs.unlinkSync(target.path);
+		util.log('REMOVE: Storage cleanup -> ' + target.path + ' (' + target.size + ' bytes)');
+		removeRecordedLedgerEntriesByPath(target.path);
+		return true;
+	} catch (e) {
+		util.log('WARNING: Storage cleanup remove failed: ' + target.path + ' (' + e.message + ')');
+		return false;
+	}
+}
+
 // ストレージチェック
 function storageChecker() {
 
@@ -797,16 +919,12 @@ function storageChecker() {
 				// 録画停止
 				recording.forEach(program => stopRecording(program.id, 'LOW STORAGE'));
 			} else if (storageLowSpaceAction === "remove") {
-				// 削除
-				if (recorded.length > 0) {
-					const program = recorded.shift();
-					if (fs.existsSync(program.recorded) === true) {
-						fs.unlinkSync(program.recorded);
-					}
-					fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
-					util.log('WRITE: ' + RECORDED_DATA_FILE);
-					updateMatchLedger('recorded cleanup');
-				}
+				// config.recordedDir 直下の最古 ts/m2ts を1件削除する
+				removeOldestRecordedFileInRecordedDir();
+			} else if (storageLowSpaceAction === "none") {
+				util.log('STORAGE LOW SPACE ACTION: none');
+			} else {
+				util.log('WARNING: Unknown storageLowSpaceAction: ' + storageLowSpaceAction);
 			}
 
 			// 3. メール通知
@@ -882,3 +1000,4 @@ chinachu.jsonWatcher(
 	},
 	{ create: [], now: false }
 );
+
