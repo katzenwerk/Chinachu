@@ -66,7 +66,7 @@ exports.jsonWatcher = function (filepath, callback, option) {
 		if (timer !== null) { clearTimeout(timer); }
 		timer = setTimeout(read, option.wait);
 	};
-	fs.watch(filepath, onUpdated);
+	return fs.watch(filepath, onUpdated);
 };
 
 exports.getProgramById = function (id, array) {
