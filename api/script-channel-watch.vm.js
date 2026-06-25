@@ -23,7 +23,7 @@ Usushio では使わない
 			var ext    = request.query.ext || 'm2ts';
 			var prefix = request.query.prefix || '';
 
-			var target = prefix + 'watch.' + ext  + url.parse(request.url).search;
+			var target = prefix + 'watch.' + ext  + new URL(request.url, 'http://localhost').search;
 
 			response.write('<?xml version="1.0" encoding="UTF-8"?>\n');
 			response.write('<playlist version="1" xmlns="http://xspf.org/ns/0/">\n');

@@ -132,7 +132,7 @@ if (/(?:\/|\+)unix:/.test(mirakurunPath) === true) {
 		mirakurun.basePath = path.join(mirakurunPath.replace(legacyFormat, "$2"), mirakurun.basePath);
 	}
 } else {
-	const urlObject = url.parse(mirakurunPath);
+	const urlObject = new URL(mirakurunPath);
 	mirakurun.host = urlObject.hostname;
 	mirakurun.port = urlObject.port;
 	mirakurun.basePath = path.join(urlObject.pathname, mirakurun.basePath);
@@ -308,7 +308,7 @@ function httpServer(req, res) {
 	case 'GET':
 	case 'HEAD':
 
-		q = url.parse(req.url, false).query || '';
+		q = new URL(req.url, 'http://localhost').searchParams.toString() || '';
 
 		if (q.match(/^\{.*\}$/) === null) {
 			q = querystring.parse(q);

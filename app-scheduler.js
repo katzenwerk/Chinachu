@@ -18,7 +18,6 @@ const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
 
 // 標準モジュールのロード
 const path = require('path');
-const url = require("url");
 const fs = require('fs');
 const util = require('util');
 
@@ -75,7 +74,7 @@ if (/(?:\/|\+)unix:/.test(mirakurunPath) === true) {
 		mirakurun.basePath = path.join(mirakurunPath.replace(legacyFormat, "$2"), mirakurun.basePath);
 	}
 } else {
-	const urlObject = url.parse(mirakurunPath);
+	const urlObject = new URL(mirakurunPath);
 	mirakurun.host = urlObject.hostname;
 	mirakurun.port = urlObject.port;
 	mirakurun.basePath = path.join(urlObject.pathname, mirakurun.basePath);
@@ -291,12 +290,15 @@ function remakeReserves2(currentReserves2, activeReserves, now) {
 
 	/*
 	 * reserves2 の扱い:
+	 *   - reserves2 は reserves.json に準拠する
+	 *   - ただし、reserves.json から落ちた過去分(end < now)だけは履歴として保持する
 	 *   - 過去分(end < now)は reserves2RetentionDays 以内なら保持する
 	 *   - reserves2RetentionDays より前に終了したものは削除する
 	 *   - reserves2RetentionDays が 0 の場合は整理しない
 	 *   - 現在/未来分(end >= now)は activeReserves、つまり reserves.json と同じ内容を正とする
 	 *
-	 * これにより、未来の予約ルール変更・解除で reserves.json から消えたものは
+	 * 最終的な reserves2 は「過去履歴 + 現在の reserves.json」という形になる。
+	 * これにより、予約ルール変更・解除で reserves.json から消えた未終了分は
 	 * reserves2 側にも残り続けない。
 	 */
 	currentReserves2.forEach(function (reserve) {

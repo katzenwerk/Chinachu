@@ -17,7 +17,6 @@ const MATCH_DATA_FILE     = __dirname + '/data/match.json';
 
 // 標準モジュールのロード
 const path = require('path');
-const url = require('url');
 const fs = require('fs');
 const util = require('util');
 
@@ -120,7 +119,7 @@ if (/(?:\/|\+)unix:/.test(mirakurunPath) === true) {
 		mirakurun.basePath = path.join(mirakurunPath.replace(legacyFormat, "$2"), mirakurun.basePath);
 	}
 } else {
-	const urlObject = url.parse(mirakurunPath);
+	const urlObject = new URL(mirakurunPath);
 	mirakurun.host = urlObject.hostname;
 	mirakurun.port = urlObject.port;
 	mirakurun.basePath = path.join(urlObject.pathname, mirakurun.basePath);

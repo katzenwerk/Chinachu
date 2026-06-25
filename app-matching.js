@@ -928,17 +928,34 @@ function buildMatchLedger(options) {
 	var pruneRemoved = 0;
 	var pruneSample = null;
 
+	/*
+	 * oldMatch は前回までの match.json 台帳であり、今回の recorded/reserves2 から
+	 * 再構築した windowByKey とマージされる。
+	 *
+	 * reserves2 は「reserves.json に準拠し、過去だけ keep」するため、
+	 * 未来/進行中の RESERVED が今回の windowByKey に存在しない場合は、
+	 * 予約削除・ルール解除などで現在台帳から外れた予約残骸として oldMatch から落とす。
+	 *
+	 * 一方、過去の RESERVED はここでは機械的に消さない。
+	 * 過去分が reserves2 に残っていれば、上の reserve-only 判定で MISSED/SKIPPED_ONLY 等へ
+	 * 再分類される。reserves2 にも recorded にも存在しない過去 RESERVED は、
+	 * 別途 retention/read-days の対象として扱う。
+	 */
 	if (!initialBuild) {
 		Object.keys(oldByKey).forEach(function (key) {
 			var oldEntry = oldByKey[key];
 			var oldStatus = oldEntry.status;
 			var oldStart = getMatchEntryStartMs(oldEntry);
 			var oldProgram = oldEntry.program || oldEntry.reserve || oldEntry.recorded || {};
+			var oldSeconds = safeInt(oldProgram && oldProgram.seconds, 0);
+			var oldEnd = safeInt(oldProgram && oldProgram.end, 0) ||
+				(oldStart > 0 && oldSeconds > 0 ? oldStart + oldSeconds * 1000 : 0);
+			var isFutureOrCurrentReserved = oldStatus === "RESERVED" && oldEnd > 0 && oldEnd >= nowMs;
 			var shouldPrune = oldStart > 0 &&
 				oldStart >= updateCutoffMs &&
-				ngStatuses[oldStatus] &&
 				!windowByKey[key] &&
-				!hasRecordedEvidence(oldEntry);
+				!hasRecordedEvidence(oldEntry) &&
+				(ngStatuses[oldStatus] || isFutureOrCurrentReserved);
 
 			if (shouldPrune) {
 				pruneRemoved += 1;

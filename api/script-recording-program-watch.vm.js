@@ -24,7 +24,7 @@
 			var ext    = request.query.ext || 'm2ts';
 			var prefix = request.query.prefix || '';
 
-			var target = prefix + 'watch.' + ext  + url.parse(request.url).search;
+			var target = prefix + 'watch.' + ext  + new URL(request.url, 'http://localhost').search;
 			var title = program.title
 				.replace(/</g, "&lt;")
 				.replace(/>/g, "&gt;")
