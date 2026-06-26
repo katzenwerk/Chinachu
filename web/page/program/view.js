@@ -12,8 +12,11 @@ P = Class.create(P, {
 		this.previewTarget = null;
 		this.fallbackFromMatch = false;
 		this.programViewShowMatchDebug = false;
+		this.recordingPreviewImage = null;
+		this.recordedFileStateTarget = null;
+		this.recordedFileStateAlert = null;
 
-		this.onNotify = this.refresh.bindAsEventListener(this);
+		this.onNotify = this.handleNotify.bindAsEventListener(this);
 		document.observe('chinachu:schedule', this.onNotify);
 		document.observe('chinachu:reserves', this.onNotify);
 		document.observe('chinachu:recording', this.onNotify);
@@ -56,6 +59,9 @@ P = Class.create(P, {
 		document.stopObserving('chinachu:recording', this.onNotify);
 		document.stopObserving('chinachu:recorded', this.onNotify);
 
+		this.clearRecordingPreviewTimer();
+		this.recordingPreviewImage = null;
+
 		this.app.view.mainBody.entity.style.backgroundImage = '';
 
 		return this;
@@ -66,6 +72,25 @@ P = Class.create(P, {
 		this.app.pm.realizeHash(true);
 
 		return this;
+	},
+
+	handleNotify: function(ev) {
+
+		var program;
+
+		// 録画中イベントでは画面全体を再描画せず、サムネイルだけを差し替える。
+		// 録画が終了している場合は通常 refresh に戻し、録画済み表示へ遷移させる。
+		if (ev && ev.type === 'chinachu:recording' && this.program && this.program._isRecording) {
+			program = chinachu.util.getProgramById(this.program.id);
+
+			if (program && program._isRecording) {
+				this.program = program;
+				this.updateRecordingPreview();
+				return this;
+			}
+		}
+
+		return this.refresh();
 	},
 
 
@@ -187,6 +212,7 @@ P = Class.create(P, {
 		program.tuner = program.tuner || r.tuner || { isScrambling: false };
 		program.recordedFormat = program.recordedFormat || r.recordedFormat || '';
 		program.recorded = path;
+		this.copyOperatorTiming(program, r);
 
 		if (item.status === 'RECORDED' || item.status === 'RECORDED_UNTRACKED' || path) {
 			program._isRecorded = true;
@@ -215,6 +241,8 @@ P = Class.create(P, {
 		if (r.tuner && !this.program.tuner) {
 			this.program.tuner = r.tuner;
 		}
+
+		this.copyOperatorTiming(this.program, r);
 
 		if (!this.program.tuner) {
 			this.program.tuner = { isScrambling: false };
@@ -245,6 +273,7 @@ P = Class.create(P, {
 				this.matchItems = json;
 				this.matchItem = this.findMatchItem(json, this.program);
 				this.decorateProgramWithMatch(this.matchItem);
+				this.renderRecordedFileStateAlert();
 				this.renderMatchInfo();
 			}.bind(this),
 			onFailure: function() {
@@ -329,6 +358,34 @@ P = Class.create(P, {
 		return false;
 	},
 
+	hasRecordedResult: function _hasRecordedResult(item, program) {
+
+		var r = item && item.recordingResult || {};
+		var p = item && item.program || {};
+		var path = r.path || r.recorded || p.recorded || program && program.recorded || '';
+		var cleanupState = r.cleanupState || p.cleanupState || program && program.cleanupState || '';
+		var fileExists = (typeof r.fileExists !== 'undefined') ? r.fileExists : ((typeof p.fileExists !== 'undefined') ? p.fileExists : program && program.fileExists);
+
+		if (cleanupState === 'deleted' || cleanupState === 'missing' || fileExists === false) {
+			return false;
+		}
+
+		return !!path || r.operatorActualSeconds > 0 || p.operatorActualSeconds > 0 || program && program._isRecorded;
+	}
+	,
+	getEffectiveMatchStatus: function _getEffectiveMatchStatus(item) {
+
+		if (!item) {
+			return '';
+		}
+
+		if (this.hasRecordedResult(item, this.program) && item.status === 'MISSED') {
+			return 'RECORDED';
+		}
+
+		return item.status || '';
+	}
+	,
 	getStatusLabel: function _getStatusLabel(status) {
 
 		switch (status) {
@@ -367,7 +424,7 @@ P = Class.create(P, {
 
 	getStatusBody: function _getStatusBody(item) {
 
-		var status = item && item.status || '';
+		var status = this.getEffectiveMatchStatus(item);
 		var r = item && item.recordingResult || {};
 
 		switch (status) {
@@ -431,8 +488,8 @@ P = Class.create(P, {
 		warnings = matchMeta && matchMeta.warnings || [];
 
 		new sakura.ui.Alert({
-			title       : '録画照合: ' + this.getStatusLabel(item.status),
-			type        : this.getStatusAlertType(item.status),
+			title       : '録画照合: ' + this.getStatusLabel(this.getEffectiveMatchStatus(item)),
+			type        : this.getStatusAlertType(this.getEffectiveMatchStatus(item)),
 			body        : this.getStatusBody(item),
 			disableClose: true
 		}).render(this.matchInfoBox);
@@ -453,21 +510,6 @@ P = Class.create(P, {
 				body        : warnings.join(', '),
 				disableClose: true
 			}).render(this.matchInfoBox);
-		}
-
-		if (item.key) {
-			try {
-				this.view.toolbar.add({
-					key: 'copy-match-key',
-					ui : new sakura.ui.Button({
-						label  : '照合キーをコピー',
-						icon   : './icons/clipboard.png',
-						onClick: function() {
-							chinachu.ui.copyStr(item.key);
-						}
-					})
-				});
-			} catch (e) {}
 		}
 
 		if (this.programViewShowMatchDebug !== true) {
@@ -521,6 +563,7 @@ P = Class.create(P, {
 	initToolbar: function _initToolbar() {
 
 		var program = this.program;
+		var recordedFileState = this.getRecordedFileState(program, this.matchItem);
 
 		this.view.toolbar.add({
 			key: null,
@@ -598,7 +641,7 @@ P = Class.create(P, {
 			});
 		}
 
-		if (program._isRecorded) {
+		if (program._isRecorded && recordedFileState !== 'deleted') {
 			this.view.toolbar.add({
 				key: null,
 				ui : new sakura.ui.Button({
@@ -612,7 +655,9 @@ P = Class.create(P, {
 			});
 		}
 
-		if (program.recorded && !this.fallbackFromMatch) {
+		var recordedApiIdForToolbar = this.getRecordedApiId(program, this.matchItem) || program.id;
+
+		if (recordedApiIdForToolbar && program.recorded && recordedFileState !== 'deleted' && recordedFileState !== 'missing') {
 			if (global.chinachu.status.feature.filer) {
 				this.view.toolbar.add({
 					key: 'download',
@@ -620,8 +665,7 @@ P = Class.create(P, {
 						label  : 'ダウンロード',
 						icon   : './icons/disk.png',
 						onClick: function() {
-							var recordedApiId = this.getRecordedApiId(program, this.matchItem) || program.id;
-							new chinachu.ui.DownloadRecordedFile(recordedApiId);
+							new chinachu.ui.DownloadRecordedFile(recordedApiIdForToolbar);
 						}
 					})
 				});
@@ -634,8 +678,7 @@ P = Class.create(P, {
 						label  : 'ストリーミング再生',
 						icon   : './icons/film-youtube.png',
 						onClick: function() {
-							var recordedApiId = this.getRecordedApiId(program, this.matchItem) || program.id;
-							new chinachu.ui.Streamer(recordedApiId);
+							new chinachu.ui.Streamer(recordedApiIdForToolbar);
 						}
 					})
 				});
@@ -645,6 +688,290 @@ P = Class.create(P, {
 		return this;
 	},
 
+
+
+	getRecordedFileState: function _getRecordedFileState(program, item) {
+
+		var r = item && item.recordingResult || {};
+		var p = item && item.program || {};
+		var cleanupState = r.cleanupState || p.cleanupState || program && program.cleanupState || '';
+		var deleted = r.deleted === true || p.deleted === true || program && program.deleted === true;
+		var fileExists = null;
+
+		if (typeof r.fileExists !== 'undefined' && r.fileExists !== null) {
+			fileExists = r.fileExists;
+		} else if (typeof p.fileExists !== 'undefined' && p.fileExists !== null) {
+			fileExists = p.fileExists;
+		} else if (program && typeof program.fileExists !== 'undefined' && program.fileExists !== null) {
+			fileExists = program.fileExists;
+		}
+
+		if (cleanupState === 'deleted' || deleted) {
+			return 'deleted';
+		}
+
+		if (fileExists === false || cleanupState === 'missing') {
+			return 'missing';
+		}
+
+		if (program && program._isRecorded && this.fallbackFromMatch) {
+			return 'matchRecorded';
+		}
+
+		if (program && program._isRecorded) {
+			return 'recorded';
+		}
+
+		return '';
+	},
+
+	getOperatorRecordingState: function _getOperatorRecordingState(program, item) {
+
+		var r = item && item.recordingResult || {};
+		var p = item && item.program || {};
+
+		if (program && program.operatorAbort === true || r.operatorAbort === true || p.operatorAbort === true) {
+			return {
+				key   : 'abort',
+				title : '中止',
+				body  : 'この録画は中止操作により番組終了前に終了しました'
+			};
+		}
+
+		if (program && program.operatorEndLack === true || r.operatorEndLack === true || p.operatorEndLack === true) {
+			return {
+				key   : 'endLack',
+				title : '尻切れ',
+				body  : '次の録画へ切り替えるため、許可された録画として番組終了前に終了しました'
+			};
+		}
+
+		return null;
+	}
+	,
+	getRecordedFileStateAlert: function _getRecordedFileStateAlert(state, program) {
+
+		var recordedPath = program && program.recorded || '';
+		var operatorState = this.getOperatorRecordingState(program, this.matchItem);
+
+		switch (state) {
+		case 'recorded':
+			return {
+				title: operatorState ? '録画済（' + operatorState.title + '）' : '録画済',
+				type : operatorState ? 'yellow' : 'green',
+				body : recordedPath || (operatorState ? operatorState.body : 'この番組は録画済みです')
+			};
+		case 'matchRecorded':
+			return {
+				title: operatorState ? '録画済（match履歴・' + operatorState.title + '）' : '録画済（match履歴）',
+				type : operatorState ? 'yellow' : 'green',
+				body : recordedPath || (operatorState ? operatorState.body : 'この番組は録画履歴として記録されています')
+			};
+		case 'deleted':
+			return {
+				title: '削除済',
+				type : 'red',
+				body : 'この番組の録画ファイルは録画後に削除されています'
+			};
+		case 'missing':
+			return {
+				title: 'ファイルなし',
+				type : 'red',
+				body : '録画履歴はありますが、録画ファイルが見つかりません'
+			};
+		default:
+			return null;
+		}
+	},
+
+	renderRecordedFileStateAlert: function _renderRecordedFileStateAlert(forcedState) {
+
+		var state = forcedState || this.getRecordedFileState(this.program, this.matchItem);
+		var alert = this.getRecordedFileStateAlert(state, this.program);
+
+		if (!this.recordedFileStateTarget) {
+			return this;
+		}
+
+		this.recordedFileStateTarget.update();
+
+		if (!alert) {
+			return this;
+		}
+
+		this.recordedFileStateAlert = new sakura.ui.Alert({
+			title       : alert.title,
+			type        : alert.type,
+			body        : alert.body,
+			disableClose: true
+		});
+
+		this.recordedFileStateAlert.render(this.recordedFileStateTarget);
+
+		return this;
+	},
+
+
+	copyOperatorTiming: function _copyOperatorTiming(target, source) {
+
+		var keys = [
+			'operatorPrepareStart',
+			'operatorRecordingStart',
+			'operatorRecordingEnd',
+			'operatorActualSeconds',
+			'operatorAbort',
+			'operatorAbortReason',
+			'operatorAbortAt',
+			'operatorEndLack',
+			'operatorEndLackReason',
+			'operatorEndLackAt'
+		];
+
+		if (!target || !source) {
+			return target;
+		}
+
+		keys.each(function(key) {
+			if ((typeof target[key] === 'undefined' || target[key] === null || target[key] === '') &&
+					typeof source[key] !== 'undefined' && source[key] !== null && source[key] !== '') {
+				target[key] = source[key];
+			}
+		});
+
+		return target;
+	},
+
+	toFiniteNumber: function _toFiniteNumber(value) {
+
+		var number = Number(value);
+
+		return isFinite(number) ? number : 0;
+	},
+
+	pickOperatorTimingValue: function _pickOperatorTimingValue(key, fileJson, program, item) {
+
+		var r = item && item.recordingResult || {};
+		var p = item && item.program || {};
+		var sources = [fileJson || {}, program || {}, r, p];
+		var i, value;
+
+		for (i = 0; i < sources.length; i++) {
+			value = sources[i][key];
+			if (typeof value !== 'undefined' && value !== null && value !== '') {
+				return value;
+			}
+		}
+
+		return 0;
+	},
+
+	getOperatorTiming: function _getOperatorTiming(fileJson, program, item) {
+
+		var timing = {
+			prepareStart  : this.toFiniteNumber(this.pickOperatorTimingValue('operatorPrepareStart', fileJson, program, item)),
+			recordingStart: this.toFiniteNumber(this.pickOperatorTimingValue('operatorRecordingStart', fileJson, program, item)),
+			recordingEnd  : this.toFiniteNumber(this.pickOperatorTimingValue('operatorRecordingEnd', fileJson, program, item)),
+			actualSeconds : this.toFiniteNumber(this.pickOperatorTimingValue('operatorActualSeconds', fileJson, program, item))
+		};
+
+		if (timing.actualSeconds <= 0 && timing.recordingStart > 0 && timing.recordingEnd > timing.recordingStart) {
+			timing.actualSeconds = Math.floor((timing.recordingEnd - timing.recordingStart) / 1000);
+		}
+
+		return timing;
+	},
+
+	formatDuration: function _formatDuration(seconds) {
+
+		var s = Math.floor(Number(seconds) || 0);
+		var h, m;
+
+		if (s <= 0) {
+			return '';
+		}
+
+		h = Math.floor(s / 3600);
+		m = Math.floor((s % 3600) / 60);
+		s = s % 60;
+
+		if (h > 0) {
+			return h + '時間' + m + '分' + ('0' + s).slice(-2) + '秒';
+		}
+
+		return m + '分' + ('0' + s).slice(-2) + '秒';
+	},
+
+	buildRecordedFileInfoBody: function _buildRecordedFileInfoBody(fileJson, program, item) {
+
+		var size = this.toFiniteNumber(fileJson && fileJson.size);
+		var timing = this.getOperatorTiming(fileJson, program, item);
+		var body = size > 0 ? (size / 1024 / 1024 / 1024 / 1).toFixed(2) + 'GB' : '-';
+		var durationText = this.formatDuration(timing.actualSeconds);
+
+		if (durationText) {
+			body += '　' + durationText;
+		}
+
+		return body;
+	},
+
+	renderOperatorTimingWarning: function _renderOperatorTimingWarning(target, fileJson, program, item) {
+
+		var timing = this.getOperatorTiming(fileJson, program, item);
+		var expectedSeconds = this.toFiniteNumber(program && program.seconds);
+		var programStart = this.toFiniteNumber(program && program.start);
+		var programEnd = this.toFiniteNumber(program && program.end);
+		var messages = [];
+		var headDelaySeconds;
+		var tailShortageSeconds;
+
+		if (!target || timing.actualSeconds <= 0) {
+			return this;
+		}
+
+		if (programStart > 0 && timing.recordingStart > programStart + 1000) {
+			headDelaySeconds = Math.ceil((timing.recordingStart - programStart) / 1000);
+			messages.push('頭切れの可能性: 番組開始より ' + this.formatDuration(headDelaySeconds) + ' 遅れて録画開始');
+		}
+
+		if (programEnd > 0 && timing.recordingEnd > 0 && timing.recordingEnd < programEnd - 1000) {
+			tailShortageSeconds = Math.ceil((programEnd - timing.recordingEnd) / 1000);
+			messages.push('尻切れの可能性: 番組終了より ' + this.formatDuration(tailShortageSeconds) + ' 早く録画終了');
+		}
+
+		if (messages.length === 0 && expectedSeconds > 0 && timing.actualSeconds < expectedSeconds - 1) {
+			messages.push('予定時間 ' + this.formatDuration(expectedSeconds) + ' に対して、録画実績は ' + this.formatDuration(timing.actualSeconds) + ' です。');
+		}
+
+		if (messages.length > 0) {
+			new sakura.ui.Alert({
+				title       : '録画時間警告',
+				type        : 'yellow',
+				body        : messages.join('<br>'),
+				disableClose: true
+			}).render(target);
+		}
+
+		return this;
+	},
+
+	renderOperatorRecordingStateAlert: function _renderOperatorRecordingStateAlert(target, program, item) {
+
+		var operatorState = this.getOperatorRecordingState(program, item);
+
+		if (!target || !operatorState) {
+			return this;
+		}
+
+		new sakura.ui.Alert({
+			title       : operatorState.title === '中止' ? '録画中止' : '尻切れ許可',
+			type        : 'yellow',
+			body        : operatorState.body,
+			disableClose: true
+		}).render(target);
+
+		return this;
+	},
 
 	getMatchTitle: function _getMatchTitle(item) {
 
@@ -745,18 +1072,87 @@ P = Class.create(P, {
 		return -1;
 	},
 
+	getRecordingPreviewUrl: function _getRecordingPreviewUrl(program) {
+
+		return './api/recording/' + encodeURIComponent(program.id) + '/preview.jpg?width=480&height=270&_n=' + (new Date()).getTime();
+	},
+
+	clearRecordingPreviewTimer: function _clearRecordingPreviewTimer() {
+
+		if (this.timer && this.timer.recordingPreview) {
+			clearInterval(this.timer.recordingPreview);
+			delete this.timer.recordingPreview;
+		}
+
+		return this;
+	},
+
+	startRecordingPreviewTimer: function _startRecordingPreviewTimer() {
+
+		this.clearRecordingPreviewTimer();
+
+		if (!this.program || !this.program._isRecording) {
+			return this;
+		}
+
+		this.timer.recordingPreview = setInterval(function() {
+			this.updateRecordingPreview();
+		}.bind(this), 1000 * 30);
+
+		return this;
+	},
+
+	updateRecordingPreview: function _updateRecordingPreview() {
+
+		var program = this.program;
+		var src;
+		var image;
+
+		if (!program || !program._isRecording || !this.recordingPreviewImage) {
+			return this;
+		}
+
+		if (this.app.pm.p.id !== this.id) {
+			this.clearRecordingPreviewTimer();
+			return this;
+		}
+
+		src = this.getRecordingPreviewUrl(program);
+		image = new Image();
+
+		// 先に裏で読み込み、成功後に既存 img の src だけ差し替える。
+		// preview API が 404 の場合は現画像を維持し、白抜けを避ける。
+		image.onload = function() {
+			if (this.app.pm.p.id !== this.id) return;
+			if (!this.recordingPreviewImage) return;
+
+			this.recordingPreviewImage.src = src;
+		}.bind(this);
+
+		image.src = src;
+
+		return this;
+	},
+
 	draw: function() {
 
 		console.log(this.program);
 
 		var program = this.program;
 
+		this.clearRecordingPreviewTimer();
+		this.recordingPreviewImage = null;
+
 		this.view.content.className = 'ex';
 		this.view.content.update();
+		this.recordedFileStateTarget = flagrate.createElement('div', { 'class': 'program-recorded-file-state' }).insertTo(this.view.content);
+		this.recordedFileStateAlert = null;
 
 		program.flags = program.flags || [];
 		program.channel = program.channel || {};
 		program.tuner = program.tuner || { isScrambling: false };
+
+		this.renderRecordedFileStateAlert();
 
 		var titleHtml = program.flags.invoke('sub', /.+/, '<span class="flag #{0}">#{0}</span>').join('') + program.title;
 		if (program.subTitle && program.title.indexOf(program.subTitle) === -1) {
@@ -878,25 +1274,6 @@ P = Class.create(P, {
 
 		if (program._isRecorded) {
 			var recordedApiId = this.getRecordedApiId(program, this.matchItem);
-			var alertRecorded;
-
-			if (this.fallbackFromMatch) {
-				alertRecorded = new sakura.ui.Alert({
-					title       : '録画済（match履歴）',
-					type        : 'green',
-					body        : program.recorded || 'recorded.json には存在しない録画履歴です。',
-					disableClose: true
-				});
-				alertRecorded.render(r1L);
-			} else {
-				alertRecorded = new sakura.ui.Alert({
-					title       : '録画済',
-					type        : 'green',
-					body        : program.recorded,
-					disableClose: true
-				});
-				this.view.content.insert({ top: alertRecorded.entity });
-			}
 
 			if (recordedApiId) {
 				new Ajax.Request('./api/recorded/' + encodeURIComponent(recordedApiId) + '/file.json', {
@@ -905,12 +1282,17 @@ P = Class.create(P, {
 
 						if (this.app.pm.p.id !== this.id) return;
 
+						var fileJson = t.responseJSON || {};
+
 						new sakura.ui.Alert({
 							title       : 'ファイルサイズ',
 							type        : 'white',
-							body        : (t.responseJSON.size / 1024 / 1024 / 1024 / 1).toFixed(2) + 'GB',
+							body        : this.buildRecordedFileInfoBody(fileJson, program, this.matchItem),
 							disableClose: true
 						}).render(r1L);
+
+						this.renderOperatorRecordingStateAlert(r1L, program, this.matchItem);
+						this.renderOperatorTimingWarning(r1L, fileJson, program, this.matchItem);
 
 						// 録画済みサムネイル
 						var imgurl = "./api/recorded/" + encodeURIComponent(recordedApiId) + "/preview.jpg?width=480&height=270";
@@ -927,13 +1309,8 @@ P = Class.create(P, {
 
 						if (this.app.pm.p.id !== this.id) return;
 
-						if (t.status === 410) {
-							var alert = new sakura.ui.Alert({
-								type        : 'red',
-								body        : 'この番組の録画ファイルは移動または削除されています',
-								disableClose: true
-							});
-							alertRecorded.entity.insert({ after: alert.entity });
+						if (t.status === 404 || t.status === 410) {
+							this.renderRecordedFileStateAlert(this.getRecordedFileState(program, this.matchItem) || 'missing');
 
 							try { this.view.toolbar.one('download').disable(); } catch (e) {}
 							try { this.view.toolbar.one('streaming').disable(); } catch (e) {}
@@ -945,12 +1322,12 @@ P = Class.create(P, {
 
 		if (program._isRecording) {
 			// 録画中サムネイル
-			var imgurl = "./api/recording/" + program.id + "/preview.jpg?width=480&height=270";
-
-			flagrate.createElement("img", {
+			this.recordingPreviewImage = flagrate.createElement("img", {
 				"class": "img-thumbnail img-responsive",
-				src: imgurl
+				src: this.getRecordingPreviewUrl(program)
 			}).insertTo(this.previewTarget || r1R);
+
+			this.startRecordingPreviewTimer();
 		}
 
 		// pager

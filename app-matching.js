@@ -559,6 +559,8 @@ function mergeProgram(recorded, reserve, preferRecorded, channel) {
 		program.end = start + seconds * 1000;
 	}
 
+	copyOperatorRecordingMeta(mergeOperatorRecordingMeta(primary, secondary), program);
+
 	return program;
 }
 
@@ -586,6 +588,39 @@ function buildReservationMeta(reserve, hasReserve) {
 		reserveSnapshotAt: typeof reserve.snapshotAt === "undefined" ? null : reserve.snapshotAt,
 		reserveUpdatedAt: typeof reserve.updatedAt === "undefined" ? null : reserve.updatedAt
 	};
+}
+
+
+function copyOperatorRecordingMeta(source, output) {
+	var fields = [
+		"operatorPrepareStart",
+		"operatorRecordingStart",
+		"operatorRecordingEnd",
+		"operatorActualSeconds"
+	];
+
+	if (!source || typeof source !== "object" || !output || typeof output !== "object") {
+		return output;
+	}
+
+	fields.forEach(function (field) {
+		var value = safeInt(source[field], 0);
+
+		if (value > 0) {
+			output[field] = value;
+		}
+	});
+
+	return output;
+}
+
+function mergeOperatorRecordingMeta(primary, secondary) {
+	var output = {};
+
+	copyOperatorRecordingMeta(secondary, output);
+	copyOperatorRecordingMeta(primary, output);
+
+	return output;
 }
 
 function buildRecordingResult(recorded, nowMs, keepSnapshot) {
@@ -634,6 +669,8 @@ function buildRecordingResult(recorded, nowMs, keepSnapshot) {
 		cleanupState: recPath ? "active" : "unknown",
 		snapshotAt: nowMs
 	};
+
+	copyOperatorRecordingMeta(recorded, output);
 
 	if (keepSnapshot !== false) {
 		output.snapshot = cloneJson(recorded);

@@ -106,6 +106,16 @@ P = Class.create(P, {
 		});
 
 		this.view.toolbar.add({
+			key: 'match-result-deleted',
+			ui : flagrate.createCheckbox({
+				label: '削除済',
+				onChange: function(e) {
+					this.toggleMatchResultKind('DELETED', e.targetCheckbox.isChecked());
+				}.bind(this)
+			})
+		});
+
+		this.view.toolbar.add({
 			key: 'match-result-skipped',
 			ui : flagrate.createCheckbox({
 				label: 'スキップ',
@@ -185,6 +195,14 @@ P = Class.create(P, {
 				this.view.toolbar.one('match-result-recorded').check();
 			} else {
 				this.view.toolbar.one('match-result-recorded').uncheck();
+			}
+		}
+
+		if (this.view.toolbar.one('match-result-deleted')) {
+			if (kinds.indexOf('DELETED') !== -1) {
+				this.view.toolbar.one('match-result-deleted').check();
+			} else {
+				this.view.toolbar.one('match-result-deleted').uncheck();
 			}
 		}
 
@@ -427,10 +445,64 @@ P = Class.create(P, {
 		return end > 0 && Date.now() > end;
 	}
 	,
+	getRecordingResult: function(item) {
+
+		return item && (item.recordingResult || item.recorded) || {};
+	}
+	,
+	isDeletedMatchItem: function(item) {
+
+		var result = this.getRecordingResult(item);
+		var program = this.getMatchProgram(item);
+
+		return (result && (result.cleanupState === 'deleted' || result.deleted === true)) ||
+			(program && (program.cleanupState === 'deleted' || program.deleted === true));
+	}
+	,
+	isMissingMatchItem: function(item) {
+
+		var result = this.getRecordingResult(item);
+		var program = this.getMatchProgram(item);
+
+		return (result && (result.cleanupState === 'missing' || result.fileExists === false)) ||
+			(program && (program.cleanupState === 'missing' || program.fileExists === false));
+	}
+	,
+	isDeletedOrMissingMatchItem: function(item) {
+
+		return this.isDeletedMatchItem(item) || this.isMissingMatchItem(item);
+	}
+	,
+	hasRecordedResult: function(item) {
+
+		var result = this.getRecordingResult(item);
+		var program = this.getMatchProgram(item);
+		var path = result && (result.path || result.recorded) || program && program.recorded || '';
+		var actualSeconds = this.toFiniteNumber(result && result.operatorActualSeconds || program && program.operatorActualSeconds);
+
+		if (this.isDeletedOrMissingMatchItem(item)) {
+			return false;
+		}
+
+		return !!path || actualSeconds > 0 || item.status === 'RECORDED' || item.status === 'RECORDED_UNTRACKED';
+	}
+	,
 	getMatchKind: function(item) {
 
+		if (this.hasRecordedResult(item)) {
+			if (!this.isPastMatch(item)) {
+				return null;
+			}
+
+			return this.isDeletedOrMissingMatchItem(item) ? 'DELETED' : 'RECORDED';
+		}
+
 		if (item.status === 'RECORDED') {
-			return this.isPastMatch(item) ? 'RECORDED' : null;
+			if (!this.isPastMatch(item)) {
+				return null;
+			}
+
+			return this.isDeletedOrMissingMatchItem(item) ? 'DELETED' : 'RECORDED';
 		}
 
 		if (item.status === 'SKIPPED_ONLY' || (item.recd_flg && item.recd_flg.isSkip === true)) {
@@ -502,6 +574,97 @@ P = Class.create(P, {
 		return null;
 	}
 	,
+
+	pickOperatorValue: function _pickOperatorValue(source, result, key, fallback) {
+
+		if (source && typeof source[key] !== 'undefined' && source[key] !== null && source[key] !== '') {
+			return source[key];
+		}
+
+		if (result && typeof result[key] !== 'undefined' && result[key] !== null && result[key] !== '') {
+			return result[key];
+		}
+
+		if (fallback && typeof fallback[key] !== 'undefined' && fallback[key] !== null && fallback[key] !== '') {
+			return fallback[key];
+		}
+
+		return 0;
+	},
+
+	toFiniteNumber: function _toFiniteNumber(value) {
+
+		var number = Number(value);
+
+		return isFinite(number) ? number : 0;
+	},
+
+	getOperatorActualSeconds: function _getOperatorActualSeconds(program) {
+
+		var actualSeconds = this.toFiniteNumber(program && program.operatorActualSeconds);
+		var recordingStart = this.toFiniteNumber(program && program.operatorRecordingStart);
+		var recordingEnd = this.toFiniteNumber(program && program.operatorRecordingEnd);
+
+		if (actualSeconds > 0) {
+			return actualSeconds;
+		}
+
+		if (recordingStart > 0 && recordingEnd > recordingStart) {
+			return Math.floor((recordingEnd - recordingStart) / 1000);
+		}
+
+		return 0;
+	},
+
+	formatDurationShort: function _formatDurationShort(seconds) {
+
+		var s = Math.floor(Number(seconds) || 0);
+		var h, m;
+
+		if (s <= 0) {
+			return '-';
+		}
+
+		h = Math.floor(s / 3600);
+		m = Math.floor((s % 3600) / 60);
+		s = s % 60;
+
+		if (h > 0) {
+			return h + 'h' + ('0' + m).slice(-2) + 'm' + ('0' + s).slice(-2) + 's';
+		}
+
+		return m + 'm' + ('0' + s).slice(-2) + 's';
+	},
+
+	isOperatorDurationShort: function _isOperatorDurationShort(program) {
+
+		var actualSeconds = this.getOperatorActualSeconds(program);
+		var expectedSeconds = this.toFiniteNumber(program && program.seconds);
+
+		return actualSeconds > 0 && expectedSeconds > 0 && actualSeconds < expectedSeconds - 1;
+	},
+
+	getDurationTitle: function _getDurationTitle(program) {
+
+		var actualSeconds = this.getOperatorActualSeconds(program);
+		var expectedSeconds = this.toFiniteNumber(program && program.seconds);
+		var messages = [];
+
+		if (actualSeconds > 0) {
+			messages.push('録画実績: ' + this.formatDurationShort(actualSeconds));
+		}
+
+		if (expectedSeconds > 0) {
+			messages.push('番組時間: ' + this.formatDurationShort(expectedSeconds));
+		}
+
+		if (this.isOperatorDurationShort(program)) {
+			messages.push('番組時間より短い可能性があります');
+		}
+
+		return messages.join(' / ');
+	},
+
 	normalizeMatchItem: function(item) {
 
 		var kind = this.getMatchKind(item);
@@ -529,6 +692,14 @@ P = Class.create(P, {
 			start           : source.start || result.start || 0,
 			end             : source.end || result.end || end,
 			seconds         : seconds,
+			operatorPrepareStart  : this.pickOperatorValue(source, result, 'operatorPrepareStart', recordedProgram),
+			operatorRecordingStart: this.pickOperatorValue(source, result, 'operatorRecordingStart', recordedProgram),
+			operatorRecordingEnd  : this.pickOperatorValue(source, result, 'operatorRecordingEnd', recordedProgram),
+			operatorActualSeconds : this.pickOperatorValue(source, result, 'operatorActualSeconds', recordedProgram),
+			operatorAbort         : source.operatorAbort === true || result.operatorAbort === true || recordedProgram && recordedProgram.operatorAbort === true,
+			operatorAbortReason   : source.operatorAbortReason || result.operatorAbortReason || recordedProgram && recordedProgram.operatorAbortReason || '',
+			operatorEndLack       : source.operatorEndLack === true || result.operatorEndLack === true || recordedProgram && recordedProgram.operatorEndLack === true,
+			operatorEndLackReason : source.operatorEndLackReason || result.operatorEndLackReason || recordedProgram && recordedProgram.operatorEndLackReason || '',
 			title           : source.title || result.title || '-',
 			fullTitle       : source.fullTitle || source.title || result.title || '-',
 			detail          : source.detail || '',
@@ -537,6 +708,9 @@ P = Class.create(P, {
 			episode         : source.episode,
 			category        : source.category || null,
 			recordingResult : result,
+			cleanupState    : result.cleanupState || source.cleanupState || '',
+			fileExists      : (typeof result.fileExists !== 'undefined') ? result.fileExists : source.fileExists,
+			deletedAt       : result.deletedAt || source.deletedAt || null,
 			reservationMeta : item.reservationMeta || {},
 			channel         : {
 				id  : channel.id || '-',
@@ -554,6 +728,8 @@ P = Class.create(P, {
 		switch (kind) {
 		case 'RECORDED':
 			return '録画済';
+		case 'DELETED':
+			return '削除済';
 		case 'SKIPPED':
 			return 'スキップ';
 		case 'NG':
@@ -569,6 +745,10 @@ P = Class.create(P, {
 
 		if (kind === 'SKIPPED') {
 			return '<span class="match-result-label flag skip">' + label.escapeHTML() + '</span>';
+		}
+
+		if (kind === 'DELETED') {
+			return '<span class="match-result-label match-result-deleted">' + label.escapeHTML() + '</span>';
 		}
 
 		var cls = 'match-result-label match-result-' + (kind || 'unknown').toLowerCase();
@@ -692,7 +872,10 @@ P = Class.create(P, {
 			row.cell.result = {
 				sortAlt    : program._matchKind,
 				className  : 'match-result',
-				html       : this.getResultLabelHtml(program._matchKind)
+				html       : this.getResultLabelHtml(program._matchKind),
+				attribute  : {
+					title: program._matchKind === 'DELETED' ? '録画ファイルは録画後に削除されています' : this.getResultLabel(program._matchKind)
+				}
 			};
 
 			row.cell.channel = {
@@ -721,12 +904,20 @@ P = Class.create(P, {
 				titleHtml += '<span class="id">#' + program.id + '</span>';
 			}
 
-			if (program._matchKind !== 'RECORDED') {
+			if (program._matchKind !== 'RECORDED' && program._matchKind !== 'DELETED') {
 				titleHtml = '<span class="match-no-link">' + titleHtml + '</span>';
 			}
 
 			if (program.isManualReserved) {
 				titleHtml = '<span class="flag manual">手動</span>' + titleHtml;
+			}
+
+			if (program.operatorAbort) {
+				titleHtml = '<span class="label label-warning">中止</span>' + titleHtml;
+			}
+
+			if (program.operatorEndLack) {
+				titleHtml = '<span class="label label-warning">尻切れ</span>' + titleHtml;
 			}
 
 			row.cell.title = {
@@ -737,10 +928,23 @@ P = Class.create(P, {
 				}
 			};
 
+			var actualSeconds = this.getOperatorActualSeconds(program);
+			var durationText = actualSeconds > 0 ? this.formatDurationShort(actualSeconds) : Math.round(program.seconds / 60) + 'm';
+			var durationTitle = this.getDurationTitle(program);
+
 			row.cell.duration = {
 				sortAlt    : program.seconds,
-				text       : Math.round(program.seconds / 60) + 'm'
+				text       : durationText,
+				attribute  : {
+					title: durationTitle
+				}
 			};
+
+			if (this.isOperatorDurationShort(program)) {
+				row.cell.duration.className = 'duration operator-duration-short';
+				row.cell.duration.html = durationText.escapeHTML() + ' <span class="label label-warning">短</span>';
+				delete row.cell.duration.text;
+			}
 
 			row.cell.datetime = {
 				sortAlt    : program.start,

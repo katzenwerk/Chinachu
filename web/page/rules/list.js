@@ -397,6 +397,12 @@ P = Class.create(P, {
 					label: '無視説明文'
 				},
 				{
+					key  : 'allow_end_lack',
+					label: '末尾切れ',
+					width: 70,
+					align: 'center'
+				},
+				{
 					key  : 'recorded_format',
 					label: '録画ファイル名フォーマット'
 				}
@@ -624,6 +630,19 @@ P = Class.create(P, {
 					className: 'default',
 					sortKey  : 0,
 					text     : 'none'
+				};
+			}
+
+			if (rule.allowEndLack === true) {
+				row.cell.allow_end_lack = {
+					sortKey  : 1,
+					html     : '<span class="label label-warning" title="チャンネル切替時に録画末尾が短くなることを許可します">許可</span>'
+				};
+			} else {
+				row.cell.allow_end_lack = {
+					className: 'default',
+					sortKey  : 0,
+					text     : '-'
 				};
 			}
 

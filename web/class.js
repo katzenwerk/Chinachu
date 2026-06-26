@@ -1764,6 +1764,15 @@
 									}
 								},
 								{
+									key   : 'allowEndLack',
+									label : '末尾切れ',
+									input : {
+										type : 'checkbox',
+										label: '末尾切れを許可する',
+										val  : rule.allowEndLack === true
+									}
+								},
+								{
 									key   : 'isEnabled',
 									label : 'ルールの状態',
 									input : {
@@ -1995,6 +2004,15 @@
 							input	: {
 								type	: 'text',
 								style	: { width: '100%' },
+							}
+						},
+						{
+							key   : 'allowEndLack',
+							label : '末尾切れ',
+							input : {
+								type : 'checkbox',
+								label: '末尾切れを許可する',
+								val  : false
 							}
 						},
 						{
@@ -2232,6 +2250,15 @@
 							input	: {
 								type	: 'text',
 								style	: { width: '100%' },
+							}
+						},
+						{
+							key   : 'allowEndLack',
+							label : '末尾切れ',
+							input : {
+								type : 'checkbox',
+								label: '末尾切れを許可する',
+								val  : false
 							}
 						},
 						{
