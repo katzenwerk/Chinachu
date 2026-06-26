@@ -21,9 +21,16 @@ const fs = require('fs');
 const util = require('util');
 
 // Node.js 24 では util.log が存在しないため、旧Chinachu互換のログ関数を補う
+// gamma系の運用ログに合わせ、ローカル時刻・秒単位で出力する
 if (typeof util.log !== 'function') {
 	util.log = function () {
-		console.log(new Date().toISOString() + ' - ' + Array.prototype.join.call(arguments, ' '));
+		const d = new Date();
+		const months = [ 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec' ];
+		const hh = d.getHours().toString().padStart(2, '0');
+		const mm = d.getMinutes().toString().padStart(2, '0');
+		const ss = d.getSeconds().toString().padStart(2, '0');
+
+		console.log(d.getDate() + ' ' + months[d.getMonth()] + ' ' + hh + ':' + mm + ':' + ss + ' - ' + Array.prototype.join.call(arguments, ' '));
 	};
 }
 const child_process = require('child_process');
@@ -67,6 +74,7 @@ const config = require(CONFIG_FILE);
 const schedulerIntervalTime = 1000 * 60 * 10;// 最長10分毎
 const notifyIntervalTime = 1000 * 60 * 60 * 3;// 3時間毎
 const prepTime = getHandoffPrepMillis();// 録画開始前の準備猶予
+const endLackMaxSeconds = getEndLackMaxSeconds();// LACKで削ってよい最大秒数
 const recordingExpireGraceTime = 1000 * 60 * 5;// 終了後5分で録画中固着を掃除
 const recordingPriority = config.recordingPriority || 2;
 const conflictedPriority = config.conflictedPriority || 1;
@@ -85,6 +93,18 @@ function getHandoffPrepMillis() {
 	}
 
 	return Math.min(seconds, 60) * 1000;
+}
+
+// LACKで削ってよい最大秒数を取得する
+// 未指定時は30秒、指定時も0〜60秒の範囲に丸める。
+function getEndLackMaxSeconds() {
+	const seconds = Number(config.endLackMaxSeconds);
+
+	if (!Number.isFinite(seconds) || seconds < 0) {
+		return 30;
+	}
+
+	return Math.min(seconds, 60);
 }
 
 // setuid
@@ -205,6 +225,13 @@ function reservesChecker(program) {
 		return;
 	}
 
+	// すでに録画済みとして確定した番組は、同一放送時間内で再準備しない。
+	// 手動中止や LACK は短縮録画済みとして recorded.json に残すため、
+	// ここで再 PREPARE / 再 RECORD を防ぐ。
+	if (isRecorded(program)) {
+		return;
+	}
+
 	// 予約準備時間内
 	if (program.start - clock < prepTime) {
 		if (isRecording(program) === false) {
@@ -238,15 +265,37 @@ function isRecorded(program) {
 }
 
 // 録画中の番組を更新
+// reserves.json 側の状態を recording.json 側へ丸ごと逆流させない。
+// recording は「現在録画中の実行状態」であり、isSkip などの予約判断フラグは持ち込まない。
+// 録画開始後に反映してよい可能性が高い番組メタ情報・録画条件だけを限定的に同期する。
 function recordingUpdater(program) {
+
+	const copyKeys = [
+		'title',
+		'fullTitle',
+		'detail',
+		'description',
+		'extra',
+		'category',
+		'channel',
+		'flags',
+		'subTitle',
+		'episode',
+		'start',
+		'end',
+		'seconds',
+		'recordedFormat',
+		'allowEndLack',
+		'priority'
+	];
 
 	for (let i = 0, l = recording.length; i < l; i++) {
 		if (recording[i].id === program.id) {
-			for (let k in program) {
+			copyKeys.forEach(k => {
 				if (program.hasOwnProperty(k)) {
 					recording[i][k] = program[k];
 				}
-			}
+			});
 			return;
 		}
 	}
@@ -343,6 +392,125 @@ function writeRecordingData() {
 	util.log('WRITE: ' + RECORDING_DATA_FILE);
 }
 
+let matchLedgerUpdateTimer = null;
+let matchLedgerUpdateReason = '';
+
+function scheduleMatchLedgerUpdate(reason) {
+	matchLedgerUpdateReason = reason || matchLedgerUpdateReason || 'scheduled';
+
+	if (matchLedgerUpdateTimer !== null) {
+		return;
+	}
+
+	matchLedgerUpdateTimer = setTimeout(() => {
+		const runReason = matchLedgerUpdateReason;
+
+		matchLedgerUpdateTimer = null;
+		matchLedgerUpdateReason = '';
+		updateMatchLedger(runReason);
+	}, Number(config.matchUpdateDelayMs) >= 0 ? Number(config.matchUpdateDelayMs) : 3000);
+}
+
+function compactMatchOutput(stdout) {
+	const lines = String(stdout || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+	const summary = {};
+	let keepRecordedOverMissed = 0;
+	let cleanup = null;
+	let oldNgRemoved = null;
+	let inSummary = false;
+	let messages = [];
+
+	lines.forEach(line => {
+		let m;
+
+		if (line === 'KEEP_RECORDED_STATUS: RECORDED over MISSED') {
+			keepRecordedOverMissed++;
+			return;
+		}
+
+		if (line === '---- match summary ----') {
+			inSummary = true;
+			return;
+		}
+
+		m = line.match(/^MATCH_PRUNE_OLD_NG removed=(\d+)/);
+		if (m) {
+			oldNgRemoved = Number(m[1]);
+			return;
+		}
+
+		m = line.match(/^RECORDED_HISTORY_CLEANUP days=(\d+) cutoff=(.+?) keep=(\d+) removed=(\d+)/);
+		if (m) {
+			cleanup = {
+			days: Number(m[1]),
+			cutoff: m[2],
+			keep: Number(m[3]),
+			removed: Number(m[4])
+			};
+			return;
+		}
+
+		m = line.match(/^([a-zA-Z0-9_()]+):\s*(.*)$/);
+		if (inSummary && m) {
+			summary[m[1]] = m[2];
+			return;
+		}
+
+		messages.push(line);
+	});
+
+	if (Object.keys(summary).length > 0 || keepRecordedOverMissed > 0 || cleanup || oldNgRemoved !== null) {
+		const parts = [];
+
+		if (typeof summary.total !== 'undefined') { parts.push('total=' + summary.total); }
+		if (typeof summary.recorded_all !== 'undefined') { parts.push('recorded=' + summary.recorded_all); }
+		if (typeof summary.reserves2_all !== 'undefined') { parts.push('reserves2=' + summary.reserves2_all); }
+		if (keepRecordedOverMissed > 0) { parts.push('keep_recorded_over_missed=' + keepRecordedOverMissed); }
+		if (oldNgRemoved !== null) { parts.push('prune_old_ng=' + oldNgRemoved); }
+		if (cleanup) { parts.push('cleanup_keep=' + cleanup.keep); parts.push('cleanup_removed=' + cleanup.removed); }
+		if (typeof summary.saved !== 'undefined') { parts.push('saved=' + summary.saved); }
+
+		if (parts.length > 0) {
+			util.log('MATCH: updated ' + parts.join(' '));
+		}
+
+		if (config.matchVerbose === true) {
+			const verboseParts = [];
+
+			[ 'initial_build', 'read_days', 'keep_days', 'keep_months_compat', 'recorded_win', 'reserves2_win', 'window_by_key', 'reserves2_key_fallback', 'reserves2_key_mismatch', 'update_cutoff_day_start(JST)', 'keep_cutoff_month_start(JST)' ].forEach(key => {
+				if (typeof summary[key] !== 'undefined') {
+					verboseParts.push(key + '=' + summary[key]);
+				}
+			});
+
+			if (cleanup) {
+				verboseParts.push('cleanup_days=' + cleanup.days);
+				verboseParts.push('cleanup_cutoff=' + cleanup.cutoff);
+			}
+
+			if (verboseParts.length > 0) {
+				util.log('MATCH: detail ' + verboseParts.join(' '));
+			}
+		}
+	}
+
+	messages.forEach(line => {
+		util.log('MATCH: ' + line);
+	});
+}
+
+function emitMatchProcessOutput(commandProcess) {
+	if (!commandProcess) {
+		return;
+	}
+
+	compactMatchOutput(commandProcess.stdout || '');
+
+	String(commandProcess.stderr || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).forEach(line => {
+		util.log('MATCH STDERR: ' + line);
+	});
+}
+
 // match.json を更新する
 function updateMatchLedger(reason) {
 	const appMatchingFile = __dirname + '/app-matching.js';
@@ -369,8 +537,11 @@ function updateMatchLedger(reason) {
 			'--config', CONFIG_FILE
 		], {
 			cwd: __dirname,
-			stdio: 'inherit'
+			encoding: 'utf8',
+			stdio: [ 'ignore', 'pipe', 'pipe' ]
 		});
+
+		emitMatchProcessOutput(commandProcess);
 
 		if (commandProcess.error) {
 			throw commandProcess.error;
@@ -520,16 +691,26 @@ function isSameChannelProgram(a, b) {
 }
 
 // チャンネル切替のため末尾切れ候補になる録画を探す
-// この段階では候補検出だけ行い、録画停止はしない
+// stream取得失敗後だけ呼び出し、終了直前の allowEndLack 録画だけを対象にする。
 function findHandoffEndLackCandidate(nextProgram) {
+	return getHandoffEndLackCandidateInfo(nextProgram).candidate;
+}
+
+function getHandoffEndLackCandidateInfo(nextProgram) {
+	let candidate = null;
+	let candidateRemainSeconds = Infinity;
+	let skipped = null;
+	let skippedRemainSeconds = Infinity;
+
 	for (let i = 0, l = recording.length; i < l; i++) {
 		const current = recording[i];
+		const remainSeconds = getEarlyFinishSeconds(current, clock);
 
-		if (!current || current.id === nextProgram.id) {
+		if (!current || current.id === (nextProgram && nextProgram.id)) {
 			continue;
 		}
 
-		if (!current._stream || current._operatorNg) {
+		if (!current._stream || current._operatorNg || current._operatorEndLack) {
 			continue;
 		}
 
@@ -541,14 +722,121 @@ function findHandoffEndLackCandidate(nextProgram) {
 			continue;
 		}
 
-		if (!current.end || current.end - clock > prepTime) {
+		// 既に終了時刻を過ぎている番組はLACKではなく通常終了/固着掃除側に任せる。
+		if (!current.end || Number(current.end) <= clock) {
 			continue;
 		}
 
-		return current;
+		if (remainSeconds <= endLackMaxSeconds) {
+			if (!candidate || remainSeconds < candidateRemainSeconds) {
+				candidate = current;
+				candidateRemainSeconds = remainSeconds;
+			}
+			continue;
+		}
+
+		if (!skipped || remainSeconds < skippedRemainSeconds) {
+			skipped = current;
+			skippedRemainSeconds = remainSeconds;
+		}
 	}
 
-	return null;
+	return {
+		candidate: candidate,
+		candidateRemainSeconds: candidateRemainSeconds,
+		skipped: skipped,
+		skippedRemainSeconds: skippedRemainSeconds
+	};
+}
+
+function logHandoffEndLackSkip(info, nextProgram) {
+	if (!info || !info.skipped) {
+		return;
+	}
+
+	util.log('HANDOFF END LACK SKIP: tuner shortage but candidate remains ' +
+		formatSecondsForLog(info.skippedRemainSeconds) + ', over limit ' +
+		formatSecondsForLog(endLackMaxSeconds) + ': ' +
+		printProgram(info.skipped) + (nextProgram ? ' -> ' + printProgram(nextProgram) : ''));
+}
+
+function isTunerShortageError(err) {
+	const statusCode = Number(err && err.statusCode || 0);
+	const text = [
+		err && err.code,
+		err && err.statusMessage,
+		err && err.message,
+		err && err.body
+	].join(' ').toLowerCase();
+
+	if (statusCode === 409 || statusCode === 503) {
+		return true;
+	}
+
+	return /tuner|busy|resource|conflict|unavailable|priority/.test(text);
+}
+
+function getEarlyFinishSeconds(program, at) {
+	const end = Number(program && program.end || 0);
+	const finishAt = Number(at || Date.now());
+
+	if (!end || finishAt >= end) {
+		return 0;
+	}
+
+	return Math.ceil((end - finishAt) / 1000);
+}
+
+function formatSecondsForLog(seconds) {
+	seconds = Math.max(0, Math.floor(Number(seconds) || 0));
+
+	if (seconds >= 60) {
+		return Math.floor(seconds / 60) + '分' + ('0' + (seconds % 60)).slice(-2) + '秒';
+	}
+
+	return seconds + '秒';
+}
+
+function markRecordingAborted(program, reason) {
+	if (!program || program._operatorAbort) {
+		return;
+	}
+
+	program._operatorAbort = true;
+	program.operatorAbort = true;
+	program.operatorAbortAt = Date.now();
+	program.operatorAbortReason = reason || 'ABORT RECORDING';
+}
+
+function finishRecordingForEndLack(currentProgram, nextProgram) {
+	const finishAt = Date.now();
+	const earlySeconds = getEarlyFinishSeconds(currentProgram, finishAt);
+
+	if (!currentProgram || currentProgram._operatorEndLack) {
+		return false;
+	}
+
+	currentProgram._operatorEndLack = true;
+	currentProgram.operatorEndLack = true;
+	currentProgram.operatorEndLackAt = finishAt;
+	currentProgram.operatorEndLackReason = 'HANDOFF_TUNER';
+	currentProgram.operatorEndLackByProgramId = nextProgram && nextProgram.id || '';
+	currentProgram.operatorEndLackEarlySeconds = earlySeconds;
+
+	util.log('HANDOFF END LACK: tuner shortage, finish ' + formatSecondsForLog(earlySeconds) + ' early for tuner handoff: ' +
+		printProgram(currentProgram) + (nextProgram ? ' -> ' + printProgram(nextProgram) : ''));
+
+	if (typeof currentProgram._operatorFinalize === 'function') {
+		currentProgram._operatorFinalize();
+		return true;
+	}
+
+	if (currentProgram._stream) {
+		safeAbortStream(currentProgram._stream, 'handoff end lack');
+		return true;
+	}
+
+	return false;
 }
 
 // 録画中のまま固着した番組を掃除する
@@ -581,6 +869,10 @@ function prepRecord(program) {
 		return;
 	}
 
+	if (!program.operatorPrepareStart) {
+		program.operatorPrepareStart = Date.now();
+	}
+
 	wakeRecordedStorage(program);
 
 	util.log('PREPARE: ' + printProgram(program));
@@ -588,10 +880,8 @@ function prepRecord(program) {
 	// set priority
 	mirakurun.priority = program.priority = program.priority || (program.isConflict ? conflictedPriority : recordingPriority);
 
-	const handoffCandidate = findHandoffEndLackCandidate(program);
-	if (handoffCandidate) {
-		util.log('HANDOFF CANDIDATE: ' + printProgram(handoffCandidate) + ' -> ' + printProgram(program));
-	}
+	// LACKはここでは実行しない。
+	// まず通常どおりstream取得を試し、チューナー不足等で失敗した場合だけ終了直前の録画を短縮する。
 
 	// get stream
 	mirakurun.getProgramStream(parseInt(program.id, 36), true)
@@ -617,9 +907,28 @@ function prepRecord(program) {
 				util.log("ERROR: " + printProgram(program), err.address, err.code);
 			}
 
-			const failedHandoffCandidate = findHandoffEndLackCandidate(program);
-			if (failedHandoffCandidate) {
-				util.log('HANDOFF READY: ' + printProgram(failedHandoffCandidate) + ' -> ' + printProgram(program));
+			if (isTunerShortageError(err)) {
+				const handoffInfo = getHandoffEndLackCandidateInfo(program);
+				if (handoffInfo.candidate) {
+					if (finishRecordingForEndLack(handoffInfo.candidate, program)) {
+						const recordingIndex = recording.indexOf(program);
+						if (recordingIndex !== -1) {
+							recording.splice(recordingIndex, 1);
+							writeRecordingData();
+						}
+
+						// 旧録画をLACKで閉じた直後だけ、次番組のstream取得を即再試行する。
+						setTimeout(() => {
+							clock = Date.now();
+							if (clock <= program.end && !isRecording(program) && !isRecorded(program)) {
+								prepRecord(program);
+							}
+						}, 500);
+						return;
+					}
+				} else {
+					logHandoffEndLackSkip(handoffInfo, program);
+				}
 			}
 
 			// リトライ
@@ -646,6 +955,10 @@ function doRecord(program, stream) {
 	}
 
 	util.log('RECORD: ' + printProgram(program));
+
+	if (!program.operatorRecordingStart) {
+		program.operatorRecordingStart = Date.now();
+	}
 
 	// dummy
 	program.tuner = {
@@ -686,6 +999,7 @@ function doRecord(program, stream) {
 	// 内部用
 	Object.defineProperty(program, "_stream", {
 		enumerable: false,
+		configurable: true,
 		value: stream
 	});
 
@@ -710,6 +1024,14 @@ function doRecord(program, stream) {
 		// 状態を更新
 		delete program.pid;
 
+		if (!program.operatorRecordingEnd) {
+			program.operatorRecordingEnd = Date.now();
+		}
+
+		if (program.operatorRecordingStart && program.operatorRecordingEnd > program.operatorRecordingStart) {
+			program.operatorActualSeconds = Math.floor((program.operatorRecordingEnd - program.operatorRecordingStart) / 1000);
+		}
+
 		const isNgRecording = !!program._operatorNg;
 
 		if (!isNgRecording) {
@@ -726,7 +1048,7 @@ function doRecord(program, stream) {
 			recorded.push(program);
 			fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
 			util.log('WRITE: ' + RECORDED_DATA_FILE);
-			updateMatchLedger('recorded finalize');
+			scheduleMatchLedgerUpdate('recorded finalize');
 		} else {
 			util.log(program._operatorNg + ': ' + printProgram(program));
 		}
@@ -753,22 +1075,50 @@ function doRecord(program, stream) {
 			util.log('SPAWN: ' + config.recordedCommand + ' (pid=' + postProcess.pid + ')');
 		}
 
-		util.log('FIN: ' + printProgram(program));
+		if (program._operatorEndLack) {
+			util.log('FIN END LACK: ' + printProgram(program));
+		} else if (program._operatorAbort) {
+			util.log('FIN ABORT SHORT: ' + printProgram(program));
+		} else {
+			util.log('FIN: ' + printProgram(program));
+		}
 	}
+
+	Object.defineProperty(program, "_operatorFinalize", {
+		enumerable: false,
+		configurable: true,
+		value: finalize
+	});
 }
 
 // 録画中止
+// gamma系の挙動に寄せ、ストリーム開始後の中止は NG ではなく短縮録画済みとして確定する。
 function stopRecording(programId, reason) {
 
 	const program = recording.find(program => program.id === programId);
+	const abortReason = reason || 'ABORT RECORDING';
 
-	if (program) {
-		markRecordingNg(program, reason || 'ABORT RECORDING');
+	if (!program) {
+		return;
 	}
 
-	if (program && program._stream) {
-		safeAbortStream(program._stream, reason || 'ABORT RECORDING');
+	markRecordingAborted(program, abortReason);
+
+	if (typeof program._operatorFinalize === 'function') {
+		util.log('ABORT RECORDING: short recorded: ' + printProgram(program));
+		program._operatorFinalize();
+		return;
 	}
+
+	if (program._stream) {
+		util.log('ABORT RECORDING: short recorded: ' + printProgram(program));
+		safeAbortStream(program._stream, abortReason);
+		return;
+	}
+
+	// ストリーム取得前は録画ファイルが存在しないため、従来どおり NG 側で落とす。
+	markRecordingNg(program, abortReason);
+	removeRecording(program.id, abortReason);
 }
 
 
@@ -869,7 +1219,7 @@ function removeRecordedLedgerEntriesByPath(filePath) {
 	if (changed) {
 		fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
 		util.log('WRITE: ' + RECORDED_DATA_FILE);
-		updateMatchLedger('recorded cleanup');
+		scheduleMatchLedgerUpdate('recorded cleanup');
 	}
 }
 
@@ -992,9 +1342,10 @@ chinachu.jsonWatcher(
 		}
 
 		// 録画中止処理
+		// stopRecording() 側で、ストリーム開始後は短縮録画済みとして finalize する。
+		// ここで先に recording から消すと recorded.json へ即時反映されないため、削除は finalize に任せる。
 		data.filter(program => !!program.abort).forEach(program => {
 			stopRecording(program.id, 'ABORT RECORDING');
-			removeRecording(program.id, 'ABORT RECORDING');
 		});
 	},
 	{ create: [], now: false }
