@@ -20,18 +20,26 @@ const path = require('path');
 const fs = require('fs');
 const util = require('util');
 
-// Node.js 24 では util.log が存在しないため、旧Chinachu互換のログ関数を補う
-// gamma系の運用ログに合わせ、ローカル時刻・秒単位で出力する
-if (typeof util.log !== 'function') {
-	util.log = function () {
-		const d = new Date();
-		const months = [ 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec' ];
-		const hh = d.getHours().toString().padStart(2, '0');
-		const mm = d.getMinutes().toString().padStart(2, '0');
-		const ss = d.getSeconds().toString().padStart(2, '0');
+function formatJstLogTime() {
+	const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
+	const yyyy = d.getUTCFullYear().toString();
+	const mm = (d.getUTCMonth() + 1).toString().padStart(2, '0');
+	const dd = d.getUTCDate().toString().padStart(2, '0');
+	const hh = d.getUTCHours().toString().padStart(2, '0');
+	const ii = d.getUTCMinutes().toString().padStart(2, '0');
+	const ss = d.getUTCSeconds().toString().padStart(2, '0');
 
-		console.log(d.getDate() + ' ' + months[d.getMonth()] + ' ' + hh + ':' + mm + ':' + ss + ' - ' + Array.prototype.join.call(arguments, ' '));
-	};
+	return yyyy + '/' + mm + '/' + dd + ' ' + hh + ':' + ii + ':' + ss;
+}
+
+function operatorLog() {
+	console.log(formatJstLogTime() + ' - ' + Array.prototype.join.call(arguments, ' '));
+}
+
+// Node.js 24 では util.log が存在しないため、旧Chinachu互換のログ関数を補う
+// 既存の util.log がある環境では上書きしない
+if (typeof util.log !== 'function') {
+	util.log = operatorLog;
 }
 const child_process = require('child_process');
 
@@ -165,7 +173,7 @@ fs.writeFileSync(RECORDING_DATA_FILE, '[]');
 
 // 保存先ディレクトリが存在しない場合には作成
 if (!fs.existsSync(config.recordedDir)) {
-	util.log('MKDIR: ' + config.recordedDir);
+	operatorLog('MKDIR: ' + config.recordedDir);
 	fs.mkdirSync(config.recordedDir, { recursive: true });
 }
 
@@ -173,7 +181,7 @@ if (!fs.existsSync(config.recordedDir)) {
 // mtwitter は旧Twitter API時代の依存であり、Node.js 24運用では本体起動から切り離す。
 // operTweeter 設定が残っていても録画処理本体は継続し、通知のみ無効扱いにする。
 if (config.operTweeter) {
-	util.log('WARNING: operTweeter is disabled. mtwitter support has been detached from operator runtime.');
+	operatorLog('WARNING: operTweeter is disabled. mtwitter support has been detached from operator runtime.');
 }
 
 let clock = Date.now();
@@ -285,6 +293,8 @@ function recordingUpdater(program) {
 		'end',
 		'seconds',
 		'recordedFormat',
+		'recordedDir',
+		'recordedDirId',
 		'allowEndLack',
 		'priority'
 	];
@@ -310,7 +320,7 @@ function stopScheduler() {
 	if (scheduler === null) { return; }
 
 	scheduler.kill('SIGQUIT');
-	util.log('KILL: SIGQUIT -> Scheduler (pid=' + scheduler.pid + ')');
+	operatorLog('KILL: SIGQUIT -> Scheduler (pid=' + scheduler.pid + ')');
 }
 
 // スケジューラーを開始
@@ -320,15 +330,15 @@ function startScheduler() {
 	var output, finalize;
 
 	scheduler = child_process.spawn('./chinachu', [ 'update' ]);
-	util.log('SPAWN: ./chinachu update (pid=' + scheduler.pid + ')');
+	operatorLog('SPAWN: ./chinachu update (pid=' + scheduler.pid + ')');
 
 	// ログ用
 	output = fs.createWriteStream('./log/scheduler', { flags: 'a' });
-	util.log('STREAM: ./log/scheduler');
+	operatorLog('STREAM: ./log/scheduler');
 
 	finalize = function () {
 
-		util.log('EXIT: node app-scheduler.js (pid=' + scheduler.pid + ')');
+		operatorLog('EXIT: node app-scheduler.js (pid=' + scheduler.pid + ')');
 
 		try {
 			process.removeListener('SIGINT', stopScheduler);
@@ -345,7 +355,7 @@ function startScheduler() {
 		try {
 			output.write(data);
 		} catch (e) {
-			util.log('ERROR: Scheduler -> Abort (' + e + ')');
+			operatorLog('ERROR: Scheduler -> Abort (' + e + ')');
 			finalize();
 		}
 	});
@@ -389,7 +399,7 @@ function getDiskUsage(targetPath, callback) {
 // 録画中リストを書き込む
 function writeRecordingData() {
 	fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));
-	util.log('WRITE: ' + RECORDING_DATA_FILE);
+	operatorLog('WRITE: ' + RECORDING_DATA_FILE);
 }
 
 let matchLedgerUpdateTimer = null;
@@ -471,7 +481,7 @@ function compactMatchOutput(stdout) {
 		if (typeof summary.saved !== 'undefined') { parts.push('saved=' + summary.saved); }
 
 		if (parts.length > 0) {
-			util.log('MATCH: updated ' + parts.join(' '));
+			operatorLog('MATCH: updated ' + parts.join(' '));
 		}
 
 		if (config.matchVerbose === true) {
@@ -489,13 +499,13 @@ function compactMatchOutput(stdout) {
 			}
 
 			if (verboseParts.length > 0) {
-				util.log('MATCH: detail ' + verboseParts.join(' '));
+				operatorLog('MATCH: detail ' + verboseParts.join(' '));
 			}
 		}
 	}
 
 	messages.forEach(line => {
-		util.log('MATCH: ' + line);
+		operatorLog('MATCH: ' + line);
 	});
 }
 
@@ -507,7 +517,7 @@ function emitMatchProcessOutput(commandProcess) {
 	compactMatchOutput(commandProcess.stdout || '');
 
 	String(commandProcess.stderr || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).forEach(line => {
-		util.log('MATCH STDERR: ' + line);
+		operatorLog('MATCH STDERR: ' + line);
 	});
 }
 
@@ -518,7 +528,7 @@ function updateMatchLedger(reason) {
 
 	try {
 		if (!fs.existsSync(appMatchingFile)) {
-			util.log('WARNING: `' + appMatchingFile + '`が存在しないため match.json 更新をスキップしました');
+			operatorLog('WARNING: `' + appMatchingFile + '`が存在しないため match.json 更新をスキップしました');
 			return;
 		}
 
@@ -526,7 +536,7 @@ function updateMatchLedger(reason) {
 		ensureJsonArrayFile(RESERVES2_DATA_FILE);
 		ensureJsonArrayFile(MATCH_DATA_FILE);
 
-		util.log('RUN: ' + appMatchingFile + (reason ? ' (' + reason + ')' : ''));
+		operatorLog('RUN: ' + appMatchingFile + (reason ? ' (' + reason + ')' : ''));
 
 		commandProcess = child_process.spawnSync(process.execPath, [
 			appMatchingFile,
@@ -548,10 +558,10 @@ function updateMatchLedger(reason) {
 		}
 
 		if (commandProcess.status !== 0) {
-			util.log('WARNING: match.json の更新に失敗しました: exit status=' + commandProcess.status);
+			operatorLog('WARNING: match.json の更新に失敗しました: exit status=' + commandProcess.status);
 		}
 	} catch (e) {
-		util.log('WARNING: match.json の更新に失敗しました: ' + (e && e.stack ? e.stack : e));
+		operatorLog('WARNING: match.json の更新に失敗しました: ' + (e && e.stack ? e.stack : e));
 	}
 }
 
@@ -564,17 +574,55 @@ function ensureJsonArrayFile(file) {
 
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(file, '[]');
-	util.log('INIT JSON: ' + file);
+	operatorLog('INIT JSON: ' + file);
 }
 
 
+// 録画保存先ディレクトリを正規化する
+function normalizeRecordedDir(dir) {
+	dir = String(dir || '').trim();
+
+	if (dir === '') {
+		return '';
+	}
+
+	return dir.replace(/\/+$/, '') + '/';
+}
+
+// 録画ファイル名を保存先ディレクトリからの相対パスとして正規化する
+function normalizeRecordedName(name) {
+	name = String(name || '').trim();
+
+	// recordedFormat 側の先頭スラッシュは絶対パス扱いにせず、保存先配下の相対パスとして扱う
+	return name.replace(/^\/+/, '');
+}
+
+// 録画保存先ディレクトリと録画ファイル名を結合する
+function joinRecordedPath(dir, name) {
+	dir = normalizeRecordedDir(dir);
+	name = normalizeRecordedName(name);
+
+	return dir + name;
+}
+
+// 録画保存先ディレクトリを取得する
+function getRecordedDir(program) {
+	if (program && typeof program.recordedDir === 'string' && program.recordedDir.trim() !== '') {
+		return normalizeRecordedDir(program.recordedDir);
+	}
+
+	return normalizeRecordedDir(config.recordedDir);
+}
+
 // 録画保存先パスを取得する
 function getRecordedPath(program) {
-	return config.recordedDir + chinachu.formatRecordedName(program, program.recordedFormat || config.recordedFormat, {
+	const recordedName = chinachu.formatRecordedName(program, program.recordedFormat || config.recordedFormat, {
 		replaceEnclosingCharacters: config.recordedNameReplaceEnclosingCharacters === true ||
 			config.needToReplaceEnclosingCharacters === true,
 		enclosingCharacterMap: config.recordedNameEnclosingCharacterMap || null
 	});
+
+	return joinRecordedPath(getRecordedDir(program), recordedName);
 }
 
 // 録画保存先HDDを事前に起こす
@@ -582,11 +630,11 @@ function wakeRecordedStorage(program) {
 	let wakeFile = null;
 
 	try {
-		const recPath = program ? getRecordedPath(program) : path.join(config.recordedDir, '.chinachu-wakeup');
+		const recPath = program ? getRecordedPath(program) : path.join(getRecordedDir(null), '.chinachu-wakeup');
 		const targetDir = path.dirname(recPath);
 
 		if (!fs.existsSync(targetDir)) {
-			util.log('MKDIR: ' + targetDir);
+			operatorLog('MKDIR: ' + targetDir);
 			fs.mkdirSync(targetDir, { recursive: true });
 		}
 
@@ -599,7 +647,7 @@ function wakeRecordedStorage(program) {
 		].join('\t'));
 		fs.unlinkSync(wakeFile);
 
-		util.log('WAKE: recorded storage ' + wakeFile);
+		operatorLog('WAKE: recorded storage ' + wakeFile);
 	} catch (e) {
 		try {
 			if (wakeFile && fs.existsSync(wakeFile)) {
@@ -607,7 +655,7 @@ function wakeRecordedStorage(program) {
 			}
 		} catch (_) {}
 
-		util.log('WARNING: recorded storage wake failed: ' + e.message);
+		operatorLog('WARNING: recorded storage wake failed: ' + e.message);
 	}
 }
 
@@ -637,7 +685,7 @@ function removeRecording(programId, reason) {
 			continue;
 		}
 
-		util.log((reason || 'REMOVE RECORDING') + ': ' + printProgram(recording[i]));
+		operatorLog((reason || 'REMOVE RECORDING') + ': ' + printProgram(recording[i]));
 		recording.splice(i, 1);
 		changed = true;
 	}
@@ -658,7 +706,7 @@ function safeAbortStream(stream, reason) {
 			stream.unpipe();
 		}
 	} catch (e) {
-		util.log('WARNING: stream unpipe failed: ' + e.message);
+		operatorLog('WARNING: stream unpipe failed: ' + e.message);
 	}
 
 	try {
@@ -668,7 +716,7 @@ function safeAbortStream(stream, reason) {
 			stream.destroy();
 		}
 	} catch (e) {
-		util.log('WARNING: ' + (reason || 'stream abort') + ' failed: ' + e.message);
+		operatorLog('WARNING: ' + (reason || 'stream abort') + ' failed: ' + e.message);
 	}
 }
 
@@ -754,7 +802,7 @@ function logHandoffEndLackSkip(info, nextProgram) {
 		return;
 	}
 
-	util.log('HANDOFF END LACK SKIP: tuner shortage but candidate remains ' +
+	operatorLog('HANDOFF END LACK SKIP: tuner shortage but candidate remains ' +
 		formatSecondsForLog(info.skippedRemainSeconds) + ', over limit ' +
 		formatSecondsForLog(endLackMaxSeconds) + ': ' +
 		printProgram(info.skipped) + (nextProgram ? ' -> ' + printProgram(nextProgram) : ''));
@@ -823,7 +871,7 @@ function finishRecordingForEndLack(currentProgram, nextProgram) {
 	currentProgram.operatorEndLackByProgramId = nextProgram && nextProgram.id || '';
 	currentProgram.operatorEndLackEarlySeconds = earlySeconds;
 
-	util.log('HANDOFF END LACK: tuner shortage, finish ' + formatSecondsForLog(earlySeconds) + ' early for tuner handoff: ' +
+	operatorLog('HANDOFF END LACK: tuner shortage, finish ' + formatSecondsForLog(earlySeconds) + ' early for tuner handoff: ' +
 		printProgram(currentProgram) + (nextProgram ? ' -> ' + printProgram(nextProgram) : ''));
 
 	if (typeof currentProgram._operatorFinalize === 'function') {
@@ -875,7 +923,7 @@ function prepRecord(program) {
 
 	wakeRecordedStorage(program);
 
-	util.log('PREPARE: ' + printProgram(program));
+	operatorLog('PREPARE: ' + printProgram(program));
 
 	// set priority
 	mirakurun.priority = program.priority = program.priority || (program.isConflict ? conflictedPriority : recordingPriority);
@@ -887,7 +935,7 @@ function prepRecord(program) {
 	mirakurun.getProgramStream(parseInt(program.id, 36), true)
 		.then(stream => {
 			if (program._operatorNg || !isRecording(program) || clock > program.end) {
-				util.log('DROP STREAM: ' + printProgram(program));
+				operatorLog('DROP STREAM: ' + printProgram(program));
 				safeAbortStream(stream, 'drop stream');
 				return;
 			}
@@ -902,9 +950,9 @@ function prepRecord(program) {
 			}
 
 			if (err.req) {
-				util.log("ERROR: " + printProgram(program), err.req.path, err.statusCode, err.statusMessage);
+				operatorLog("ERROR: " + printProgram(program), err.req.path, err.statusCode, err.statusMessage);
 			} else {
-				util.log("ERROR: " + printProgram(program), err.address, err.code);
+				operatorLog("ERROR: " + printProgram(program), err.address, err.code);
 			}
 
 			if (isTunerShortageError(err)) {
@@ -949,12 +997,12 @@ function prepRecord(program) {
 function doRecord(program, stream) {
 
 	if (program._operatorNg || !isRecording(program) || clock > program.end) {
-		util.log('DROP RECORD: ' + printProgram(program));
+		operatorLog('DROP RECORD: ' + printProgram(program));
 		safeAbortStream(stream, 'drop record');
 		return;
 	}
 
-	util.log('RECORD: ' + printProgram(program));
+	operatorLog('RECORD: ' + printProgram(program));
 
 	if (!program.operatorRecordingStart) {
 		program.operatorRecordingStart = Date.now();
@@ -976,13 +1024,13 @@ function doRecord(program, stream) {
 	// 保存先ディレクトリ
 	const recDirPath = path.dirname(recPath);
 	if (!fs.existsSync(recDirPath)) {
-		util.log('MKDIR: ' + recDirPath);
+		operatorLog('MKDIR: ' + recDirPath);
 		fs.mkdirSync(recDirPath, { recursive: true });
 	}
 
 	// 保存ストリーム
 	const recFile = fs.createWriteStream(recPath, { flags: 'a' });
-	util.log('STREAM: ' + recPath);
+	operatorLog('STREAM: ' + recPath);
 	stream.pipe(recFile);
 
 	// 録画プロセス終了時処理
@@ -1047,10 +1095,10 @@ function doRecord(program, stream) {
 			}
 			recorded.push(program);
 			fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
-			util.log('WRITE: ' + RECORDED_DATA_FILE);
+			operatorLog('WRITE: ' + RECORDED_DATA_FILE);
 			scheduleMatchLedgerUpdate('recorded finalize');
 		} else {
-			util.log(program._operatorNg + ': ' + printProgram(program));
+			operatorLog(program._operatorNg + ': ' + printProgram(program));
 		}
 
 		const recordingIndex = recording.indexOf(program);
@@ -1063,7 +1111,7 @@ function doRecord(program, stream) {
 				if (reserves[i].id === program.id) {
 					reserves.splice(i, 1);
 					fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(reserves));
-					util.log('WRITE: ' + RESERVES_DATA_FILE);
+					operatorLog('WRITE: ' + RESERVES_DATA_FILE);
 					break;
 				}
 			}
@@ -1072,15 +1120,15 @@ function doRecord(program, stream) {
 		// ポストプロセス
 		if (!isNgRecording && config.recordedCommand) {
 			const postProcess = child_process.spawn(config.recordedCommand, [recPath, JSON.stringify(program)]);
-			util.log('SPAWN: ' + config.recordedCommand + ' (pid=' + postProcess.pid + ')');
+			operatorLog('SPAWN: ' + config.recordedCommand + ' (pid=' + postProcess.pid + ')');
 		}
 
 		if (program._operatorEndLack) {
-			util.log('FIN END LACK: ' + printProgram(program));
+			operatorLog('FIN END LACK: ' + printProgram(program));
 		} else if (program._operatorAbort) {
-			util.log('FIN ABORT SHORT: ' + printProgram(program));
+			operatorLog('FIN ABORT SHORT: ' + printProgram(program));
 		} else {
-			util.log('FIN: ' + printProgram(program));
+			operatorLog('FIN: ' + printProgram(program));
 		}
 	}
 
@@ -1105,13 +1153,13 @@ function stopRecording(programId, reason) {
 	markRecordingAborted(program, abortReason);
 
 	if (typeof program._operatorFinalize === 'function') {
-		util.log('ABORT RECORDING: short recorded: ' + printProgram(program));
+		operatorLog('ABORT RECORDING: short recorded: ' + printProgram(program));
 		program._operatorFinalize();
 		return;
 	}
 
 	if (program._stream) {
-		util.log('ABORT RECORDING: short recorded: ' + printProgram(program));
+		operatorLog('ABORT RECORDING: short recorded: ' + printProgram(program));
 		safeAbortStream(program._stream, abortReason);
 		return;
 	}
@@ -1154,7 +1202,7 @@ function findOldestRecordedFileInRecordedDir() {
 	try {
 		entries = fs.readdirSync(baseDir);
 	} catch (e) {
-		util.log('WARNING: Storage cleanup scan failed: ' + e.message);
+		operatorLog('WARNING: Storage cleanup scan failed: ' + e.message);
 		return null;
 	}
 
@@ -1165,7 +1213,7 @@ function findOldestRecordedFileInRecordedDir() {
 		try {
 			stats = fs.lstatSync(filePath);
 		} catch (e) {
-			util.log('WARNING: Storage cleanup stat failed: ' + filePath + ' (' + e.message + ')');
+			operatorLog('WARNING: Storage cleanup stat failed: ' + filePath + ' (' + e.message + ')');
 			continue;
 		}
 
@@ -1218,7 +1266,7 @@ function removeRecordedLedgerEntriesByPath(filePath) {
 
 	if (changed) {
 		fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
-		util.log('WRITE: ' + RECORDED_DATA_FILE);
+		operatorLog('WRITE: ' + RECORDED_DATA_FILE);
 		scheduleMatchLedgerUpdate('recorded cleanup');
 	}
 }
@@ -1228,17 +1276,17 @@ function removeOldestRecordedFileInRecordedDir() {
 	const target = findOldestRecordedFileInRecordedDir();
 
 	if (!target) {
-		util.log('WARNING: Storage cleanup target not found in recordedDir root.');
+		operatorLog('WARNING: Storage cleanup target not found in recordedDir root.');
 		return false;
 	}
 
 	try {
 		fs.unlinkSync(target.path);
-		util.log('REMOVE: Storage cleanup -> ' + target.path + ' (' + target.size + ' bytes)');
+		operatorLog('REMOVE: Storage cleanup -> ' + target.path + ' (' + target.size + ' bytes)');
 		removeRecordedLedgerEntriesByPath(target.path);
 		return true;
 	} catch (e) {
-		util.log('WARNING: Storage cleanup remove failed: ' + target.path + ' (' + e.message + ')');
+		operatorLog('WARNING: Storage cleanup remove failed: ' + target.path + ' (' + e.message + ')');
 		return false;
 	}
 }
@@ -1248,19 +1296,19 @@ function storageChecker() {
 
 	getDiskUsage(config.recordedDir, (err, info) => {
 		if (err) {
-			util.log('WARNING: Storage check failed: ' + err.message);
+			operatorLog('WARNING: Storage check failed: ' + err.message);
 			return;
 		}
 
 		const freeMB = info.available / 1024 / 1024;
 		if (freeMB < storageLowSpaceThresholdMB) {
 			stChecked = 0;// すぐに再チェックするため
-			util.log(`ALERT: Storage Low Space! (${freeMB} MB < ${storageLowSpaceThresholdMB} MB)`);
+			operatorLog(`ALERT: Storage Low Space! (${freeMB} MB < ${storageLowSpaceThresholdMB} MB)`);
 
 			// 1. 指定コマンド実行
 			if (storageLowSpaceCommand) {
 				const command = child_process.spawn(storageLowSpaceCommand);
-				util.log('SPAWN: ' + storageLowSpaceCommand + ' (pid=' + command.pid + ')');
+				operatorLog('SPAWN: ' + storageLowSpaceCommand + ' (pid=' + command.pid + ')');
 			}
 
 			// 2. アクション
@@ -1271,9 +1319,9 @@ function storageChecker() {
 				// config.recordedDir 直下の最古 ts/m2ts を1件削除する
 				removeOldestRecordedFileInRecordedDir();
 			} else if (storageLowSpaceAction === "none") {
-				util.log('STORAGE LOW SPACE ACTION: none');
+				operatorLog('STORAGE LOW SPACE ACTION: none');
 			} else {
-				util.log('WARNING: Unknown storageLowSpaceAction: ' + storageLowSpaceAction);
+				operatorLog('WARNING: Unknown storageLowSpaceAction: ' + storageLowSpaceAction);
 			}
 
 			// 3. メール通知
@@ -1305,13 +1353,13 @@ chinachu.jsonWatcher(
 		}
 
 		reserves = data;
-		util.log(mes);
+		operatorLog(mes);
 
 		if (recording.length > 0) {
 			reserves.forEach(recordingUpdater);
 
 			fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));
-			util.log('WRITE: ' + RECORDING_DATA_FILE);
+			operatorLog('WRITE: ' + RECORDING_DATA_FILE);
 		}
 	},
 	{ create: [], now: true }
@@ -1327,7 +1375,7 @@ chinachu.jsonWatcher(
 		}
 
 		recorded = data;
-		util.log(mes);
+		operatorLog(mes);
 	},
 	{ create: [], now: true }
 );

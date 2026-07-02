@@ -650,6 +650,242 @@
 		}
 	};
 
+	var formInputTypeHourRange = function _formInputTypeHourRange(hour) {
+		return {
+			create: function () {
+				var wrapper = new Element('div', { className: 'rule-inline-range rule-hour-range' }).setStyle({
+					display   : 'flex',
+					alignItems: 'center',
+					gap       : '8px'
+				});
+				var start = new Element('input', { type: 'number', min: '0', max: '24', maxLength: '2' }).setStyle({ width: '60px' });
+				var end = new Element('input', { type: 'number', min: '0', max: '24', maxLength: '2' }).setStyle({ width: '60px' });
+
+				start.value = hour && typeof hour.start !== 'undefined' ? hour.start : 0;
+				end.value = hour && typeof hour.end !== 'undefined' ? hour.end : 24;
+
+				wrapper.insert(createTextElement('span', '開始'));
+				wrapper.insert(start);
+				wrapper.insert(createTextElement('span', '終了'));
+				wrapper.insert(end);
+
+				wrapper._start = start;
+				wrapper._end = end;
+
+				return wrapper;
+			},
+			getVal: function () {
+				var start = parseInt(this.element._start.value, 10);
+				var end = parseInt(this.element._end.value, 10);
+
+				if (!Number.isFinite(start)) {
+					start = 0;
+				}
+				if (!Number.isFinite(end)) {
+					end = 24;
+				}
+
+				return {
+					start: start,
+					end: end
+				};
+			},
+			setVal: function (val) {
+				val = val || {};
+				this.element._start.value = typeof val.start !== 'undefined' ? val.start : 0;
+				this.element._end.value = typeof val.end !== 'undefined' ? val.end : 24;
+			},
+			enable: function () {
+				this.element._start.disabled = false;
+				this.element._end.disabled = false;
+			},
+			disable: function () {
+				this.element._start.disabled = true;
+				this.element._end.disabled = true;
+			}
+		};
+	};
+
+	var formInputTypeDurationRange = function _formInputTypeDurationRange(duration) {
+		return {
+			create: function () {
+				var wrapper = new Element('div', { className: 'rule-inline-range rule-duration-range' }).setStyle({
+					display   : 'flex',
+					alignItems: 'center',
+					gap       : '8px'
+				});
+				var min = new Element('input', { type: 'number' }).setStyle({ width: '80px' });
+				var max = new Element('input', { type: 'number' }).setStyle({ width: '80px' });
+
+				min.value = duration && typeof duration.min !== 'undefined' ? duration.min : '';
+				max.value = duration && typeof duration.max !== 'undefined' ? duration.max : '';
+
+				wrapper.insert(createTextElement('span', '最短'));
+				wrapper.insert(min);
+				wrapper.insert(createTextElement('span', '最長'));
+				wrapper.insert(max);
+				wrapper.insert(createTextElement('span', '秒'));
+
+				wrapper._min = min;
+				wrapper._max = max;
+
+				return wrapper;
+			},
+			getVal: function () {
+				var result = {};
+				var min = parseInt(this.element._min.value, 10);
+				var max = parseInt(this.element._max.value, 10);
+
+				if (Number.isFinite(min)) {
+					result.min = min;
+				}
+				if (Number.isFinite(max)) {
+					result.max = max;
+				}
+
+				return result;
+			},
+			setVal: function (val) {
+				val = val || {};
+				this.element._min.value = typeof val.min !== 'undefined' ? val.min : '';
+				this.element._max.value = typeof val.max !== 'undefined' ? val.max : '';
+			},
+			enable: function () {
+				this.element._min.disabled = false;
+				this.element._max.disabled = false;
+			},
+			disable: function () {
+				this.element._min.disabled = true;
+				this.element._max.disabled = true;
+			}
+		};
+	};
+
+	var ruleFormConfigCache = null;
+
+	var getRuleFormConfig = function _getRuleFormConfig() {
+		var xhr;
+
+		if (ruleFormConfigCache !== null) {
+			return ruleFormConfigCache;
+		}
+
+		ruleFormConfigCache = {};
+
+		try {
+			xhr = new XMLHttpRequest();
+			xhr.open('GET', './api/config.json', false);
+			xhr.send(null);
+
+			if (xhr.status >= 200 && xhr.status < 300 && xhr.responseText) {
+				ruleFormConfigCache = JSON.parse(xhr.responseText);
+			}
+		} catch (e) {
+			console.warn('config load failed for rule form', e);
+		}
+
+		return ruleFormConfigCache;
+	};
+
+	var getRecordedDirSelectItems = function _getRecordedDirSelectItems(config) {
+		var items = [
+			{
+				label: 'デフォルト',
+				value: ''
+			}
+		];
+		var dirs = config && config.recordedDirs;
+
+		if (Object.prototype.toString.call(dirs) === '[object Array]') {
+			dirs.each(function (dir) {
+				var id = dir && typeof dir.id !== 'undefined' ? String(dir.id) : '';
+				var name = dir && dir.name ? String(dir.name) : id;
+				var path = dir && dir.path ? String(dir.path) : '';
+
+				if (id === '') {
+					return;
+				}
+
+				items.push({
+					label: path ? name + ' - ' + path : name,
+					value: id
+				});
+			});
+		}
+
+		return items;
+	};
+
+	var formInputTypeRecordedDir = function _formInputTypeRecordedDir(recordedDirId, config) {
+		return {
+			create: function () {
+				var select = new Element('select').setStyle({ width: '100%' });
+				var items = getRecordedDirSelectItems(config);
+				var current = typeof recordedDirId === 'string' ? recordedDirId : '';
+
+				items.each(function (item) {
+					var option = new Element('option', { value: item.value });
+					option.appendChild(document.createTextNode(item.label));
+
+					if (item.value === current) {
+						option.selected = true;
+					}
+
+					select.insert(option);
+				});
+
+				return select;
+			},
+			getVal: function () {
+				return this.element.value || '';
+			},
+			setVal: function (val) {
+				this.element.value = val || '';
+			},
+			enable: function () {
+				this.element.disabled = false;
+			},
+			disable: function () {
+				this.element.disabled = true;
+			}
+		};
+	};
+
+	var cleanupRuleQuery = function _cleanupRuleQuery(query) {
+		var i;
+
+		query = query || {};
+
+		if (query.duration) {
+			if (!query.duration.min) {
+				delete query.duration.min;
+			}
+			if (!query.duration.max) {
+				delete query.duration.max;
+			}
+			if (!query.duration.min && !query.duration.max) {
+				delete query.duration;
+			}
+		}
+
+		if (!query.recordedDirId) {
+			delete query.recordedDirId;
+		}
+
+		if (!query.recorded_format) {
+			delete query.recorded_format;
+		}
+
+		for (i in query) {
+			if (typeof query[i] === 'object' && query[i].length === 0) {
+				delete query[i];
+			}
+		}
+
+		return query;
+	};
+
+
 	var util = chinachu.util = {};
 
 	/** section: util
@@ -1612,9 +1848,19 @@
 					onSuccess: function (t) {
 
 						var rule = t.responseJSON;
+						var configData = getRuleFormConfig();
 
 						var form = flagrate.createForm({
 							fields: [
+								{
+									key   : 'isEnabled',
+									label : 'ルールの状態',
+									input : {
+										type : 'checkbox',
+										label: '有効にする',
+										val  : !rule.isDisabled
+									}
+								},
 								{
 									key  : 'types',
 									label: 'タイプ',
@@ -1673,49 +1919,17 @@
 									}
 								},
 								{
-									key  : 'start',
-									point: '/hour/start',
-									label: '何時から',
+									key  : 'hour',
+									label: '時間帯',
 									input: {
-										type     : 'number',
-										style    : { width: '60px' },
-										maxLength: 2,
-										max      : 24,
-										min      : 0,
-										val      : !!rule.hour ? rule.hour.start : 0
+										type : formInputTypeHourRange(rule.hour)
 									}
 								},
 								{
-									key   : 'end',
-									point : '/hour/end',
-									label : '何時まで',
-									input : {
-										type     : 'number',
-										style    : { width: '60px' },
-										maxLength: 2,
-										max      : 24,
-										min      : 0,
-										val      : !!rule.hour ? rule.hour.end : 24
-									}
-								},
-								{
-									key  : 'mini',
-									point: '/duration/min',
-									label: '最短長さ(秒)',
+									key  : 'duration',
+									label: '長さ(秒)',
 									input: {
-										type : 'number',
-										style: { width: '80px' },
-										val  : !!rule.duration ? rule.duration.min : void 0
-									}
-								},
-								{
-									key   : 'maxi',
-									point: '/duration/max',
-									label : '最長長さ(秒)',
-									input : {
-										type : 'number',
-										style: { width: '80px' },
-										val  : !!rule.duration ? rule.duration.max : void 0
+										type : formInputTypeDurationRange(rule.duration)
 									}
 								},
 								{
@@ -1755,6 +1969,14 @@
 									}
 								},
 								{
+									key  : 'recordedDirId',
+									label: '録画保存先',
+									input: {
+										type : formInputTypeRecordedDir(rule.recordedDirId, configData),
+										style: { width: '100%' }
+									}
+								},
+								{
 									key	: 'recorded_format',
 									label	: '録画ファイル名フォーマット',
 									input	: {
@@ -1770,15 +1992,6 @@
 										type : 'checkbox',
 										label: '末尾切れを許可する',
 										val  : rule.allowEndLack === true
-									}
-								},
-								{
-									key   : 'isEnabled',
-									label : 'ルールの状態',
-									input : {
-										type : 'checkbox',
-										label: '有効にする',
-										val  : !rule.isDisabled
 									}
 								}
 							]
@@ -1796,22 +2009,7 @@
 
 										var query = form.getResult();
 
-										if (!query.duration.min) {
-											delete query.duration.min;
-										}
-										if (!query.duration.max) {
-											delete query.duration.max;
-										}
-										if (!query.duration.min && !query.duration.max) {
-											delete query.duration;
-										}
-
-										var i;
-										for (i in query) {
-											if (typeof query[i] === 'object' && query[i].length === 0) {
-												delete query[i];
-											}
-										}
+										cleanupRuleQuery(query);
 
 										console.log(query);
 
@@ -1869,8 +2067,18 @@
 					text : '不正なアクセスです。'
 				}).show();
 			} else {
+				var configData = getRuleFormConfig();
 				var form = flagrate.createForm({
 					fields: [
+						{
+							key   : 'isEnabled',
+							label : 'ルールの状態',
+							input : {
+								type : 'checkbox',
+								label: '有効にする',
+								val  : true
+							}
+						},
 						{
 							key  : 'types',
 							label: 'タイプ',
@@ -1923,47 +2131,17 @@
 							}
 						},
 						{
-							key  : 'start',
-							point: '/hour/start',
-							label: '何時から',
+							key  : 'hour',
+							label: '時間帯',
 							input: {
-								type     : 'number',
-								style    : { width: '60px' },
-								maxLength: 2,
-								max      : 24,
-								min      : 0,
-								val      : 0
+								type : formInputTypeHourRange({ start: 0, end: 24 })
 							}
 						},
 						{
-							key   : 'end',
-							point : '/hour/end',
-							label : '何時まで',
-							input : {
-								type     : 'number',
-								style    : { width: '60px' },
-								maxLength: 2,
-								max      : 24,
-								min      : 0,
-								val      : 24
-							}
-						},
-						{
-							key  : 'mini',
-							point: '/duration/min',
-							label: '最短長さ(秒)',
+							key  : 'duration',
+							label: '長さ(秒)',
 							input: {
-								type : 'number',
-								style: { width: '80px' }
-							}
-						},
-						{
-							key   : 'maxi',
-							point: '/duration/max',
-							label : '最長長さ(秒)',
-							input : {
-								type : 'number',
-								style: { width: '80px' }
+								type : formInputTypeDurationRange({})
 							}
 						},
 						{
@@ -1999,6 +2177,14 @@
 							}
 						},
 						{
+							key  : 'recordedDirId',
+							label: '録画保存先',
+							input: {
+								type : formInputTypeRecordedDir('', configData),
+								style: { width: '100%' }
+							}
+						},
+						{
 							key	: 'recorded_format',
 							label	: '録画ファイル名フォーマット',
 							input	: {
@@ -2013,15 +2199,6 @@
 								type : 'checkbox',
 								label: '末尾切れを許可する',
 								val  : false
-							}
-						},
-						{
-							key   : 'isEnabled',
-							label : 'ルールの状態',
-							input : {
-								type : 'checkbox',
-								label: '有効にする',
-								val  : true
 							}
 						}
 					]
@@ -2039,22 +2216,7 @@
 
 								var query = form.getResult();
 
-								if (!query.duration.min) {
-									delete query.duration.min;
-								}
-								if (!query.duration.max) {
-									delete query.duration.max;
-								}
-								if (!query.duration.min && !query.duration.max) {
-									delete query.duration;
-								}
-
-								var i;
-								for (i in query) {
-									if (typeof query[i] === 'object' && query[i].length === 0) {
-										delete query[i];
-									}
-								}
+								cleanupRuleQuery(query);
 
 								console.log(query);
 
@@ -2110,9 +2272,19 @@
 				}).show();
 			} else {
 				var program = this.program;
+				var configData = getRuleFormConfig();
 
 				var form = flagrate.createForm({
 					fields: [
+						{
+							key   : 'isEnabled',
+							label : 'ルールの状態',
+							input : {
+								type : 'checkbox',
+								label: '有効にする',
+								val  : true
+							}
+						},
 						{
 							key  : 'types',
 							label: 'タイプ',
@@ -2168,47 +2340,17 @@
 							}
 						},
 						{
-							key  : 'start',
-							point: '/hour/start',
-							label: '何時から',
+							key  : 'hour',
+							label: '時間帯',
 							input: {
-								type     : 'number',
-								style    : { width: '60px' },
-								maxLength: 2,
-								max      : 24,
-								min      : 0,
-								val      : 0
+								type : formInputTypeHourRange({ start: 0, end: 24 })
 							}
 						},
 						{
-							key   : 'end',
-							point : '/hour/end',
-							label : '何時まで',
-							input : {
-								type     : 'number',
-								style    : { width: '60px' },
-								maxLength: 2,
-								max      : 24,
-								min      : 0,
-								val      : 24
-							}
-						},
-						{
-							key  : 'mini',
-							point: '/duration/min',
-							label: '最短長さ(秒)',
+							key  : 'duration',
+							label: '長さ(秒)',
 							input: {
-								type : 'number',
-								style: { width: '80px' }
-							}
-						},
-						{
-							key   : 'maxi',
-							point: '/duration/max',
-							label : '最長長さ(秒)',
-							input : {
-								type : 'number',
-								style: { width: '80px' }
+								type : formInputTypeDurationRange({})
 							}
 						},
 						{
@@ -2245,6 +2387,14 @@
 							}
 						},
 						{
+							key  : 'recordedDirId',
+							label: '録画保存先',
+							input: {
+								type : formInputTypeRecordedDir('', configData),
+								style: { width: '100%' }
+							}
+						},
+						{
 							key	: 'recorded_format',
 							label	: '録画ファイル名フォーマット',
 							input	: {
@@ -2259,15 +2409,6 @@
 								type : 'checkbox',
 								label: '末尾切れを許可する',
 								val  : false
-							}
-						},
-						{
-							key   : 'isEnabled',
-							label : 'ルールの状態',
-							input : {
-								type : 'checkbox',
-								label: '有効にする',
-								val  : true
 							}
 						}
 					]
@@ -2285,22 +2426,7 @@
 
 								var query = form.getResult();
 
-								if (!query.duration.min) {
-									delete query.duration.min;
-								}
-								if (!query.duration.max) {
-									delete query.duration.max;
-								}
-								if (!query.duration.min && !query.duration.max) {
-									delete query.duration;
-								}
-
-								var i;
-								for (i in query) {
-									if (typeof query[i] === 'object' && query[i].length === 0) {
-										delete query[i];
-									}
-								}
+								cleanupRuleQuery(query);
 
 								console.log(query);
 

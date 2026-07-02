@@ -21,11 +21,26 @@ const path = require('path');
 const fs = require('fs');
 const util = require('util');
 
+function formatJstLogTime() {
+	const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
+	const yyyy = d.getUTCFullYear().toString();
+	const mm = (d.getUTCMonth() + 1).toString().padStart(2, '0');
+	const dd = d.getUTCDate().toString().padStart(2, '0');
+	const hh = d.getUTCHours().toString().padStart(2, '0');
+	const ii = d.getUTCMinutes().toString().padStart(2, '0');
+	const ss = d.getUTCSeconds().toString().padStart(2, '0');
+
+	return yyyy + '/' + mm + '/' + dd + ' ' + hh + ':' + ii + ':' + ss;
+}
+
+function schedulerLog() {
+	console.log(formatJstLogTime() + ' - ' + Array.prototype.join.call(arguments, ' '));
+}
+
 // Node.js 24 では util.log が存在しないため、旧Chinachu互換のログ関数を補う
+// 既存の util.log がある環境では上書きしない
 if (typeof util.log !== 'function') {
-	util.log = function () {
-		console.log(new Date().toISOString() + ' - ' + Array.prototype.join.call(arguments, ' '));
-	};
+	util.log = schedulerLog;
 }
 const child_process = require('child_process');
 
@@ -91,11 +106,11 @@ if (fs.existsSync(SCHEDULE_DATA_FILE)) {
 		schedule = JSON.parse(fs.readFileSync(SCHEDULE_DATA_FILE, { encoding: 'utf8' }));
 
 		if (schedule instanceof Array === false) {
-			util.log('WARNING: `' + SCHEDULE_DATA_FILE + '`の内容が不正です');
+			schedulerLog('WARNING: `' + SCHEDULE_DATA_FILE + '`の内容が不正です');
 			schedule = [];
 		}
 	} catch (e) {
-		util.log('WARNING: `' + SCHEDULE_DATA_FILE + '`のロードに失敗しました');
+		schedulerLog('WARNING: `' + SCHEDULE_DATA_FILE + '`のロードに失敗しました');
 		schedule = [];
 	}
 }
@@ -111,7 +126,7 @@ function deletePidFile() {
 			fs.unlinkSync(PID_FILE);
 		}
 	} catch (e) {
-		util.log('WARNING: `' + PID_FILE + '`の削除に失敗しました: ' + e.message);
+		schedulerLog('WARNING: `' + PID_FILE + '`の削除に失敗しました: ' + e.message);
 	}
 }
 
@@ -123,7 +138,7 @@ function isRunning(callback) {
 		pid = pid.trim();
 
 		if (/^[0-9]+$/.test(pid) === false) {
-			util.log('WARNING: `' + PID_FILE + '`の内容が不正です');
+			schedulerLog('WARNING: `' + PID_FILE + '`の内容が不正です');
 			deletePidFile();
 			callback(false);
 			return void 0;
@@ -174,7 +189,7 @@ function readJsonArray(file, options) {
 		if (options.createIfMissing) {
 			fs.mkdirSync(path.dirname(file), { recursive: true });
 			fs.writeFileSync(file, '[]');
-			util.log('INIT JSON: ' + file);
+			schedulerLog('INIT JSON: ' + file);
 		}
 
 		return [];
@@ -185,7 +200,7 @@ function readJsonArray(file, options) {
 		data = JSON.parse(text || '[]');
 	} catch (e) {
 		if (options.allowInvalid) {
-			util.log('WARNING: `' + file + '`のロードに失敗しました: ' + e.message);
+			schedulerLog('WARNING: `' + file + '`のロードに失敗しました: ' + e.message);
 			return [];
 		}
 
@@ -194,7 +209,7 @@ function readJsonArray(file, options) {
 
 	if (data instanceof Array === false) {
 		if (options.allowInvalid) {
-			util.log('WARNING: `' + file + '`の内容が配列ではありません');
+			schedulerLog('WARNING: `' + file + '`の内容が配列ではありません');
 			return [];
 		}
 
@@ -227,8 +242,55 @@ function normalizeAllowEndLack(value) {
 	return value === true;
 }
 
+// (function) normalize recorded directory path
+function normalizeRecordedDir(dir) {
+	dir = String(dir || '').trim();
+
+	if (dir === '') {
+		return '';
+	}
+
+	return dir.replace(/\/+$/, '') + '/';
+}
+
+// (function) resolve recorded directory from config.recordedDirs
+function resolveRecordedDir(recordedDirId) {
+	var dirs = config.recordedDirs;
+	var i;
+	var dir;
+
+	recordedDirId = String(recordedDirId || '').trim();
+
+	if (recordedDirId === '') {
+		return '';
+	}
+
+	if (dirs instanceof Array === false) {
+		return '';
+	}
+
+	for (i = 0; i < dirs.length; i++) {
+		dir = dirs[i];
+
+		if (!dir || String(dir.id || '') !== recordedDirId) {
+			continue;
+		}
+
+		if (typeof dir.path === 'string' && dir.path.trim() !== '') {
+			return normalizeRecordedDir(dir.path);
+		}
+
+		return '';
+	}
+
+	return '';
+}
+
 // (function) apply reserve option from matched rule
 function applyRuleReserveOptions(reserve, rule, fallbackRuleId) {
+	var recordedDirId;
+	var recordedDir;
+
 	if (!reserve || !rule) {
 		return;
 	}
@@ -238,6 +300,19 @@ function applyRuleReserveOptions(reserve, rule, fallbackRuleId) {
 
 	if (typeof rule.recorded_format !== 'undefined') {
 		reserve.recordedFormat = rule.recorded_format;
+	}
+
+	if (typeof rule.recordedDirId === 'string' && rule.recordedDirId.trim() !== '') {
+		recordedDirId = rule.recordedDirId.trim();
+		recordedDir = resolveRecordedDir(recordedDirId);
+
+		reserve.recordedDirId = recordedDirId;
+
+		if (recordedDir !== '') {
+			reserve.recordedDir = recordedDir;
+		} else {
+			schedulerLog('WARNING: recordedDirId `' + recordedDirId + '` was not found or invalid. fallback to default recordedDir.');
+		}
 	}
 }
 
@@ -286,7 +361,7 @@ function remakeReserves2(currentReserves2, activeReserves, now) {
 	var threshold = keepMillis > 0 ? now - keepMillis : 0;
 	var map = {};
 
-	util.log('RESERVES2 RETENTION DAYS: ' + (keepDays > 0 ? keepDays : 'disabled'));
+	schedulerLog('RESERVES2 RETENTION DAYS: ' + (keepDays > 0 ? keepDays : 'disabled'));
 
 	/*
 	 * reserves2 の扱い:
@@ -353,7 +428,7 @@ function remakeReserves2(currentReserves2, activeReserves, now) {
 
 // (function) remake reserves
 function outputReserves() {
-	util.log('WRITE: ' + RESERVES_DATA_FILE);
+	schedulerLog('WRITE: ' + RESERVES_DATA_FILE);
 
 	var now = new Date().getTime();
 	var array = [];
@@ -369,15 +444,46 @@ function outputReserves() {
 
 	// reserves2 は副次出力。失敗しても本体の reserves.json 更新と後続フックを止めない
 	try {
-		util.log('WRITE: ' + RESERVES2_DATA_FILE);
+		schedulerLog('WRITE: ' + RESERVES2_DATA_FILE);
 
 		var currentReserves2 = readJsonArray(RESERVES2_DATA_FILE, { createIfMissing: true });
 		var reserves2Array = remakeReserves2(currentReserves2, array, now);
 
 		writeJsonAtomic(RESERVES2_DATA_FILE, reserves2Array);
 	} catch (e) {
-		util.log('WARNING: `' + RESERVES2_DATA_FILE + '`の保存に失敗しました: ' + (e && e.stack ? e.stack : e));
+		schedulerLog('WARNING: `' + RESERVES2_DATA_FILE + '`の保存に失敗しました: ' + (e && e.stack ? e.stack : e));
 	}
+}
+
+// (function) emit child process output with scheduler timestamp
+function emitChildProcessOutput(commandProcess, prefix) {
+	var stdoutLines;
+	var stderrLines;
+
+	if (!commandProcess) {
+		return;
+	}
+
+	stdoutLines = String(commandProcess.stdout || '').split(/\r?\n/).map(function (line) {
+		return line.trim();
+	}).filter(Boolean);
+
+	stderrLines = String(commandProcess.stderr || '').split(/\r?\n/).map(function (line) {
+		return line.trim();
+	}).filter(Boolean);
+
+	stdoutLines.forEach(function (line) {
+		if (/^saved:\s*/.test(line)) {
+			schedulerLog((prefix || 'CHILD') + ' WRITE: ' + line.replace(/^saved:\s*/, ''));
+			return;
+		}
+
+		schedulerLog((prefix || 'CHILD') + ': ' + line);
+	});
+
+	stderrLines.forEach(function (line) {
+		schedulerLog((prefix || 'CHILD') + ' STDERR: ' + line);
+	});
 }
 
 // (function) update match ledger
@@ -389,7 +495,7 @@ function updateMatchLedger() {
 
 	try {
 		if (!fs.existsSync(appMatchingFile)) {
-			util.log('WARNING: `' + appMatchingFile + '`が存在しないため match.json 更新をスキップしました');
+			schedulerLog('WARNING: `' + appMatchingFile + '`が存在しないため match.json 更新をスキップしました');
 			return;
 		}
 
@@ -397,7 +503,7 @@ function updateMatchLedger() {
 		readJsonArray(RESERVES2_DATA_FILE, { createIfMissing: true });
 		readJsonArray(matchDataFile, { createIfMissing: true });
 
-		util.log('RUN: ' + appMatchingFile);
+		schedulerLog('RUN: ' + appMatchingFile);
 
 		commandProcess = child_process.spawnSync(process.execPath, [
 			appMatchingFile,
@@ -407,18 +513,21 @@ function updateMatchLedger() {
 			'--config', CONFIG_FILE
 		], {
 			cwd: __dirname,
-			stdio: 'inherit'
+			encoding: 'utf8',
+			stdio: [ 'ignore', 'pipe', 'pipe' ]
 		});
+
+		emitChildProcessOutput(commandProcess, 'MATCH');
 
 		if (commandProcess.error) {
 			throw commandProcess.error;
 		}
 
 		if (commandProcess.status !== 0) {
-			util.log('WARNING: match.json の更新に失敗しました: exit status=' + commandProcess.status);
+			schedulerLog('WARNING: match.json の更新に失敗しました: exit status=' + commandProcess.status);
 		}
 	} catch (e) {
-		util.log('WARNING: match.json の更新に失敗しました: ' + (e && e.stack ? e.stack : e));
+		schedulerLog('WARNING: match.json の更新に失敗しました: ' + (e && e.stack ? e.stack : e));
 	}
 }
 
@@ -426,7 +535,7 @@ function updateMatchLedger() {
 function runEpgEndCommand() {
 	if (config.epgEndCommand) {
 		const commandProcess = child_process.spawn(config.epgEndCommand, [process.pid, RULES_FILE, RESERVES_DATA_FILE, SCHEDULE_DATA_FILE]);
-		util.log('SPAWN: ' + config.epgEndCommand + ' (pid=' + commandProcess.pid + ')');
+		schedulerLog('SPAWN: ' + config.epgEndCommand + ' (pid=' + commandProcess.pid + ')');
 	}
 }
 
@@ -436,13 +545,13 @@ function scheduler() {
 	var i, j, k, l, a;
 	var commandProcess;
 
-	util.log('RUNNING SCHEDULER.');
+	schedulerLog('RUNNING SCHEDULER.');
 
 	// schedulerStartフック
 	if (!opts.get('s')) {
 		if (config.schedulerStartCommand) {
 			commandProcess = child_process.spawnSync(config.schedulerStartCommand, [process.pid, RULES_FILE, RESERVES_DATA_FILE, SCHEDULE_DATA_FILE]);
-			util.log('SPAWN: ' + config.schedulerStartCommand + ' (pid=' + commandProcess.pid + ')');
+			schedulerLog('SPAWN: ' + config.schedulerStartCommand + ' (pid=' + commandProcess.pid + ')');
 		}
 	}
 
@@ -451,7 +560,7 @@ function scheduler() {
 	schedule.forEach(function (ch) {
 		ch.programs.forEach(function (p) {
 			if (idMap[p.id]) {
-				util.log('**WARNING**: ' + p.id + ' is duplicated!');
+				schedulerLog('**WARNING**: ' + p.id + ' is duplicated!');
 				console.log(JSON.stringify(idMap[p.id], null, '  '), JSON.stringify(p, null, '  '));
 			} else {
 				idMap[p.id] = p;
@@ -473,7 +582,7 @@ function scheduler() {
 		});
 	});
 
-	util.log('TUNERS: ' + JSON.stringify(typeNum));
+	schedulerLog('TUNERS: ' + JSON.stringify(typeNum));
 
 	// matching
 	var matches = [];
@@ -493,7 +602,7 @@ function scheduler() {
 				for (i = 0, l = matches.length; i < l; i++) {
 					if (matches[i].id === reserve.id) {
 						// ルールと重複していた場合、ルール予約が手動予約に優先するよう、matchesにpushせずreturnする
-						util.log('OVERRIDEBYRULE: ' + reserve.id + ' ' + dateFormat(new Date(reserve.start), 'isoDateTime') + ' [' + reserve.channel.name + '] ' + reserve.title);
+						schedulerLog('OVERRIDEBYRULE: ' + reserve.id + ' ' + dateFormat(new Date(reserve.start), 'isoDateTime') + ' [' + reserve.channel.name + '] ' + reserve.title);
 						return;
 					}
 				}
@@ -543,7 +652,7 @@ function scheduler() {
 			// 最終的にsidの若い方を選択させる
 			if (parseInt(a.channel.sid, 10) < parseInt(b.channel.sid, 10)) { continue; }
 
-			util.log('DUPLICATE: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
+			schedulerLog('DUPLICATE: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
 			a.isDuplicate = true;
 
 			++duplicateCount;
@@ -586,13 +695,13 @@ function scheduler() {
 		if (!a.isConflict) {
 			continue;
 		} else {
-			util.log('!CONFLICT: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
+			schedulerLog('!CONFLICT: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
 
 			++conflictCount;
 			// conflict フック
 			if (config.conflictCommand) {
 				commandProcess = child_process.spawn(config.conflictCommand, [process.pid, a.id, dateFormat(new Date(a.start), 'isoDateTime'), a.channel.name, a.title, JSON.stringify(a)]);
-				util.log('SPAWN: ' + config.conflictCommand + ' (pid=' + commandProcess.pid + ')');
+				schedulerLog('SPAWN: ' + config.conflictCommand + ' (pid=' + commandProcess.pid + ')');
 			}
 		}
 	}
@@ -619,10 +728,10 @@ function scheduler() {
 			reserves.push(a);
 
 			if (a.isSkip) {
-				util.log('!!!SKIP: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
+				schedulerLog('!!!SKIP: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
 				++skipCount;
 			} else if (!a.isConflict) {
-				util.log('RESERVE: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
+				schedulerLog('RESERVE: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
 				++reservedCount;
 			} else {
 				// 競合したときのログは既に出力済み
@@ -632,11 +741,11 @@ function scheduler() {
 
 
 	// results
-	util.log('MATCHES: ' + matches.length.toString(10));
-	util.log('DUPLICATES: ' + duplicateCount.toString(10));
-	util.log('CONFLICTS: ' + conflictCount.toString(10));
-	util.log('SKIPS: ' + skipCount.toString(10));
-	util.log('RESERVES: ' + reservedCount.toString(10));
+	schedulerLog('MATCHES: ' + matches.length.toString(10));
+	schedulerLog('DUPLICATES: ' + duplicateCount.toString(10));
+	schedulerLog('CONFLICTS: ' + conflictCount.toString(10));
+	schedulerLog('SKIPS: ' + skipCount.toString(10));
+	schedulerLog('RESERVES: ' + reservedCount.toString(10));
 
 	if (!opts.get('s')) {
 		outputReserves();
@@ -644,7 +753,7 @@ function scheduler() {
 		// schedulerEnd フック
 		if (config.schedulerEndCommand) {
 			commandProcess = child_process.spawn(config.schedulerEndCommand, [process.pid, RULES_FILE, RESERVES_DATA_FILE, SCHEDULE_DATA_FILE, matches.length.toString(10), duplicateCount.toString(10), conflictCount.toString(10), skipCount.toString(10), reservedCount.toString(10)]);
-			util.log('SPAWN: ' + config.schedulerEndCommand + ' (pid=' + commandProcess.pid + ')');
+			schedulerLog('SPAWN: ' + config.schedulerEndCommand + ' (pid=' + commandProcess.pid + ')');
 		}
 	}
 
@@ -811,7 +920,7 @@ function writeOut(s, callback) {
 
 	if (!opts.get('s')) {
 		fs.writeFileSync(SCHEDULE_DATA_FILE, JSON.stringify(schedule));
-		util.log('WRITE: ' + SCHEDULE_DATA_FILE);
+		schedulerLog('WRITE: ' + SCHEDULE_DATA_FILE);
 	}
 
 	callback();
@@ -822,7 +931,7 @@ function getEpgFromMirakurun(path) {
 
 	child_process.execSync('renice -n 19 -p ' + process.pid);
 
-	util.log('GETTING EPG from Mirakurun.');
+	schedulerLog('GETTING EPG from Mirakurun.');
 
 	// new schedule
 	const s = [];
@@ -832,8 +941,8 @@ function getEpgFromMirakurun(path) {
 	mirakurun.getServices()
 		.then(services => {
 
-			util.log('Mirakurun is OK.');
-			util.log('Mirakurun -> services: ' + services.length);
+			schedulerLog('Mirakurun is OK.');
+			schedulerLog('Mirakurun -> services: ' + services.length);
 
 			const excludeServices = config.excludeServices || [];
 			for (let i = 0; i < services.length; i++) {
@@ -843,7 +952,7 @@ function getEpgFromMirakurun(path) {
 				}
 			}
 
-			util.log('Mirakurun -> services: ' + services.length + ' (excluded)');
+			schedulerLog('Mirakurun -> services: ' + services.length + ' (excluded)');
 
 			const serviceOrder = config.serviceOrder || [];
 			let insertCount = 0;
@@ -856,7 +965,7 @@ function getEpgFromMirakurun(path) {
 				}
 			});
 
-			util.log('Mirakurun -> sorted services: ' + insertCount);
+			schedulerLog('Mirakurun -> sorted services: ' + insertCount);
 
 			channels = services.map((service, i) => {
 				return {
@@ -878,7 +987,7 @@ function getEpgFromMirakurun(path) {
 		})
 		.then(programs => {
 
-			util.log('Mirakurun -> programs: ' + programs.length);
+			schedulerLog('Mirakurun -> programs: ' + programs.length);
 
 			channels.forEach(channel => {
 				mirakurunProgramsToLegacyPrograms(channel, programs);
@@ -890,7 +999,7 @@ function getEpgFromMirakurun(path) {
 
 			tuners = _tuners;
 
-			util.log('Mirakurun -> tuners: ' + tuners.length);
+			schedulerLog('Mirakurun -> tuners: ' + tuners.length);
 
 			writeOut(channels, function () {
 				runEpgEndCommand();
@@ -899,7 +1008,7 @@ function getEpgFromMirakurun(path) {
 		})
 		.catch(e => {
 
-			util.log('Mirakurun -> Error:');
+			schedulerLog('Mirakurun -> Error:');
 			console.error(e);
 			process.exit(1);
 		});
@@ -972,7 +1081,7 @@ isRunning(running => {
 		// EPGデータを取得または番組表を読み込む
 		if (config.epgStartCommand) {
 			const commandProcess = child_process.spawnSync(config.epgStartCommand, [process.pid, RULES_FILE, RESERVES_DATA_FILE, SCHEDULE_DATA_FILE]);
-			util.log('SPAWN: ' + config.epgStartCommand + ' (pid=' + commandProcess.pid + ')');
+			schedulerLog('SPAWN: ' + config.epgStartCommand + ' (pid=' + commandProcess.pid + ')');
 		}
 
 		getEpgFromMirakurun(mirakurunPath);

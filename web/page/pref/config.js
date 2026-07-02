@@ -354,6 +354,178 @@ P = Class.create(P, {
 		return textarea;
 	},
 
+	getMirakurunBrowserPath: function _getMirakurunBrowserPath(path) {
+		path = path || '';
+
+		if (/^http\+unix:\/\//.test(path)) {
+			return location.protocol + '//' + location.hostname + ':40772/';
+		}
+
+		if (/^http:\/\/(?:127\.0\.0\.1|localhost)(?::40772)?\//.test(path)) {
+			return location.protocol + '//' + location.hostname + ':40772/';
+		}
+
+		return path.replace(/\/?$/, '/');
+	},
+
+
+	createRecordedDirsEditor: function _createRecordedDirsEditor() {
+		var wrapper = new Element('div', { className: 'config2-recorded-dirs-editor' }).setStyle({
+			marginBottom: '8px',
+			padding: '8px',
+			border: '1px solid #ddd',
+			background: '#fafafa',
+			borderRadius: '3px',
+			boxSizing: 'border-box'
+		});
+		var title = new Element('div').setStyle({
+			fontWeight: 'bold',
+			marginBottom: '4px'
+		}).update('追加録画先候補');
+		var note = new Element('div').setStyle({
+			fontSize: '12px',
+			color: '#666',
+			lineHeight: '1.5',
+			marginBottom: '6px'
+		}).update('recordedDir とは別に、ルール側で選択できる追加録画先候補を登録します。IDは英数字・ハイフン・アンダースコア推奨です。未使用の場合は空欄のままで保存できます。');
+		var table = new Element('table', { className: 'config2-recorded-dirs-table' }).setStyle({
+			width: '100%',
+			borderCollapse: 'separate',
+			borderSpacing: '4px',
+			tableLayout: 'fixed'
+		});
+		var thead = new Element('thead');
+		var tbody = new Element('tbody');
+		var addButton = new Element('button', { type: 'button' }).update('保存先を追加').setStyle({
+			marginTop: '4px'
+		});
+		var dirs = this.data.config.recordedDirs;
+
+		thead.insert(new Element('tr')
+			.insert(new Element('th').setStyle({ width: '44px', textAlign: 'left', fontWeight: 'normal', color: '#666' }).update('番号'))
+			.insert(new Element('th').setStyle({ width: '120px', textAlign: 'left', fontWeight: 'normal', color: '#666' }).update('ID'))
+			.insert(new Element('th').setStyle({ width: '180px', textAlign: 'left', fontWeight: 'normal', color: '#666' }).update('表示名'))
+			.insert(new Element('th').setStyle({ textAlign: 'left', fontWeight: 'normal', color: '#666' }).update('パス'))
+			.insert(new Element('th').setStyle({ width: '54px', textAlign: 'left', fontWeight: 'normal', color: '#666' }).update('操作')));
+
+		table.insert(thead);
+		table.insert(tbody);
+
+		if (Object.isArray(dirs) && dirs.length > 0) {
+			dirs.each(function (dir) {
+				this.addRecordedDirRow(tbody, dir || {});
+			}.bind(this));
+		} else {
+			this.addRecordedDirRow(tbody, {});
+		}
+
+		addButton.observe('click', function () {
+			this.addRecordedDirRow(tbody, {});
+			this.updateRecordedDirRowNumbers(tbody);
+			this.updateRawPreview();
+		}.bind(this));
+
+		wrapper.insert(title);
+		wrapper.insert(note);
+		wrapper.insert(table);
+		wrapper.insert(addButton);
+		this.updateRecordedDirRowNumbers(tbody);
+		return wrapper;
+	},
+
+	addRecordedDirRow: function _addRecordedDirRow(tbody, dir) {
+		var row = new Element('tr', { className: 'config2-recorded-dir-row' });
+		var noCell = new Element('td', { className: 'config2-recorded-dir-no' }).setStyle({ color: '#333', fontWeight: 'bold' });
+		var idInput = new Element('input', { type: 'text', placeholder: 'recorded1' }).setStyle({ width: '100%', boxSizing: 'border-box' });
+		var nameInput = new Element('input', { type: 'text', placeholder: '録画先1' }).setStyle({ width: '100%', boxSizing: 'border-box' });
+		var pathInput = new Element('input', { type: 'text', placeholder: '/mnt/hdd1/recorded1' }).setStyle({ width: '100%', boxSizing: 'border-box' });
+		var removeButton = new Element('button', { type: 'button' }).update('削除');
+		var updatePreview = function () {
+			this.updateRawPreview();
+		}.bind(this);
+
+		idInput.addClassName('config2-recorded-dir-id');
+		nameInput.addClassName('config2-recorded-dir-name');
+		pathInput.addClassName('config2-recorded-dir-path');
+
+		idInput.value = dir && typeof dir.id !== 'undefined' ? String(dir.id) : '';
+		nameInput.value = dir && typeof dir.name !== 'undefined' ? String(dir.name) : '';
+		pathInput.value = dir && typeof dir.path !== 'undefined' ? String(dir.path) : '';
+
+		[idInput, nameInput, pathInput].each(function (input) {
+			input.observe('change', updatePreview);
+			input.observe('keyup', updatePreview);
+		});
+
+		removeButton.observe('click', function () {
+			row.remove();
+			this.updateRecordedDirRowNumbers(tbody);
+			this.updateRawPreview();
+		}.bind(this));
+
+		row.insert(noCell);
+		row.insert(new Element('td').insert(idInput));
+		row.insert(new Element('td').insert(nameInput));
+		row.insert(new Element('td').insert(pathInput));
+		row.insert(new Element('td').insert(removeButton));
+		tbody.insert(row);
+		this.updateRecordedDirRowNumbers(tbody);
+		return row;
+	},
+
+	updateRecordedDirRowNumbers: function _updateRecordedDirRowNumbers(tbody) {
+		var rows = tbody.select('.config2-recorded-dir-row');
+		rows.each(function (row, index) {
+			var no = row.down('.config2-recorded-dir-no');
+			if (no) {
+				no.update(String(index + 1));
+			}
+		});
+	},
+
+	collectRecordedDirs: function _collectRecordedDirs(errors) {
+		var rows = this.view.content.select('.config2-recorded-dir-row');
+		var result = [];
+		var idMap = {};
+
+		rows.each(function (row, index) {
+			var no = index + 1;
+			var idInput = row.down('.config2-recorded-dir-id');
+			var nameInput = row.down('.config2-recorded-dir-name');
+			var pathInput = row.down('.config2-recorded-dir-path');
+			var id = idInput ? String(idInput.value || '').strip() : '';
+			var name = nameInput ? String(nameInput.value || '').strip() : '';
+			var path = pathInput ? String(pathInput.value || '').strip() : '';
+
+			if (!id && !name && !path) {
+				return;
+			}
+
+			if (!id || !name || !path) {
+				errors.push('追加録画先候補 ' + no + ' は ID / 表示名 / パスをすべて入力してください。');
+				return;
+			}
+
+			if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+				errors.push('追加録画先候補 ' + no + ' のIDは英数字・ハイフン・アンダースコアで指定してください。');
+			}
+
+			if (idMap[id]) {
+				errors.push('追加録画先候補のIDが重複しています: ' + id);
+			} else {
+				idMap[id] = true;
+			}
+
+			result.push({
+				id: id,
+				name: name,
+				path: path
+			});
+		});
+
+		return result;
+	},
+
 	createBasicSection: function _createBasicSection() {
 		var panel = this.createPanel('基本設定', 'uid/gid、Mirakurun接続、VAAPIなど。空欄の任意項目は保存時に削除します。');
 		panel.body.insert(this.createFieldRow('uid', 'uid', this.textInput('uid', '220px'), 'rootで起動した場合の降格先uid。'));
@@ -366,11 +538,12 @@ P = Class.create(P, {
 
 	createRecordingSection: function _createRecordingSection() {
 		var panel = this.createPanel('録画設定', '保存先、録画ファイル名、囲み文字置換、Unicode正規化、空き容量処理。');
-		panel.body.insert(this.createFieldRow('recordedDir', 'recordedDir', this.textInput('recordedDir'), '録画保存先。相対パスまたはフルパス。'));
-		panel.body.insert(this.createFieldRow('temporaryDir', 'temporaryDir', this.textInput('temporaryDir'), '録画中や一時処理で使う保存先。recordedDir と分ける場合に指定。'));
+		panel.body.insert(this.createFieldRow('recordedDir', 'recordedDir', this.textInput('recordedDir'), '既存互換のデフォルト録画保存先です。追加録画先候補を登録しても、この値は従来どおり残します。'));
+		panel.body.insert(this.createRecordedDirsEditor());
+		panel.body.insert(this.createFieldRow('temporaryDir', 'temporaryDir', this.textInput('temporaryDir'), '録画中や一時処理で使う保存先。recordedDir と分ける場合に指定。recordedDirs とは別用途です。'));
 		panel.body.insert(this.createFieldRow('recordedFormat', 'recordedFormat', this.textInput('recordedFormat'), '録画ファイル名フォーマット。番組名、日時、チャンネル名などを使った保存名の規則。'));
-		panel.body.insert(this.createFieldRow('recordedNameReplaceEnclosingCharacters', null, this.checkboxInput('recordedNameReplaceEnclosingCharacters'), '録画ファイル名に含まれる番組表の囲み文字を、[字] [再] [新] などの表記へ置き換えます。対象例: 🈑→[字]、🈞→[再]、🈟→[新]、🈡→[終]、🈓→[デ]、🈔→[二]、🈕→[多]、🈖→[解]、🈙→[映]、㊙→[秘]、㊗→[祝] など。録画ファイル名だけに効き、番組データ自体は変更しません。'));
-		panel.body.insert(this.createFieldRow('recordedNameEnclosingCharacterMap', 'recordedNameEnclosingCharacterMap', this.textareaInput('recordedNameEnclosingCharacterMap', 4), '囲み文字置換の追加・上書き用JSONオブジェクトです。空欄の場合は既定の置き換え一覧を使用します。指定したキーは既定値へ追加・上書きされます。例: {"🈑":"[字幕]","SS":"[SS]"}'));
+		panel.body.insert(this.createFieldRow('recordedNameReplaceEnclosingCharacters', null, this.checkboxInput('recordedNameReplaceEnclosingCharacters'), '録画ファイル名に含まれる番組表の囲み文字を、[字] [再] [新] などの表記へ置き換えます。対象例: →[字]、→[再]、→[新]、→[終]、→[デ]、→[二]、→[多]、→[解]、→[映]、㊙→[秘]、㊗→[祝] など。録画ファイル名だけに効き、番組データ自体は変更しません。'));
+		panel.body.insert(this.createFieldRow('recordedNameEnclosingCharacterMap', 'recordedNameEnclosingCharacterMap', this.textareaInput('recordedNameEnclosingCharacterMap', 4), '囲み文字置換の追加・上書き用JSONオブジェクトです。空欄の場合は既定の置き換え一覧を使用します。指定したキーは既定値へ追加・上書きされます。例: {"":"[字幕]","SS":"[SS]"}'));
 		panel.body.insert(this.createFieldRow('recordedCommand', 'recordedCommand', this.textareaInput('recordedCommand', 3), '録画コマンド。空欄ならChinachu標準の録画処理を使用。独自ffmpeg/rivarun等を使う場合のみ指定。'));
 		panel.body.insert(this.createFieldRow('normalizationForm', 'normalizationForm', this.selectInput('normalizationForm', [
 			{ value: 'NFC', label: 'NFC - くっつける・標準' },
@@ -463,7 +636,7 @@ P = Class.create(P, {
 	},
 
 	loadServices: function _loadServices(callback) {
-		var path = String(this.data.config.mirakurunPath || '').replace(/\/$/, '');
+		var path = this.getMirakurunBrowserPath(this.data.config.mirakurunPath).replace(/\/$/, '');
 		if (!path) {
 			flagrate.createModal({ title: 'Mirakurun未設定', text: 'mirakurunPath が未設定です。JSON貼り付けで読み込むか、mirakurunPath を設定してください。' }).open();
 			if (callback) { callback(false); }
@@ -785,7 +958,7 @@ P = Class.create(P, {
 
 
 	createServiceLogo: function _createServiceLogo(svc) {
-		var basePath = String(this.data.config.mirakurunPath || '').replace(/\/$/, '');
+		var basePath = this.getMirakurunBrowserPath(this.data.config.mirakurunPath).replace(/\/$/, '');
 		var box = new Element('span', { className: 'config2-service-logo' }).setStyle({
 			width: '32px',
 			minWidth: '32px',
@@ -936,7 +1109,7 @@ P = Class.create(P, {
 	collectConfig: function _collectConfig() {
 		var config = Object.extend({}, this.data.config || {});
 		var inputs = this.view.content.select('.config2-input');
-		var optionalObjectKeys = {
+		var optionalJsonKeys = {
 			wuiUsers: true,
 			wuiAllowCountries: true,
 			recordedNameEnclosingCharacterMap: true
@@ -976,7 +1149,7 @@ P = Class.create(P, {
 				config[key] = Number(value);
 				return;
 			}
-			if (optionalObjectKeys[key]) {
+			if (optionalJsonKeys[key]) {
 				try {
 					config[key] = value.evalJSON();
 				} catch (e) {
@@ -996,6 +1169,13 @@ P = Class.create(P, {
 				errors.push(key + ' は0以上の整数で指定してください。');
 			}
 		});
+
+		var recordedDirs = this.collectRecordedDirs(errors);
+		if (recordedDirs.length > 0) {
+			config.recordedDirs = recordedDirs;
+		} else {
+			delete config.recordedDirs;
+		}
 
 		if (this.data.services && this.data.services.length > 0) {
 			config.excludeServices = this.data.services.findAll(function (svc) {

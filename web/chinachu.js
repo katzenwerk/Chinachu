@@ -570,6 +570,17 @@
 		});
 	};
 
+	var updateRecordedBadgeFromMatchTimer = function _updateRecordedBadgeFromMatchTimer() {
+		if (document.hidden) {
+			return;
+		}
+
+		updateRecordedBadgeFromMatch();
+	};
+
+	setTimeout(updateRecordedBadgeFromMatch, 0);
+	setInterval(updateRecordedBadgeFromMatchTimer, 1000 * 30);
+
 	document.observe('chinachu:recorded', function (e) {
 		updateRecordedBadgeFromMatch();
 
