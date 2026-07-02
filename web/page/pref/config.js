@@ -540,6 +540,7 @@ P = Class.create(P, {
 		var panel = this.createPanel('録画設定', '保存先、録画ファイル名、囲み文字置換、Unicode正規化、空き容量処理。');
 		panel.body.insert(this.createFieldRow('recordedDir', 'recordedDir', this.textInput('recordedDir'), '既存互換のデフォルト録画保存先です。追加録画先候補を登録しても、この値は従来どおり残します。'));
 		panel.body.insert(this.createRecordedDirsEditor());
+		panel.body.insert(this.createFieldRow('recordedStorageWakeupBeforeSec', 'recordedStorageWakeupBeforeSec', this.numberInput('recordedStorageWakeupBeforeSec'), '録画開始前に録画保存先HDDのスリープ解除を試みる秒数です。0または空欄で無効です。300なら録画開始5分前、600なら10分前に、録画予定ファイル名の末尾へ一時ファイルを作成してすぐ削除します。HDDの起動待ちによる録画冒頭欠けを減らすための設定です。'));
 		panel.body.insert(this.createFieldRow('temporaryDir', 'temporaryDir', this.textInput('temporaryDir'), '録画中や一時処理で使う保存先。recordedDir と分ける場合に指定。recordedDirs とは別用途です。'));
 		panel.body.insert(this.createFieldRow('recordedFormat', 'recordedFormat', this.textInput('recordedFormat'), '録画ファイル名フォーマット。番組名、日時、チャンネル名などを使った保存名の規則。'));
 		panel.body.insert(this.createFieldRow('recordedNameReplaceEnclosingCharacters', null, this.checkboxInput('recordedNameReplaceEnclosingCharacters'), '録画ファイル名に含まれる番組表の囲み文字を、[字] [再] [新] などの表記へ置き換えます。対象例: →[字]、→[再]、→[新]、→[終]、→[デ]、→[二]、→[多]、→[解]、→[映]、㊙→[秘]、㊗→[祝] など。録画ファイル名だけに効き、番組データ自体は変更しません。'));
@@ -1118,6 +1119,7 @@ P = Class.create(P, {
 			wuiOpenPort: true,
 			wuiPort: true,
 			storageLowSpaceThresholdMB: true,
+			recordedStorageWakeupBeforeSec: true,
 			matchRetentionDays: true,
 			reserves2RetentionDays: true,
 			recordedHistoryRetentionDays: true
@@ -1160,7 +1162,7 @@ P = Class.create(P, {
 			config[key] = value;
 		});
 
-		['matchRetentionDays', 'reserves2RetentionDays', 'recordedHistoryRetentionDays'].each(function (key) {
+		['recordedStorageWakeupBeforeSec', 'matchRetentionDays', 'reserves2RetentionDays', 'recordedHistoryRetentionDays'].each(function (key) {
 			if (typeof config[key] === 'undefined') {
 				return;
 			}

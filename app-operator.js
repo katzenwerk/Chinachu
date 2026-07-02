@@ -90,6 +90,9 @@ const storageLowSpaceThresholdMB = config.storageLowSpaceThresholdMB || 3000;// 
 const storageLowSpaceAction = config.storageLowSpaceAction || "remove"; // "none" | "stop" | "remove"
 const storageLowSpaceNotifyTo = config.storageLowSpaceNotifyTo;// e-mail address
 const storageLowSpaceCommand = config.storageLowSpaceCommand || null;// command
+const recordedStorageWakeupBeforeSec = getRecordedStorageWakeupBeforeSec();// 録画開始前HDD起動秒数。0/null/未指定は無効
+const recordedStorageWakeupBeforeTime = recordedStorageWakeupBeforeSec * 1000;
+
 
 // 録画境界の準備猶予を取得する
 // 未指定時は従来互換の20秒、指定時は0〜60秒の範囲で使用する
@@ -113,6 +116,23 @@ function getEndLackMaxSeconds() {
 	}
 
 	return Math.min(seconds, 60);
+}
+
+// 録画開始前HDD起動秒数を取得する
+// 0 / null / undefined / 空文字 / 数値不正は無効として扱う。
+// 1以上の数値は秒単位で使用する。
+function getRecordedStorageWakeupBeforeSec() {
+	if (config.recordedStorageWakeupBeforeSec === null || typeof config.recordedStorageWakeupBeforeSec === 'undefined') {
+		return 0;
+	}
+
+	const seconds = Number(config.recordedStorageWakeupBeforeSec);
+
+	if (!Number.isFinite(seconds) || seconds <= 0) {
+		return 0;
+	}
+
+	return Math.floor(seconds);
 }
 
 // setuid
@@ -190,11 +210,15 @@ let scheduled = 0;
 let stChecked = 0;
 let stNotified = 0;
 let recordingChecked = 0;
+let recordedStorageWakeupHistory = {};
+
 
 // メインループ
 setInterval(() => {
 
 	clock = Date.now();
+
+	wakeReservedRecordedStorage();
 
 	for (let i = 0, l = reserves.length; i < l; i++) {
 		reservesChecker(reserves[i]);
@@ -625,12 +649,61 @@ function getRecordedPath(program) {
 	return joinRecordedPath(getRecordedDir(program), recordedName);
 }
 
-// 録画保存先HDDを事前に起こす
+// 録画保存先HDDを起こす対象か確認する
+function shouldWakeRecordedStorage(program) {
+	if (recordedStorageWakeupBeforeTime <= 0) {
+		return false;
+	}
+
+	if (!program || !program.id || !program.start) {
+		return false;
+	}
+
+	if (program.isSkip) {
+		return false;
+	}
+
+	if (clock > program.end) {
+		return false;
+	}
+
+	if (isRecorded(program) || isRecording(program)) {
+		return false;
+	}
+
+	if (recordedStorageWakeupHistory[program.id]) {
+		return false;
+	}
+
+	const remainTime = program.start - clock;
+
+	return remainTime > 0 && remainTime <= recordedStorageWakeupBeforeTime;
+}
+
+// 録画保存先HDD起動履歴を掃除する
+function cleanupRecordedStorageWakeupHistory() {
+	const activeProgramIds = {};
+
+	for (let i = 0, l = reserves.length; i < l; i++) {
+		if (reserves[i] && reserves[i].id && clock <= reserves[i].end) {
+			activeProgramIds[reserves[i].id] = true;
+		}
+	}
+
+	Object.keys(recordedStorageWakeupHistory).forEach(id => {
+		if (!activeProgramIds[id]) {
+			delete recordedStorageWakeupHistory[id];
+		}
+	});
+}
+
+// 録画保存先HDDを起こす
+// 実録画ファイル名の末尾に一時ファイル名を付け、短い内容を書き込んですぐ削除する。
 function wakeRecordedStorage(program) {
 	let wakeFile = null;
 
 	try {
-		const recPath = program ? getRecordedPath(program) : path.join(getRecordedDir(null), '.chinachu-wakeup');
+		const recPath = getRecordedPath(program);
 		const targetDir = path.dirname(recPath);
 
 		if (!fs.existsSync(targetDir)) {
@@ -638,16 +711,17 @@ function wakeRecordedStorage(program) {
 			fs.mkdirSync(targetDir, { recursive: true });
 		}
 
-		wakeFile = program ? recPath + '.chinachu-wakeup.tmp' : path.join(targetDir, '.chinachu-wakeup');
+		wakeFile = recPath + '.chinachu-wakeup.tmp';
 
 		fs.writeFileSync(wakeFile, [
 			Date.now(),
-			program ? program.id : '',
-			program ? program.title : ''
+			program.id,
+			program.title || ''
 		].join('\t'));
 		fs.unlinkSync(wakeFile);
 
 		operatorLog('WAKE: recorded storage ' + wakeFile);
+		return true;
 	} catch (e) {
 		try {
 			if (wakeFile && fs.existsSync(wakeFile)) {
@@ -656,6 +730,28 @@ function wakeRecordedStorage(program) {
 		} catch (_) {}
 
 		operatorLog('WARNING: recorded storage wake failed: ' + e.message);
+		return false;
+	}
+}
+
+// 予約一覧から、録画開始前HDD起動対象を巡回する
+function wakeReservedRecordedStorage() {
+	if (recordedStorageWakeupBeforeTime <= 0) {
+		return;
+	}
+
+	cleanupRecordedStorageWakeupHistory();
+
+	for (let i = 0, l = reserves.length; i < l; i++) {
+		const program = reserves[i];
+
+		if (!shouldWakeRecordedStorage(program)) {
+			continue;
+		}
+
+		if (wakeRecordedStorage(program)) {
+			recordedStorageWakeupHistory[program.id] = true;
+		}
 	}
 }
 
@@ -920,8 +1016,6 @@ function prepRecord(program) {
 	if (!program.operatorPrepareStart) {
 		program.operatorPrepareStart = Date.now();
 	}
-
-	wakeRecordedStorage(program);
 
 	operatorLog('PREPARE: ' + printProgram(program));
 
