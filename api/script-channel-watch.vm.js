@@ -17,19 +17,50 @@ Usushio では使わない
 
 	switch (request.type) {
 		case 'xspf':
-			response.setHeader('content-disposition', 'attachment; filename="' + channel.id + '.xspf"');
-			response.head(200);
-
 			var ext    = request.query.ext || 'm2ts';
 			var prefix = request.query.prefix || '';
+			var params = [];
+			var target;
+			var filename = String(channel.name || channel.id || 'channel').replace(/[\\/:*?"<>|]/g, '_') + '.xspf';
+			var fallbackFilename = String(channel.id || 'channel').replace(/[^A-Za-z0-9_.-]/g, '_') + '.xspf';
 
-			var target = prefix + 'watch.' + ext  + new URL(request.url, 'http://localhost').search;
+			var escapeXml = function (s) {
+				return String(s || '')
+					.replace(/&/g, '&amp;')
+					.replace(/</g, '&lt;')
+					.replace(/>/g, '&gt;')
+					.replace(/"/g, '&quot;')
+					.replace(/'/g, '&apos;');
+			};
+
+			Object.keys(request.query || {}).forEach(function (key) {
+				var val = request.query[key];
+
+				if (key === 'prefix') {
+					return;
+				}
+				if (val === null || typeof val === 'undefined' || val === '') {
+					return;
+				}
+
+				params.push(encodeURIComponent(key) + '=' + encodeURIComponent(val));
+			});
+
+			target = prefix + 'watch.' + ext + (params.length > 0 ? '?' + params.join('&') : '');
+
+			response.setHeader(
+				'content-disposition',
+				'attachment; filename="' + fallbackFilename + '"; filename*=UTF-8\'\'' + encodeURIComponent(filename)
+			);
+			response.head(200);
 
 			response.write('<?xml version="1.0" encoding="UTF-8"?>\n');
 			response.write('<playlist version="1" xmlns="http://xspf.org/ns/0/">\n');
 			response.write('<trackList>\n');
-			response.write('<track>\n<location>' + target.replace(/&/g, '&amp;') + '</location>\n');
-			response.write('<title>' + channel.name + '</title>\n</track>\n');
+			response.write('<track>\n');
+			response.write('<location>' + escapeXml(target) + '</location>\n');
+			response.write('<title>' + escapeXml(channel.name) + '</title>\n');
+			response.write('</track>\n');
 			response.write('</trackList>\n');
 			response.write('</playlist>\n');
 
