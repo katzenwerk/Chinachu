@@ -52,14 +52,22 @@ P = Class.create(P, {
 
 		var page = 1;
 		var match;
+		var parsed;
 
+		/*
+		 * rules/list の URL は page=1 origin に統一する。
+		 * gamma 由来・他画面リンク由来で page=0 が来る場合があるため、
+		 * 0 以下は先頭ページ(page=1)として丸める。
+		 */
 		if (this.self.query && typeof this.self.query.page !== 'undefined') {
-			page = parseInt(this.self.query.page, 10) || 1;
+			parsed = parseInt(this.self.query.page, 10);
+			page = isNaN(parsed) ? 1 : parsed;
 		} else {
 			match = (window.location.hash || '').match(/(?:[?&]|\/)page=(\d+)/);
 
 			if (match) {
-				page = parseInt(match[1], 10) || 1;
+				parsed = parseInt(match[1], 10);
+				page = isNaN(parsed) ? 1 : parsed;
 			}
 		}
 
@@ -76,12 +84,20 @@ P = Class.create(P, {
 			return this.getPageNumber() - 1;
 		}
 
-		if (typeof this.grid.pagePosition === 'number') {
-			return this.grid.pagePosition;
-		}
-
+		/*
+		 * flagrate.Grid のページング内部は 0 origin。
+		 * ただし URL 表示は page=1 を先頭として扱う。
+		 *
+		 * 最小/最大ボタンなど Grid 標準ページャーで移動した場合、
+		 * _pagePosition 側だけが先に更新されることがあるため、
+		 * キーボード移動や hash 更新では _pagePosition を優先する。
+		 */
 		if (typeof this.grid._pagePosition === 'number') {
 			return this.grid._pagePosition;
+		}
+
+		if (typeof this.grid.pagePosition === 'number') {
+			return this.grid.pagePosition;
 		}
 
 		return this.getPageNumber() - 1;
@@ -117,6 +133,16 @@ P = Class.create(P, {
 
 		var currentPage = this.getGridPagePosition() + 1;
 
+		if (!this.self.query) {
+			this.self.query = {};
+		}
+
+		/*
+		 * URL は page=1 origin に統一する。
+		 * 外部リンク等で page=0 が来た場合は getPageNumber() 側で 1 に丸める。
+		 * ここで self.query.page も同期し、左右キーが古い page 値を見ないようにする。
+		 */
+		this.self.query.page = currentPage.toString(10);
 		this.app.pm._lastHash = '!/rules/list/?page=' + currentPage;
 		history.replaceState(null, null, '#' + this.app.pm._lastHash);
 
