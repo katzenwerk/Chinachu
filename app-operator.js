@@ -19,6 +19,8 @@ const MATCH_DATA_FILE     = __dirname + '/data/match.json';
 const path = require('path');
 const fs = require('fs');
 const util = require('util');
+const http = require('http');
+const https = require('https');
 
 function formatJstLogTime() {
 	const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
@@ -92,6 +94,9 @@ const storageLowSpaceNotifyTo = config.storageLowSpaceNotifyTo;// e-mail address
 const storageLowSpaceCommand = config.storageLowSpaceCommand || null;// command
 const recordedStorageWakeupBeforeSec = getRecordedStorageWakeupBeforeSec();// 録画開始前HDD起動秒数。0/null/未指定は無効
 const recordedStorageWakeupBeforeTime = recordedStorageWakeupBeforeSec * 1000;
+const mirakurunDropCheckIntervalTime = getMirakurunDropCheckIntervalTime();// 録画中drop監視間隔。0以下で無効
+const reserveCheckIntervalTime = getReserveCheckIntervalTime();// 通常時の予約チェック間隔
+const prepReserveCheckIntervalTime = getPrepReserveCheckIntervalTime();// 準備期間内の予約チェック間隔。通常間隔以上なら高速化なし
 
 
 // 録画境界の準備猶予を取得する
@@ -133,6 +138,55 @@ function getRecordedStorageWakeupBeforeSec() {
 	}
 
 	return Math.floor(seconds);
+}
+
+
+// 録画中drop監視間隔を取得する
+// 未指定時は6秒、0以下は無効として扱う。
+function getMirakurunDropCheckIntervalTime() {
+	if (config.mirakurunDropCheckIntervalSec === null || typeof config.mirakurunDropCheckIntervalSec === 'undefined') {
+		return 1000 * 6;
+	}
+
+	const seconds = Number(config.mirakurunDropCheckIntervalSec);
+
+	if (!Number.isFinite(seconds) || seconds <= 0) {
+		return 0;
+	}
+
+	return Math.max(1, Math.floor(seconds)) * 1000;
+}
+
+// 通常時の予約チェック間隔を取得する
+// 未指定時は従来互換の3秒、1秒未満は1秒に丸める。
+function getReserveCheckIntervalTime() {
+	if (config.operatorReserveCheckIntervalSec === null || typeof config.operatorReserveCheckIntervalSec === 'undefined') {
+		return 1000 * 3;
+	}
+
+	const seconds = Number(config.operatorReserveCheckIntervalSec);
+
+	if (!Number.isFinite(seconds) || seconds <= 0) {
+		return 1000 * 3;
+	}
+
+	return Math.max(1, Math.floor(seconds)) * 1000;
+}
+
+// 準備期間内の予約チェック間隔を取得する
+// 未指定時は1秒。0以下は高速化無効として通常間隔を使う。
+function getPrepReserveCheckIntervalTime() {
+	if (config.operatorPrepReserveCheckIntervalSec === null || typeof config.operatorPrepReserveCheckIntervalSec === 'undefined') {
+		return 1000;
+	}
+
+	const seconds = Number(config.operatorPrepReserveCheckIntervalSec);
+
+	if (!Number.isFinite(seconds) || seconds <= 0) {
+		return reserveCheckIntervalTime;
+	}
+
+	return Math.max(1, Math.floor(seconds)) * 1000;
 }
 
 // setuid
@@ -211,10 +265,16 @@ let stChecked = 0;
 let stNotified = 0;
 let recordingChecked = 0;
 let recordedStorageWakeupHistory = {};
+let mirakurunDropChecked = 0;
+let mirakurunDropChecking = false;
+let mirakurunDropSnapshots = {};
+let reserveCheckTimer = null;
 
 
 // メインループ
-setInterval(() => {
+// 通常時は3秒程度でざっくり確認し、録画準備期間に入っている予約がある間だけ1秒程度で確認する。
+// prepRecord() の判定は従来どおり reservesChecker() 側で行う。
+function reserveCheckLoop() {
 
 	clock = Date.now();
 
@@ -223,7 +283,61 @@ setInterval(() => {
 	for (let i = 0, l = reserves.length; i < l; i++) {
 		reservesChecker(reserves[i]);
 	}
-}, 1000 * 3);
+
+	scheduleReserveCheckLoop();
+}
+
+function scheduleReserveCheckLoop() {
+	const interval = getCurrentReserveCheckIntervalTime();
+
+	reserveCheckTimer = setTimeout(reserveCheckLoop, interval);
+}
+
+function getCurrentReserveCheckIntervalTime() {
+	if (prepReserveCheckIntervalTime < reserveCheckIntervalTime && hasPrepReserveCheckTarget()) {
+		return prepReserveCheckIntervalTime;
+	}
+
+	return reserveCheckIntervalTime;
+}
+
+function hasPrepReserveCheckTarget() {
+	for (let i = 0, l = reserves.length; i < l; i++) {
+		const program = reserves[i];
+
+		if (!program) {
+			continue;
+		}
+
+		if (program.isSkip) {
+			continue;
+		}
+
+		if (clock > program.end) {
+			continue;
+		}
+
+		if (isRecorded(program)) {
+			continue;
+		}
+
+		if (program.start - clock < prepTime) {
+			// 番組開始前の準備期間中は、prepRecord() 済みかどうかに関係なく高速側を維持する。
+			if (clock <= program.start) {
+				return true;
+			}
+
+			// 番組開始後にまだ録画中扱いでない場合は、失敗後の再準備を拾いやすくする。
+			if (isRecording(program) === false) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+reserveCheckLoop();
 
 // 裏ループ
 setInterval(() => {
@@ -241,6 +355,11 @@ setInterval(() => {
 	if (clock - recordingChecked > 1000 * 30) {
 		recordingStaleChecker();
 		recordingChecked = clock;
+	}
+
+	if (mirakurunDropCheckIntervalTime > 0 && clock - mirakurunDropChecked > mirakurunDropCheckIntervalTime) {
+		mirakurunDropChecker();
+		mirakurunDropChecked = clock;
 	}
 }, 1000 * 6);
 
@@ -941,6 +1060,275 @@ function formatSecondsForLog(seconds) {
 	return seconds + '秒';
 }
 
+
+// Mirakurun APIのパスを作成する
+// mirakurun.basePath は通常 /api を含むため、ここでは endpoint に /api を重ねない。
+function getMirakurunApiRequestPath(endpoint) {
+	const basePath = mirakurun.basePath || '/api';
+	let requestPath = path.posix.join('/', basePath, endpoint || '');
+
+	requestPath = requestPath.replace(/\\/g, '/');
+
+	if (requestPath.charAt(0) !== '/') {
+		requestPath = '/' + requestPath;
+	}
+
+	return requestPath;
+}
+
+// Mirakurun APIからJSONを1回取得する
+function getMirakurunJson(endpoint, timeoutMs) {
+	return new Promise((resolve) => {
+		timeoutMs = Number(timeoutMs) || 1000;
+
+		let finished = false;
+		let req = null;
+		let chunks = [];
+		const requestPath = getMirakurunApiRequestPath(endpoint);
+
+		function done(err, data) {
+			if (finished) {
+				return;
+			}
+
+			finished = true;
+			clearTimeout(timer);
+
+			try {
+				if (req) {
+					req.destroy();
+				}
+			} catch (_) {}
+
+			if (err) {
+				resolve({
+					ok: false,
+					error: err.message,
+					path: requestPath
+				});
+				return;
+			}
+
+			resolve({
+				ok: true,
+				data: data,
+				path: requestPath
+			});
+		}
+
+		const timer = setTimeout(() => {
+			done(new Error('timeout'));
+		}, timeoutMs);
+
+		try {
+			if (mirakurun.socketPath) {
+				req = http.request({
+					socketPath: mirakurun.socketPath,
+					path: requestPath,
+					method: 'GET',
+					headers: {
+						'User-Agent': mirakurun.userAgent || 'Chinachu operator'
+					}
+				}, handleResponse);
+			} else {
+				const baseUrl = new URL(mirakurunPath);
+				const client = baseUrl.protocol === 'https:' ? https : http;
+
+				baseUrl.pathname = requestPath;
+				baseUrl.search = '';
+
+				req = client.request(baseUrl, {
+					method: 'GET',
+					headers: {
+						'User-Agent': mirakurun.userAgent || 'Chinachu operator'
+					}
+				}, handleResponse);
+			}
+
+			req.on('error', err => done(err));
+			req.end();
+		} catch (e) {
+			done(e);
+		}
+
+		function handleResponse(res) {
+			res.on('data', chunk => chunks.push(chunk));
+			res.on('end', () => {
+				try {
+					if (res.statusCode < 200 || res.statusCode >= 300) {
+						done(new Error('HTTP ' + res.statusCode));
+						return;
+					}
+
+					done(null, JSON.parse(Buffer.concat(chunks).toString('utf8')));
+				} catch (e) {
+					done(e);
+				}
+			});
+		}
+	});
+}
+
+function summarizeMirakurunStreamInfo(streamInfo) {
+	const summary = {
+		packetTotal: 0,
+		dropTotal: 0,
+		dropPids: {}
+	};
+
+	Object.keys(streamInfo || {}).forEach(pid => {
+		const info = streamInfo[pid] || {};
+		const packet = Number(info.packet || 0);
+		const drop = Number(info.drop || 0);
+
+		summary.packetTotal += packet;
+		summary.dropTotal += drop;
+
+		if (drop > 0) {
+			summary.dropPids[pid] = drop;
+		}
+	});
+
+	return summary;
+}
+
+function buildMirakurunUserMap(tuners) {
+	const map = {};
+
+	(tuners || []).forEach(tuner => {
+		if (!tuner || !Array.isArray(tuner.users)) {
+			return;
+		}
+
+		tuner.users.forEach(user => {
+			if (!user || !user.url) {
+				return;
+			}
+
+			map[user.url] = {
+				tuner: tuner,
+				user: user
+			};
+		});
+	});
+
+	return map;
+}
+
+function buildMirakurunDropSnapshot(program, matched) {
+	const summary = summarizeMirakurunStreamInfo(matched.user.streamInfo);
+
+	return {
+		checkedAt: new Date().toISOString(),
+		programId: program.id,
+		mirakurunProgramId: program.mirakurunProgramId,
+		tunerIndex: matched.tuner.index,
+		tunerName: matched.tuner.name,
+		userId: matched.user.id,
+		agent: matched.user.agent,
+		url: matched.user.url,
+		packetTotal: summary.packetTotal,
+		dropTotal: summary.dropTotal,
+		dropPids: summary.dropPids
+	};
+}
+
+function cleanupMirakurunDropSnapshots() {
+	const activeProgramIds = {};
+
+	for (let i = 0, l = recording.length; i < l; i++) {
+		if (recording[i] && recording[i].id) {
+			activeProgramIds[recording[i].id] = true;
+		}
+	}
+
+	Object.keys(mirakurunDropSnapshots).forEach(id => {
+		if (!activeProgramIds[id]) {
+			delete mirakurunDropSnapshots[id];
+		}
+	});
+}
+
+// 録画中のMirakurun drop情報を取得し、program.id別の最新スナップショットとして保持する
+async function mirakurunDropChecker() {
+	if (mirakurunDropChecking) {
+		return;
+	}
+
+	if (recording.length === 0) {
+		cleanupMirakurunDropSnapshots();
+		return;
+	}
+
+	mirakurunDropChecking = true;
+
+	try {
+		const result = await getMirakurunJson('/tuners', 1000);
+
+		if (!result.ok) {
+			operatorLog('DROP WATCH: failed: ' + result.error + ' path=' + result.path);
+			return;
+		}
+
+		const userMap = buildMirakurunUserMap(result.data);
+
+		for (let i = 0, l = recording.length; i < l; i++) {
+			const program = recording[i];
+
+			if (!program || !program.id || !program.mirakurunStreamPath) {
+				continue;
+			}
+
+			const matched = userMap[program.mirakurunStreamPath];
+
+			if (!matched) {
+				if (config.mirakurunDropVerbose === true) {
+					operatorLog('DROP WATCH: user not found url=' + program.mirakurunStreamPath + ': ' + printProgram(program));
+				}
+				continue;
+			}
+
+			const prev = mirakurunDropSnapshots[program.id];
+			const snapshot = buildMirakurunDropSnapshot(program, matched);
+
+			mirakurunDropSnapshots[program.id] = snapshot;
+
+			if (!prev) {
+				operatorLog('DROP WATCH: start tuner=' + snapshot.tunerName + ' packet=' + snapshot.packetTotal + ' drop=' + snapshot.dropTotal + ' url=' + snapshot.url + ': ' + printProgram(program));
+			} else if (snapshot.dropTotal !== prev.dropTotal) {
+				operatorLog('DROP WATCH: drop changed ' + prev.dropTotal + ' -> ' + snapshot.dropTotal + ' tuner=' + snapshot.tunerName + ' url=' + snapshot.url + ': ' + printProgram(program));
+			} else if (config.mirakurunDropVerbose === true) {
+				operatorLog('DROP WATCH: update tuner=' + snapshot.tunerName + ' packet=' + snapshot.packetTotal + ' drop=' + snapshot.dropTotal + ' url=' + snapshot.url + ': ' + printProgram(program));
+			}
+		}
+
+		cleanupMirakurunDropSnapshots();
+	} catch (e) {
+		operatorLog('DROP WATCH: failed: ' + (e && e.message ? e.message : e));
+	} finally {
+		mirakurunDropChecking = false;
+	}
+}
+
+function applyMirakurunDropSnapshot(program) {
+	if (!program || !program.id) {
+		return;
+	}
+
+	const snapshot = mirakurunDropSnapshots[program.id];
+
+	if (!snapshot) {
+		if (config.mirakurunDropVerbose === true) {
+			operatorLog('DROP WATCH: no snapshot: ' + printProgram(program));
+		}
+		return;
+	}
+
+	program.mirakurunDrop = snapshot;
+	operatorLog('DROP WATCH: final tuner=' + snapshot.tunerName + ' packet=' + snapshot.packetTotal + ' drop=' + snapshot.dropTotal + ': ' + printProgram(program));
+}
+
+
 function markRecordingAborted(program, reason) {
 	if (!program || program._operatorAbort) {
 		return;
@@ -1108,6 +1496,8 @@ function doRecord(program, stream) {
 		command: "*",
 		isScrambling: false
 	};
+	program.mirakurunProgramId = parseInt(program.id, 36);
+	program.mirakurunStreamPath = stream.req.path;
 	program.command = `mirakurun type=${program.channel.type} url=${stream.req.path} priority=${program.priority}`;// dummy
 	program.pid = -1;// dummy
 
@@ -1153,6 +1543,8 @@ function doRecord(program, stream) {
 			return;
 		}
 		finalized = true;
+
+		applyMirakurunDropSnapshot(program);
 
 		safeAbortStream(stream, 'recording finalize');
 
@@ -1200,6 +1592,7 @@ function doRecord(program, stream) {
 			recording.splice(recordingIndex, 1);
 		}
 		writeRecordingData();
+		delete mirakurunDropSnapshots[program.id];
 		if (program.isManualReserved) {
 			for (let i = 0, l = reserves.length; i < l; i++) {
 				if (reserves[i].id === program.id) {

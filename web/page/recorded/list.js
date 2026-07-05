@@ -592,6 +592,91 @@ P = Class.create(P, {
 		return 0;
 	},
 
+
+	pickMirakurunDrop: function _pickMirakurunDrop(source, result, fallback) {
+
+		if (source && source.mirakurunDrop && typeof source.mirakurunDrop === 'object') {
+			return source.mirakurunDrop;
+		}
+
+		if (result && result.mirakurunDrop && typeof result.mirakurunDrop === 'object') {
+			return result.mirakurunDrop;
+		}
+
+		if (fallback && fallback.mirakurunDrop && typeof fallback.mirakurunDrop === 'object') {
+			return fallback.mirakurunDrop;
+		}
+
+		return null;
+	},
+
+	getMirakurunDropTotal: function _getMirakurunDropTotal(drop) {
+
+		var total;
+		var pids;
+		var i;
+
+		if (!drop || typeof drop !== 'object') {
+			return null;
+		}
+
+		if (typeof drop.dropTotal !== 'undefined' && drop.dropTotal !== null && drop.dropTotal !== '') {
+			total = Number(drop.dropTotal);
+			return isFinite(total) ? total : null;
+		}
+
+		if (Object.isArray(drop.pids)) {
+			total = 0;
+
+			for (i = 0; i < drop.pids.length; i++) {
+				total += Number(drop.pids[i] && drop.pids[i].drop || 0) || 0;
+			}
+
+			return total;
+		}
+
+		pids = drop.pidDrops || drop.dropsByPid;
+		if (pids && typeof pids === 'object') {
+			total = 0;
+
+			Object.keys(pids).forEach(function(pid) {
+				total += Number(pids[pid]) || 0;
+			});
+
+			return total;
+		}
+
+		return null;
+	},
+
+	getMirakurunDropTitle: function _getMirakurunDropTitle(drop) {
+
+		var messages = [];
+		var dropTotal = this.getMirakurunDropTotal(drop);
+
+		if (!drop || typeof drop !== 'object') {
+			return '';
+		}
+
+		if (dropTotal !== null) {
+			messages.push('Drop: ' + dropTotal);
+		}
+
+		if (typeof drop.packetTotal !== 'undefined' && drop.packetTotal !== null) {
+			messages.push('Packet: ' + drop.packetTotal);
+		}
+
+		if (drop.tunerName) {
+			messages.push('Tuner: ' + drop.tunerName);
+		}
+
+		if (drop.checkedAt) {
+			messages.push('Checked: ' + drop.checkedAt);
+		}
+
+		return messages.join(' / ');
+	},
+
 	toFiniteNumber: function _toFiniteNumber(value) {
 
 		var number = Number(value);
@@ -700,6 +785,7 @@ P = Class.create(P, {
 			operatorAbortReason   : source.operatorAbortReason || result.operatorAbortReason || recordedProgram && recordedProgram.operatorAbortReason || '',
 			operatorEndLack       : source.operatorEndLack === true || result.operatorEndLack === true || recordedProgram && recordedProgram.operatorEndLack === true,
 			operatorEndLackReason : source.operatorEndLackReason || result.operatorEndLackReason || recordedProgram && recordedProgram.operatorEndLackReason || '',
+			mirakurunDrop         : this.pickMirakurunDrop(source, result, recordedProgram),
 			title           : source.title || result.title || '-',
 			fullTitle       : source.fullTitle || source.title || result.title || '-',
 			detail          : source.detail || '',
@@ -918,6 +1004,12 @@ P = Class.create(P, {
 
 			if (program.operatorEndLack) {
 				titleHtml = '<span class="label label-warning">尻切れ</span>' + titleHtml;
+			}
+
+			var mirakurunDropTotal = this.getMirakurunDropTotal(program.mirakurunDrop);
+			if (mirakurunDropTotal !== null && mirakurunDropTotal > 0) {
+				var mirakurunDropTitle = this.getMirakurunDropTitle(program.mirakurunDrop).replace(/"/g, '&quot;');
+				titleHtml = '<span class="label label-warning" title="' + mirakurunDropTitle + '">Drop ' + mirakurunDropTotal + '</span>' + titleHtml;
 			}
 
 			row.cell.title = {

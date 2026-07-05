@@ -209,6 +209,7 @@ P = Class.create(P, {
 		program.seconds = Number(program.seconds || r.seconds || 0);
 		program.end = Number(program.end || r.end || (program.start && program.seconds ? program.start + program.seconds * 1000 : 0));
 		program.command = program.command || r.command || '';
+		program.mirakurunDrop = program.mirakurunDrop || r.mirakurunDrop || null;
 		program.tuner = program.tuner || r.tuner || { isScrambling: false };
 		program.recordedFormat = program.recordedFormat || r.recordedFormat || '';
 		program.recorded = path;
@@ -240,6 +241,10 @@ P = Class.create(P, {
 
 		if (r.tuner && !this.program.tuner) {
 			this.program.tuner = r.tuner;
+		}
+
+		if (r.mirakurunDrop && !this.program.mirakurunDrop) {
+			this.program.mirakurunDrop = r.mirakurunDrop;
 		}
 
 		this.copyOperatorTiming(this.program, r);
@@ -824,7 +829,8 @@ P = Class.create(P, {
 			'operatorAbortAt',
 			'operatorEndLack',
 			'operatorEndLackReason',
-			'operatorEndLackAt'
+			'operatorEndLackAt',
+			'mirakurunDrop'
 		];
 
 		if (!target || !source) {
@@ -913,6 +919,107 @@ P = Class.create(P, {
 		}
 
 		return body;
+	},
+
+	pickMirakurunDrop: function _pickMirakurunDrop(fileJson, program, item) {
+
+		var r = item && item.recordingResult || {};
+		var p = item && item.program || {};
+		var sources = [fileJson || {}, program || {}, r, p];
+		var i, value;
+
+		for (i = 0; i < sources.length; i++) {
+			value = sources[i].mirakurunDrop;
+			if (value && typeof value === 'object') {
+				return value;
+			}
+		}
+
+		return null;
+	},
+
+	getMirakurunDropStatus: function _getMirakurunDropStatus(fileJson, program, item) {
+
+		var drop = this.pickMirakurunDrop(fileJson, program, item);
+		var dropTotal;
+
+		if (!drop) {
+			return {
+				key      : 'unknown',
+				title    : 'Drop未取得',
+				type     : 'white',
+				body     : 'Mirakurun drop情報は記録されていません。古い録画、監視無効、または録画中にdrop情報を取得できなかった可能性があります。',
+				drop     : null,
+				dropTotal: null
+			};
+		}
+
+		dropTotal = this.toFiniteNumber(drop.dropTotal);
+
+		return {
+			key      : dropTotal > 0 ? 'drop' : 'ok',
+			title    : dropTotal > 0 ? 'Dropあり' : 'Dropなし',
+			type     : dropTotal > 0 ? 'yellow' : 'green',
+			body     : this.buildMirakurunDropBody(drop),
+			drop     : drop,
+			dropTotal: dropTotal
+		};
+	},
+
+	buildMirakurunDropBody: function _buildMirakurunDropBody(drop) {
+
+		var packetTotal = this.toFiniteNumber(drop && drop.packetTotal);
+		var dropTotal = this.toFiniteNumber(drop && drop.dropTotal);
+		var parts = [];
+		var dropPids = drop && drop.dropPids || {};
+		var pidTexts = [];
+		var key;
+
+		parts.push('Drop: ' + dropTotal);
+
+		if (packetTotal > 0) {
+			parts.push('Packet: ' + packetTotal);
+		}
+
+		if (drop && drop.tunerName) {
+			parts.push('Tuner: ' + String(drop.tunerName).escapeHTML());
+		}
+
+		if (drop && drop.checkedAt) {
+			parts.push('Checked: ' + String(drop.checkedAt).escapeHTML());
+		}
+
+		for (key in dropPids) {
+			if (dropPids.hasOwnProperty(key)) {
+				pidTexts.push(key + ':' + dropPids[key]);
+			}
+		}
+
+		if (pidTexts.length > 0) {
+			parts.push('Drop PID: ' + pidTexts.join(', ').escapeHTML());
+		}
+
+		return parts.join('<br>');
+	},
+
+	renderMirakurunDropAlert: function _renderMirakurunDropAlert(target, fileJson, program, item) {
+
+		var status;
+
+		if (!target) {
+			return this;
+		}
+
+		status = this.getMirakurunDropStatus(fileJson, program, item);
+
+		new sakura.ui.Alert({
+			title       : 'Mirakurun ' + status.title,
+			type        : status.type,
+			body        : status.body,
+			disableClose: true
+		}).render(target);
+
+		return this;
 	},
 
 	renderOperatorTimingWarning: function _renderOperatorTimingWarning(target, fileJson, program, item) {
@@ -1293,6 +1400,7 @@ P = Class.create(P, {
 
 						this.renderOperatorRecordingStateAlert(r1L, program, this.matchItem);
 						this.renderOperatorTimingWarning(r1L, fileJson, program, this.matchItem);
+						this.renderMirakurunDropAlert(r1L, fileJson, program, this.matchItem);
 
 						// 録画済みサムネイル
 						var imgurl = "./api/recorded/" + encodeURIComponent(recordedApiId) + "/preview.jpg?width=480&height=270";

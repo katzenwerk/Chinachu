@@ -592,22 +592,41 @@ function buildReservationMeta(reserve, hasReserve) {
 
 
 function copyOperatorRecordingMeta(source, output) {
-	var fields = [
+	var numberFields = [
 		"operatorPrepareStart",
 		"operatorRecordingStart",
 		"operatorRecordingEnd",
 		"operatorActualSeconds"
+	];
+	var copyFields = [
+		"operatorAbort",
+		"operatorAbortReason",
+		"operatorAbortAt",
+		"operatorEndLack",
+		"operatorEndLackReason",
+		"operatorEndLackAt",
+		"operatorEndLackByProgramId",
+		"operatorEndLackEarlySeconds",
+		"mirakurunProgramId",
+		"mirakurunStreamPath",
+		"mirakurunDrop"
 	];
 
 	if (!source || typeof source !== "object" || !output || typeof output !== "object") {
 		return output;
 	}
 
-	fields.forEach(function (field) {
+	numberFields.forEach(function (field) {
 		var value = safeInt(source[field], 0);
 
 		if (value > 0) {
 			output[field] = value;
+		}
+	});
+
+	copyFields.forEach(function (field) {
+		if (typeof source[field] !== "undefined" && source[field] !== null && source[field] !== "") {
+			output[field] = cloneJson(source[field]);
 		}
 	});
 
@@ -664,6 +683,9 @@ function buildRecordingResult(recorded, nowMs, keepSnapshot) {
 		tuner: recorded.tuner ? cloneJson(recorded.tuner) : null,
 		priority: typeof recorded.priority === "undefined" ? null : recorded.priority,
 		recordedFormat: recorded.recordedFormat || "",
+		mirakurunProgramId: typeof recorded.mirakurunProgramId === "undefined" ? null : cloneJson(recorded.mirakurunProgramId),
+		mirakurunStreamPath: recorded.mirakurunStreamPath || "",
+		mirakurunDrop: typeof recorded.mirakurunDrop === "undefined" ? null : cloneJson(recorded.mirakurunDrop),
 		fileExists: null,
 		fileSize: null,
 		cleanupState: recPath ? "active" : "unknown",
