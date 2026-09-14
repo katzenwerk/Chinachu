@@ -16,7 +16,24 @@ fi
 shopt -s extglob
 
 # variables
-NODE_VER=24.17.0
+NODE_VER=24.20.0
+
+declare -A BOOTSTRAP_EXISTING_CHECKSUMS=()
+BOOTSTRAP_NODE_COMMAND=""
+BOOTSTRAP_RUNTIME_USER=""
+BOOTSTRAP_RECORDED_DIR=""
+
+if [ -t 1 ]; then
+  INSTALLER_GREEN=$'\033[32m'
+  INSTALLER_RED=$'\033[31m'
+  INSTALLER_YELLOW=$'\033[33m'
+  INSTALLER_RESET=$'\033[0m'
+else
+  INSTALLER_GREEN=""
+  INSTALLER_RED=""
+  INSTALLER_YELLOW=""
+  INSTALLER_RESET=""
+fi
 
 main () {
   local SELF_PATH DIR SYM
@@ -69,7 +86,8 @@ main () {
       cmd="chinachu_help"
       ;;
   esac
-  $cmd "$@" && exit 0 || fail "failed somehow"
+  "$cmd" "$@"
+  exit $?
 }
 
 chinachu_installer () {
@@ -81,69 +99,102 @@ chinachu_installer () {
   export CXXFLAGS="-O2 -w -pipe -march=native"
   export MAKEFLAGS="-j $((`grep processor /proc/cpuinfo | wc -l` + 1)) -l 3"
 
-  echo "Chinachu Installer Menu:"
-  echo "[!] These are installed under all ${CHINACHU_DIR}/..."
-  echo "[!] Recommend the Auto installation."
+  local choice="$1"
 
-  local PS3 item cmd
-  PS3="what do you install? > "
-  select item in \
-    "Auto (full)" "submodule" "Node.js Environment" "Node.js Modules" "ffmpeg"
-  do
-    echo "selected: ${item}"
-    case $item in
-      "Auto (full)" )
-        cmd="chinachu_installer_auto_full"
-        ;;
-      "submodule" )
-        cmd="chinachu_installer_submodule"
-        ;;
-      "Node.js Environment" )
-        cmd="chinachu_installer_node"
-        ;;
-      "Node.js Modules" )
-        cmd="chinachu_installer_node_modules"
-        ;;
-      "ffmpeg" )
-        cmd="chinachu_installer_ffmpeg"
-        ;;
-      * )
-        cmd="chinachu_installer"
-        ;;
-    esac
-    $cmd && break
-  done
+  if [ -z "$choice" ]; then
+    printf '\nChinachu Installer\n────────────────────────────────\n\n'
+    printf '1) Auto (Full)\n'
+    printf '2) Submodules\n'
+    printf '3) Node.js\n'
+    printf '4) Dependencies\n'
+    printf '5) FFmpeg\n'
+    printf '6) Runtime Bootstrap\n'
+    printf '7) Verify\n'
+    printf '8) ChinachuのPM2サービス設定・確認\n'
+    printf '0) Exit\n'
+    [ -t 0 ] || { installer_error "非対話実行ではinstaller項目を引数で指定してください。"; return 1; }
+    read -r -p '> ' choice
+  fi
 
-  return 0
+  case "$choice" in
+    1 | auto | full ) chinachu_installer_auto_full ;;
+    2 | submodule | submodules ) chinachu_installer_submodule ;;
+    3 | node ) chinachu_installer_node ;;
+    4 | dependencies | modules ) chinachu_installer_node_modules ;;
+    5 | ffmpeg ) chinachu_installer_ffmpeg ;;
+    6 | bootstrap | runtime ) chinachu_runtime_bootstrap ;;
+    7 | verify ) chinachu_installer_verify ;;
+    8 | service | pm2 ) chinachu_installer_pm2_service ;;
+    0 | exit | quit ) return 0 ;;
+    * )
+      installer_error "installer項目を選択できませんでした: $choice"
+      return 1
+      ;;
+  esac
 }
 
 chinachu_installer_auto_full () {
-  chinachu_installer_submodule
-  chinachu_installer_node
-  chinachu_installer_node_modules
-  chinachu_installer_ffmpeg
+  installer_step 1 6 "Submodules"
+  chinachu_installer_submodule || installer_error "Submodule installation failed."
+  installer_success "Ready"
+
+  installer_step 2 6 "Node.js"
+  chinachu_installer_node || installer_error "Node.js installation failed."
+  installer_success "v${NODE_VER}"
+
+  installer_step 3 6 "Dependencies"
+  chinachu_installer_node_modules || installer_error "Dependency installation failed."
+  installer_success "Ready"
+
+  installer_step 4 6 "FFmpeg"
+  chinachu_installer_ffmpeg || installer_error "FFmpeg installation failed."
+  installer_success "Ready"
+
+  installer_step 5 6 "Runtime Bootstrap"
+  chinachu_runtime_bootstrap || installer_error "Runtime bootstrap failed."
+  installer_success "Ready"
+
+  installer_step 6 6 "Verify"
+  chinachu_installer_verify || installer_error "Installer verification failed."
+  installer_success "Passed"
+
+  chinachu_installer_offer_pm2 auto || return 1
+
+  printf '\n%sInstallation completed successfully.%s\n' "$INSTALLER_GREEN" "$INSTALLER_RESET"
 
   return 0
 }
 
+chinachu_installer_offer_pm2 () {
+  . "$CHINACHU_DIR/lib/service-setup.sh" || return 1
+  service_setup_installer_offer "$1"
+}
+
+chinachu_installer_pm2_service () {
+  chinachu_installer_offer_pm2 menu
+}
+
 chinachu_installer_submodule () {
-  git submodule init
-  git submodule update
+  git submodule init || return 1
+  git submodule update || return 1
 
   return 0
 }
 
 chinachu_installer_node () {
-  remove_dir "$NAVE_DIR"
-  ensure_dir "$NAVE_DIR"
+  remove_dir "$NAVE_DIR" || return 1
+  ensure_dir "$NAVE_DIR" || return 1
 
   echo "Installing Node using Nave..."
-  wget -O $NAVE_DIR/nave.sh https://raw.githubusercontent.com/isaacs/nave/v3.2.2/nave.sh
-  chmod a+x $NAVE_DIR/nave.sh
-  ${NAVE_DIR}/nave.sh install $NODE_VER
-  rm -fv ${NAVE_DIR}/node
-  ln -sv $NODE_PATH ${NAVE_DIR}/node
-  ln -sv $NPM_PATH ${NAVE_DIR}/npm
+  wget -O "$NAVE_DIR/nave.sh" https://raw.githubusercontent.com/isaacs/nave/v3.2.2/nave.sh || return 1
+  chmod a+x "$NAVE_DIR/nave.sh" || return 1
+  "$NAVE_DIR/nave.sh" install "$NODE_VER" || return 1
+  rm -fv "$NAVE_DIR/node" || return 1
+  ln -sv "$NODE_PATH" "$NAVE_DIR/node" || return 1
+  ln -sv "$NPM_PATH" "$NAVE_DIR/npm" || return 1
+
+  [ -x "$NODE_PATH" ] || return 1
+  [ "$("$NODE_PATH" --version)" = "v${NODE_VER}" ] || return 1
 
   echo "done."
 
@@ -151,12 +202,12 @@ chinachu_installer_node () {
 }
 
 chinachu_installer_node_modules () {
-  remove_dir node_modules
+  [ -x "$NPM_PATH" ] || fail "Nave npm is not available: $NPM_PATH"
+  remove_dir node_modules || return 1
 
   echo "Installing Node Modules using NPM..."
 
-  npm install
-  npm update
+  "$NPM_PATH" ci || return 1
 
   echo "done."
 
@@ -164,10 +215,10 @@ chinachu_installer_node_modules () {
 }
 
 chinachu_installer_ffmpeg () {
-  remove_dir "$USR_DIR/src/ffmpeg"
-  ensure_dir "$USR_DIR/src/ffmpeg"
+  remove_dir "$USR_DIR/src/ffmpeg" || return 1
+  ensure_dir "$USR_DIR/src/ffmpeg" || return 1
 
-  cd $USR_DIR
+  cd "$USR_DIR" || return 1
 
   MACHINE=`uname -m`
   if [ ${MACHINE} == "aarch64" ] || [ ${MACHINE} == "arm64" ] || [ ${MACHINE} == "armv8l" ]; then
@@ -184,20 +235,20 @@ chinachu_installer_ffmpeg () {
 
   local FFMPEG_XZ="https://johnvansickle.com/ffmpeg/old-releases/${FFMPEG_FN}.tar.xz"
 
-  wget -O ${FFMPEG_FN}.tar.xz $FFMPEG_XZ
-  xz -dv "${FFMPEG_FN}.tar.xz"
+  wget -O "${FFMPEG_FN}.tar.xz" "$FFMPEG_XZ" || return 1
+  xz -dv "${FFMPEG_FN}.tar.xz" || return 1
 
-  tar -xvf "${FFMPEG_FN}.tar" -C bin --strip-components 1
-  rm -v "${FFMPEG_FN}.tar"
+  tar -xvf "${FFMPEG_FN}.tar" -C bin --strip-components 1 || return 1
+  rm -v "${FFMPEG_FN}.tar" || return 1
 
-  cd $CHINACHU_DIR
+  cd "$CHINACHU_DIR" || return 1
 
   echo "Creating libav aliases..."
 
-  rm -rfv "$USR_DIR/bin/avconv"
-  rm -rfv "$USR_DIR/bin/avprobe"
-  ln -sv "$USR_DIR/bin/ffmpeg" "$USR_DIR/bin/avconv"
-  ln -sv "$USR_DIR/bin/ffprobe" "$USR_DIR/bin/avprobe"
+  rm -rfv "$USR_DIR/bin/avconv" || return 1
+  rm -rfv "$USR_DIR/bin/avprobe" || return 1
+  ln -sv "$USR_DIR/bin/ffmpeg" "$USR_DIR/bin/avconv" || return 1
+  ln -sv "$USR_DIR/bin/ffprobe" "$USR_DIR/bin/avprobe" || return 1
 
   echo "ffmpeg --> done."
 
@@ -292,6 +343,13 @@ chinachu_updater_main () {
 }
 
 chinachu_service () {
+  if [ "$1" = "setup" ]; then
+    . "$CHINACHU_DIR/lib/service-setup.sh" || return 1
+    shift
+    chinachu_service_setup "$@"
+    return $?
+  fi
+
   local cmd name action
   name="$1"
   action="$2"
@@ -422,16 +480,7 @@ EOF
 chinachu_service_execute () {
   local name="$1"
 
-  if ! [ -f "config.json" ]; then
-    cp -v config.sample.json config.json
-  fi
-
-  if ! [ -f "rules.json" ]; then
-    cp -v rules.sample.json rules.json
-  fi
-
-  ensure_dir log
-  ensure_dir data
+  chinachu_runtime_bootstrap || return 1
 
   node app-${name}.js > /dev/stdout 2>&1 | tee -a ./log/${name}
   return ${PIPESTATUS[0]}
@@ -451,6 +500,7 @@ Actions:
 
 initscript  Output a LSB init script
 execute     Execute
+setup       Register and verify operator/WUI with PM2
 
 Examples:
 
@@ -460,6 +510,11 @@ Examples:
 sudo chown root:root /tmp/chinachu-operator /tmp/chinachu-wui
 sudo chmod +x /tmp/chinachu-operator /tmp/chinachu-wui
 sudo mv /tmp/chinachu-operator /tmp/chinachu-wui /etc/init.d/
+
+# PM2 Service Setup (administrative entry)
+sudo ./chinachu service setup
+sudo ./chinachu service setup local
+sudo ./chinachu service setup root
 
 EOF
 
@@ -611,7 +666,7 @@ Commands:
 
 installer               Run a Installer.
 updater                 Run a Updater.
-service <name> <action> Service-utility.
+service <name> <action> Service and PM2 setup utility.
 
 update                  Run a Scheduler.
 search [options]        Search for programs.
@@ -643,6 +698,296 @@ help                    Output this information.
 EOF
 
   return 0
+}
+
+installer_step () {
+  printf '\n────────────────────────────────\n[%s/%s] %s\n────────────────────────────────\n' "$1" "$2" "$3"
+}
+
+installer_success () {
+  printf '      %s✓%s %s\n' "$INSTALLER_GREEN" "$INSTALLER_RESET" "$1"
+}
+
+installer_warning () {
+  printf '%sWARNING:%s %s\n' "$INSTALLER_YELLOW" "$INSTALLER_RESET" "$1" >&2
+}
+
+installer_error () {
+  printf '%sERROR:%s %s\n' "$INSTALLER_RED" "$INSTALLER_RESET" "$1" >&2
+  exit 1
+}
+
+path_exists () {
+  [ -e "$1" ] || [ -L "$1" ]
+}
+
+resolve_bootstrap_node () {
+  if [ -x "$NODE_PATH" ]; then
+    BOOTSTRAP_NODE_COMMAND="$NODE_PATH"
+  else
+    BOOTSTRAP_NODE_COMMAND=$(command -v node) || return 1
+  fi
+
+  [ -x "$BOOTSTRAP_NODE_COMMAND" ] || installer_error "Node.js is required for runtime bootstrap."
+}
+
+detect_installer_user () {
+  local candidate=""
+
+  if [ "$(id -u)" -eq 0 ]; then
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ] && id "$SUDO_USER" > /dev/null 2>&1; then
+      candidate="$SUDO_USER"
+    elif [ -n "$PKEXEC_UID" ] && candidate=$(id -un "$PKEXEC_UID" 2>/dev/null) && [ "$candidate" != "root" ]; then
+      :
+    else
+      candidate=$(id -un) || return 1
+    fi
+  else
+    candidate=$(id -un) || return 1
+  fi
+
+  printf '%s\n' "$candidate"
+}
+
+set_new_path_owner () {
+  local target="$1"
+
+  if [ "$(id -u)" -eq 0 ] && [ "$BOOTSTRAP_RUNTIME_USER" != "root" ]; then
+    chown -- "$BOOTSTRAP_RUNTIME_USER" "$target" || return 1
+  fi
+}
+
+create_config_if_missing () {
+  local installer_user installer_group
+
+  if path_exists config.json; then
+    return 0
+  fi
+
+  [ -f config.sample.json ] || installer_error "config.sample.json is missing."
+  installer_user=$(detect_installer_user) || installer_error "Could not determine the installer user."
+  installer_group=$(id -gn "$installer_user" 2>/dev/null) ||
+    installer_group=$(id -g "$installer_user" 2>/dev/null) ||
+    installer_error "Could not determine the installer user's primary group."
+
+  "$BOOTSTRAP_NODE_COMMAND" -e '
+    const fs = require("fs");
+    const source = process.argv[1];
+    const target = process.argv[2];
+    const uid = process.argv[3];
+    const gid = process.argv[4];
+    const temporary = target + ".tmp." + process.pid;
+    let config;
+    try {
+      config = JSON.parse(fs.readFileSync(source, "utf8"));
+      config.uid = uid;
+      config.gid = gid;
+      fs.writeFileSync(temporary, JSON.stringify(config, null, 2) + "\n");
+      fs.linkSync(temporary, target);
+    } finally {
+      try { fs.unlinkSync(temporary); } catch (_) {}
+    }
+  ' config.sample.json config.json "$installer_user" "$installer_group" || installer_error "Could not create config.json."
+
+  BOOTSTRAP_RUNTIME_USER="$installer_user"
+  set_new_path_owner config.json || installer_error "Could not set config.json owner."
+  printf 'created: config.json (uid=%s, gid=%s)\n' "$installer_user" "$installer_group"
+}
+
+resolve_runtime_user () {
+  local configured_uid configured_gid
+
+  if [ -n "$BOOTSTRAP_RUNTIME_USER_OVERRIDE" ]; then
+    BOOTSTRAP_RUNTIME_USER=$(id -un "$BOOTSTRAP_RUNTIME_USER_OVERRIDE" 2>/dev/null) ||
+      installer_error "runtime user override does not identify a local user: $BOOTSTRAP_RUNTIME_USER_OVERRIDE"
+    return 0
+  fi
+
+  if [ "$(id -u)" -ne 0 ]; then
+    BOOTSTRAP_RUNTIME_USER=$(id -un) || return 1
+    return 0
+  fi
+
+  configured_uid=$("$BOOTSTRAP_NODE_COMMAND" -e '
+    const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    if (typeof config.uid === "string" || typeof config.uid === "number") process.stdout.write(String(config.uid));
+  ' config.json) || return 1
+
+  [ -n "$configured_uid" ] || installer_error "config.json uid is required when installer runs as root."
+  BOOTSTRAP_RUNTIME_USER=$(id -un "$configured_uid" 2>/dev/null) || installer_error "config.json uid does not identify a local user: $configured_uid"
+
+  configured_gid=$("$BOOTSTRAP_NODE_COMMAND" -e '
+    const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const gid = typeof config.gid === "string" || typeof config.gid === "number" ? config.gid : "video";
+    process.stdout.write(String(gid));
+  ' config.json) || return 1
+
+  getent group "$configured_gid" > /dev/null 2>&1 || installer_error "config.json gid does not identify a local group: $configured_gid"
+}
+
+load_bootstrap_config () {
+  BOOTSTRAP_RECORDED_DIR=$("$BOOTSTRAP_NODE_COMMAND" -e '
+    const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    if (!config || Array.isArray(config) || typeof config !== "object") process.exit(2);
+    if (typeof config.recordedDir !== "string" || config.recordedDir.trim() === "") process.exit(3);
+    process.stdout.write(config.recordedDir);
+  ' config.json) || installer_error "config.json must contain an object with a non-empty recordedDir."
+}
+
+create_copy_if_missing () {
+  local source="$1"
+  local target="$2"
+
+  if path_exists "$target"; then
+    return 0
+  fi
+
+  [ -f "$source" ] || installer_error "$source is missing."
+  "$BOOTSTRAP_NODE_COMMAND" -e '
+    const fs = require("fs");
+    fs.copyFileSync(process.argv[1], process.argv[2], fs.constants.COPYFILE_EXCL);
+  ' "$source" "$target" || installer_error "Could not create $target."
+  set_new_path_owner "$target" || installer_error "Could not set $target owner."
+  printf 'created: %s\n' "$target"
+}
+
+ensure_runtime_dir () {
+  local target="$1"
+  local created=false
+
+  if ! [ -d "$target" ]; then
+    if path_exists "$target"; then
+      installer_error "$target exists but is not a directory."
+      return 1
+    fi
+    created=true
+  fi
+
+  ensure_dir "$target" || return 1
+  if [ "$created" = true ]; then
+    set_new_path_owner "$target" || installer_error "Could not set $target owner."
+    printf 'created: %s/\n' "${target%/}"
+  fi
+}
+
+create_json_array_if_missing () {
+  local target="$1"
+
+  if path_exists "$target"; then
+    return 0
+  fi
+
+  ( set -o noclobber; printf '[]\n' > "$target" ) 2>/dev/null || installer_error "Could not create $target."
+  set_new_path_owner "$target" || installer_error "Could not set $target owner."
+  printf 'created: %s\n' "$target"
+}
+
+capture_bootstrap_existing_files () {
+  local file checksum
+
+  BOOTSTRAP_EXISTING_CHECKSUMS=()
+  for file in config.json rules.json \
+    data/reserves.json data/reserves2.json data/recording.json \
+    data/recorded.json data/schedule.json data/match.json
+  do
+    if [ -f "$file" ]; then
+      checksum=$(cksum < "$file") || return 1
+      BOOTSTRAP_EXISTING_CHECKSUMS["$file"]="$checksum"
+    fi
+  done
+}
+
+chinachu_runtime_bootstrap () {
+  local file
+
+  resolve_bootstrap_node || return 1
+  capture_bootstrap_existing_files || installer_error "Could not capture existing runtime file checksums."
+  create_config_if_missing || return 1
+  load_bootstrap_config || return 1
+  resolve_runtime_user || return 1
+  create_copy_if_missing rules.sample.json rules.json || return 1
+  ensure_runtime_dir data || return 1
+  ensure_runtime_dir log || return 1
+
+  for file in reserves reserves2 recording recorded schedule match
+  do
+    create_json_array_if_missing "data/${file}.json" || return 1
+  done
+
+  ensure_runtime_dir "$BOOTSTRAP_RECORDED_DIR" || return 1
+}
+
+test_path_as_runtime_user () {
+  local flag="$1"
+  local target="$2"
+
+  if [ "$(id -u)" -eq 0 ] && [ "$BOOTSTRAP_RUNTIME_USER" != "root" ]; then
+    command -v runuser > /dev/null 2>&1 || installer_error "runuser is required to verify permissions for $BOOTSTRAP_RUNTIME_USER."
+    runuser -u "$BOOTSTRAP_RUNTIME_USER" -- test "$flag" "$target"
+  else
+    test "$flag" "$target"
+  fi
+}
+
+verify_runtime_permissions () {
+  local recorded_dir target flag
+
+  recorded_dir=$("$BOOTSTRAP_NODE_COMMAND" -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).recordedDir)' config.json) || return 1
+
+  for target in data log "$recorded_dir"
+  do
+    for flag in -r -w -x
+    do
+      test_path_as_runtime_user "$flag" "$target" || installer_error "$BOOTSTRAP_RUNTIME_USER cannot use $target ($flag)."
+    done
+  done
+
+  for target in config.json rules.json \
+    data/reserves.json data/reserves2.json data/recording.json \
+    data/recorded.json data/schedule.json data/match.json
+  do
+    test_path_as_runtime_user -r "$target" || installer_error "$BOOTSTRAP_RUNTIME_USER cannot read $target."
+    test_path_as_runtime_user -w "$target" || installer_error "$BOOTSTRAP_RUNTIME_USER cannot write $target."
+  done
+}
+
+verify_bootstrap_existing_files () {
+  local file checksum
+
+  for file in "${!BOOTSTRAP_EXISTING_CHECKSUMS[@]}"
+  do
+    [ -f "$file" ] || installer_error "Existing runtime file disappeared: $file"
+    checksum=$(cksum < "$file") || return 1
+    [ "$checksum" = "${BOOTSTRAP_EXISTING_CHECKSUMS[$file]}" ] || installer_error "Existing runtime file changed during bootstrap: $file"
+  done
+}
+
+chinachu_installer_verify () {
+  local node_version
+
+  [ -x "$NODE_PATH" ] || installer_error "Nave Node.js is not executable: $NODE_PATH"
+  node_version=$("$NODE_PATH" --version) || installer_error "Nave Node.js could not be executed."
+  [ "$node_version" = "v${NODE_VER}" ] || installer_error "Nave Node.js version mismatch: expected v${NODE_VER}, got $node_version"
+
+  [ -x "$NPM_PATH" ] || installer_error "Nave npm is not executable: $NPM_PATH"
+  "$NPM_PATH" --version > /dev/null || installer_error "Nave npm could not be executed."
+  "$NPM_PATH" ls --all > /dev/null || installer_error "npm dependency tree is invalid."
+
+  "$NODE_PATH" -e '
+    const fs = require("fs");
+    const config = JSON.parse(fs.readFileSync("config.json", "utf8"));
+    if (!config || Array.isArray(config) || typeof config !== "object") throw new Error("config.json must contain an object");
+    const rules = JSON.parse(fs.readFileSync("rules.json", "utf8"));
+    if (!Array.isArray(rules)) throw new Error("rules.json must contain an array");
+    for (const file of ["reserves", "reserves2", "recording", "recorded", "schedule", "match"]) {
+      const data = JSON.parse(fs.readFileSync("data/" + file + ".json", "utf8"));
+      if (!Array.isArray(data)) throw new Error("data/" + file + ".json must contain an array");
+    }
+  ' || installer_error "Configuration or runtime JSON validation failed."
+
+  resolve_runtime_user || return 1
+  verify_runtime_permissions || return 1
+  verify_bootstrap_existing_files || return 1
 }
 
 ensure_dir () {
