@@ -39,7 +39,7 @@ if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./w
 // 追加モジュールのロード
 var chinachu   = require('chinachu-common');
 var opts       = require('opts');
-var dateFormat = require('dateformat');
+var dateFormat = require('dateformat').default;
 var Table      = require('easy-table');
 
 // 引数

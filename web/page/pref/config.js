@@ -557,9 +557,8 @@ P = Class.create(P, {
 			{ value: 'none', label: 'none - ログのみ（削除しない）' },
 			{ value: 'stop', label: 'stop - 録画中番組を停止' },
 			{ value: 'remove', label: 'remove' }
-		], '(未指定)'), '空き容量が閾値を下回ったときの本体動作です。removeは config.recordedDir 直下の通常ファイルから、最も古い .ts / .m2ts を1件だけ削除します。サブフォルダ、シンボリックリンク、リンク先、別マウント配下は追跡しません。これらを使う構成では remove を使わず、none と storageLowSpaceCommand 等で個別対応してください。storageLowSpaceCommand と storageLowSpaceNotifyTo はこの値とは独立して動作します。'));
-		panel.body.insert(this.createFieldRow('storageLowSpaceNotifyTo', 'storageLowSpaceNotifyTo', this.textInput('storageLowSpaceNotifyTo'), '空き容量が閾値を下回ったときに送るメール通知の宛先です。storageLowSpaceAction が remove の場合は、config.recordedDir 直下の最も古い .ts / .m2ts を1件削除する処理とは別に通知します。旧メール通知のため、今後はWebhookや外部コマンド通知への置き換え推奨です。'));
-		panel.body.insert(this.createFieldRow('storageLowSpaceCommand', 'storageLowSpaceCommand', this.textareaInput('storageLowSpaceCommand', 3), '空き容量不足時に実行するコマンド。Slack/Webhook通知スクリプトや削除処理を外部化する場合に使用します。'));
+		], '(未指定)'), '空き容量が閾値を下回ったときの本体動作です。removeは config.recordedDir 直下の通常ファイルから、最も古い .ts / .m2ts を1件だけ削除します。サブフォルダ、シンボリックリンク、リンク先、別マウント配下は追跡しません。これらを使う構成では remove を使わず、none と外部の管理処理を使用してください。通知は notificationCommand へ独立して送ります。'));
+		panel.body.insert(this.createFieldRow('notificationCommand', 'notificationCommand', this.textareaInput('notificationCommand', 3), '通知イベントを受け取る実行ファイル。shellを介さず起動し、UTF-8 JSON Linesを標準入力で受け取ります。固定引数が必要な場合は ["/path/to/command","arg"] のJSON配列でも指定できます。同時実行は1件に制限され、60秒でtimeoutします。'));
 		return panel;
 	},
 
@@ -574,17 +573,10 @@ P = Class.create(P, {
 	},
 
 	createWuiSection: function _createWuiSection() {
-		var panel = this.createPanel('WUI/API設定', 'Gammaでは wuiOpen* が主、wuiHost/wuiPort/wuiUsers 等は廃止予定扱いです。');
-		panel.body.insert(this.createFieldRow('wuiOpenServer', null, this.checkboxInput('wuiOpenServer'), 'LAN用の無認証サーバー。'));
-		panel.body.insert(this.createFieldRow('wuiOpenHost', 'wuiOpenHost', this.textInput('wuiOpenHost'), '自動でうまくいかない場合のIPv4アドレス。'));
+		var panel = this.createPanel('WUI/API設定', 'LAN/private network内での利用を基本とするHTTPサーバーです。外部公開時のTLS・認証はVPNやReverse Proxy等で構成してください。');
+		panel.body.insert(this.createFieldRow('wuiOpenServer', null, this.checkboxInput('wuiOpenServer'), 'WUI/APIサーバーを有効にします。'));
+		panel.body.insert(this.createFieldRow('wuiOpenHost', 'wuiOpenHost', this.textInput('wuiOpenHost'), '未指定時はprivate IPv4を自動選択。明示時はIPv4、IPv6、hostnameを使用できます。'));
 		panel.body.insert(this.createFieldRow('wuiOpenPort', 'wuiOpenPort', this.numberInput('wuiOpenPort'), '例: 20772'));
-		panel.body.insert(this.createFieldRow('wuiHost', 'wuiHost', this.textInput('wuiHost'), '廃止予定。'));
-		panel.body.insert(this.createFieldRow('wuiPort', 'wuiPort', this.numberInput('wuiPort'), '廃止予定。'));
-		panel.body.insert(this.createFieldRow('wuiUsers', 'wuiUsers', this.textareaInput('wuiUsers', 4), 'JSON配列で指定。廃止予定。'));
-		panel.body.insert(this.createFieldRow('wuiAllowCountries', 'wuiAllowCountries', this.textareaInput('wuiAllowCountries', 3), 'JSON配列で指定。廃止予定。'));
-		panel.body.insert(this.createFieldRow('wuiTlsKeyPath', 'wuiTlsKeyPath', this.textInput('wuiTlsKeyPath'), '廃止予定。'));
-		panel.body.insert(this.createFieldRow('wuiTlsCertPath', 'wuiTlsCertPath', this.textInput('wuiTlsCertPath'), '廃止予定。'));
-		panel.body.insert(this.createFieldRow('wuiXFF', null, this.checkboxInput('wuiXFF'), 'X-Forwarded-For。廃止予定。'));
 		return panel;
 	},
 
@@ -1111,13 +1103,13 @@ P = Class.create(P, {
 		var config = Object.extend({}, this.data.config || {});
 		var inputs = this.view.content.select('.config2-input');
 		var optionalJsonKeys = {
-			wuiUsers: true,
-			wuiAllowCountries: true,
 			recordedNameEnclosingCharacterMap: true
+		};
+		var commandKeys = {
+			notificationCommand: true
 		};
 		var numericKeys = {
 			wuiOpenPort: true,
-			wuiPort: true,
 			storageLowSpaceThresholdMB: true,
 			recordedStorageWakeupBeforeSec: true,
 			matchRetentionDays: true,
@@ -1128,7 +1120,6 @@ P = Class.create(P, {
 			vaapiEnabled: true,
 			recordedNameReplaceEnclosingCharacters: true,
 			wuiOpenServer: true,
-			wuiXFF: true,
 			matchKeepRecordedSnapshot: true,
 			programViewShowMatchDebug: true
 		};
@@ -1149,6 +1140,21 @@ P = Class.create(P, {
 			}
 			if (numericKeys[key]) {
 				config[key] = Number(value);
+				return;
+			}
+			if (commandKeys[key]) {
+				if (value.charAt(0) !== '[') {
+					config[key] = value;
+					return;
+				}
+				try {
+					config[key] = value.evalJSON();
+					if (!Object.isArray(config[key]) || config[key].length === 0 || !config[key].all(function (item) { return typeof item === 'string'; })) {
+						errors.push(key + ' のJSON配列は1個以上の文字列で指定してください。');
+					}
+				} catch (e) {
+					errors.push(key + ' は実行ファイルのパスまたは正しいJSON配列で指定してください。');
+				}
 				return;
 			}
 			if (optionalJsonKeys[key]) {
@@ -1197,6 +1203,10 @@ P = Class.create(P, {
 
 		if (errors.length > 0) {
 			throw new Error(errors.join('\n'));
+		}
+		if (config.notificationCommand) {
+			delete config.storageLowSpaceNotifyTo;
+			delete config.storageLowSpaceCommand;
 		}
 		return config;
 	},

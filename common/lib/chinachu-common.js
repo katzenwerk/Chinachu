@@ -10,9 +10,27 @@
 var fs         = require('fs');
 var path       = require('path');
 var crypto     = require('crypto');
-var dateFormat = require('dateformat');
+var dateFormat = require('dateformat').default;
 var child_process = require('child_process');
 var string = require('@chezearth/string');
+
+var DATEFORMAT_TOKEN = /d{1,4}|D{3,4}|m{1,4}|yy(?:yy)?|([HhMsTt])\1?|W{1,2}|[LlopSZN]|"[^"]*"|'[^']*'/g;
+var LEGACY_MILLISECOND_MARKER = '\u0000chinachu-dateformat-L\u0000';
+
+// dateformat 1.0.12 rounded the two-digit millisecond token while 5.x truncates it.
+// Keep the old recordedFormat result without changing quoted literal text.
+var formatRecordedDate = function (date, mask) {
+	var legacyMask = String(mask).replace(DATEFORMAT_TOKEN, function (token) {
+		return token === 'L' ? "'" + LEGACY_MILLISECOND_MARKER + "'" : token;
+	});
+	var milliseconds = String(Math.round(date.getMilliseconds() / 10));
+
+	while (milliseconds.length < 2) {
+		milliseconds = '0' + milliseconds;
+	}
+
+	return dateFormat(date, legacyMask).split(LEGACY_MILLISECOND_MARKER).join(milliseconds);
+};
 
 var execSync   = function (command) {
 	try {
@@ -243,7 +261,7 @@ exports.formatRecordedName = function (program, name, options) {
 	name = name.replace(/<([^>]+)>/g, function (z, a) {
 
 		// date:
-		if (a.match(/^date:.+$/) !== null) { return dateFormat(new Date(program.start), a.match(/:(.+)$/)[1]); }
+		if (a.match(/^date:.+$/) !== null) { return formatRecordedDate(new Date(program.start), a.match(/:(.+)$/)[1]); }
 
 		// id
 		if (a.match(/^id$/) !== null) { return program.id; }

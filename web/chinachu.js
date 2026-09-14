@@ -15,9 +15,10 @@
 		apiRoot: app.def.apiRoot
 	});
 
-	app.socket = io.connect(window.location.protocol + '//' + window.location.host, {
-		connectTimeout: 3000,
+	app.socket = io(window.location.protocol + '//' + window.location.host, {
 		path: window.location.pathname.replace(/[^\/]*$/g, '') + 'socket.io',
+		// Keep the Socket.IO 2.x transport order: polling first, then WebSocket upgrade.
+		transports: [ 'polling', 'websocket' ]
 	});
 
 	// コントロールビュー初期化

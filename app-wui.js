@@ -25,10 +25,22 @@ const path = require('path');
 const fs = require('fs');
 const util = require('util');
 
+function formatJstLogTime() {
+	const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
+	const yyyy = d.getUTCFullYear().toString();
+	const mm = (d.getUTCMonth() + 1).toString().padStart(2, '0');
+	const dd = d.getUTCDate().toString().padStart(2, '0');
+	const hh = d.getUTCHours().toString().padStart(2, '0');
+	const ii = d.getUTCMinutes().toString().padStart(2, '0');
+	const ss = d.getUTCSeconds().toString().padStart(2, '0');
+
+	return yyyy + '/' + mm + '/' + dd + ' ' + hh + ':' + ii + ':' + ss;
+}
+
 // Node.js 24 では util.log が存在しないため、旧Chinachu互換のログ関数を補う
 if (typeof util.log !== 'function') {
 	util.log = function () {
-		console.log(new Date().toISOString() + ' - ' + Array.prototype.join.call(arguments, ' '));
+		console.log(formatJstLogTime() + ' - ' + Array.prototype.join.call(arguments, ' '));
 	};
 }
 const child_process = require('child_process');
@@ -39,14 +51,12 @@ const os = require('os');
 const zlib = require('zlib');
 const events = require('events');
 const http = require('http');
-const https = require('https');
-const auth = require('http-auth');
-const socketio = require('socket.io');
+const { Server: SocketIOServer } = require('socket.io');
 const chinachu = require('chinachu-common');
-const ip = require("ip");
-const geoip = require('geoip-lite');
-const mdns = require('mdns-js');
 const mirakurun = new (require("mirakurun").default)();
+const openHost = require('./lib/wui-open-host');
+const runtimePrivileges = require('./lib/runtime-privileges');
+const mirakurunConnection = require('./lib/mirakurun-connection');
 
 // Directory Checking
 if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./web/')) {
@@ -77,18 +87,6 @@ const OPERATOR_PID_FILE = (() => {
 	return "/var/run/chinachu-operator.pid";
 })();
 
-// SIGQUIT
-process.on('SIGQUIT', () => {
-	setTimeout(() => {
-		serverMdns && serverMdns.stop()
-		openServerMdns && openServerMdns.stop()
-		// Wait stopping mDNS service
-		setTimeout(() => {
-			process.exit(0);
-		}, 1000);
-	}, 0);
-});
-
 // Uncaught Exception
 process.on('uncaughtException', err => {
 
@@ -100,43 +98,16 @@ process.on('uncaughtException', err => {
 	console.error('uncaughtException: ' + err);
 });
 
-// setuid
-if (process.platform !== "win32") {
-	if (process.getuid() === 0) {
-		if (typeof config.gid === "string" || typeof config.gid === "number") {
-			process.setgid(config.gid);
-		} else {
-			process.setgid('video');
-		}
-		if (typeof config.uid === "string" || typeof config.uid === "number") {
-			process.setuid(config.uid);
-		} else {
-			console.error("[fatal] 'uid' required in config.");
-			process.exit(1);
-		}
-	}
+// root管理方式ではsupplementary groupsを初期化してから権限を降格する。
+try {
+	runtimePrivileges.dropPrivileges(process, config);
+} catch (error) {
+	console.error('[fatal] failed to drop privileges: ' + error.message);
+	process.exit(1);
 }
 
 // Mirakurun Client
-const mirakurunPath = config.mirakurunPath || config.schedulerMirakurunPath || "http+unix://%2Fvar%2Frun%2Fmirakurun.sock/";
-
-if (/(?:\/|\+)unix:/.test(mirakurunPath) === true) {
-	const standardFormat = /^http\+unix:\/\/([^\/]+)(\/?.*)$/;
-	const legacyFormat = /^http:\/\/unix:([^:]+):?(.*)$/;
-
-	if (standardFormat.test(mirakurunPath) === true) {
-		mirakurun.socketPath = mirakurunPath.replace(standardFormat, "$1").replace(/%2F/g, "/");
-		mirakurun.basePath = path.join(mirakurunPath.replace(standardFormat, "$2"), mirakurun.basePath);
-	} else {
-		mirakurun.socketPath = mirakurunPath.replace(legacyFormat, "$1");
-		mirakurun.basePath = path.join(mirakurunPath.replace(legacyFormat, "$2"), mirakurun.basePath);
-	}
-} else {
-	const urlObject = new URL(mirakurunPath);
-	mirakurun.host = urlObject.hostname;
-	mirakurun.port = urlObject.port;
-	mirakurun.basePath = path.join(urlObject.pathname, mirakurun.basePath);
-}
+const mirakurunPath = mirakurunConnection.configureClient(mirakurun, config);
 
 mirakurun.userAgent = `Chinachu/${pkg.version} (wui)`;
 mirakurun.priority = 0;
@@ -168,36 +139,6 @@ const status = {
 	}
 };
 
-// HTTPS
-var tlsOption = null;
-var tlsEnabled = !!config.wuiTlsKeyPath && !!config.wuiTlsCertPath;
-if (tlsEnabled) {
-	tlsOption = {
-		key : fs.readFileSync(config.wuiTlsKeyPath),
-		cert: fs.readFileSync(config.wuiTlsCertPath),
-		secureProtocol: 'SSLv23_method',
-		secureOptions: require('constants').SSL_OP_NO_SSLv2 | require('constants').SSL_OP_NO_SSLv3
-	};
-
-	// 秘密鍵または pfx のパスフレーズを表す文字列
-	if (config.wuiTlsPassphrase) { tlsOption.passphrase = config.wuiTlsPassphrase; }
-
-	if (config.wuiTlsRequestCert) { tlsOption.requestCert = config.wuiTlsRequestCert; }
-	if (config.wuiTlsRejectUnauthorized) { tlsOption.rejectUnauthorized = config.wuiTlsRejectUnauthorized; }
-	if (config.wuiTlsCaPath) { tlsOption.ca = [ fs.readFileSync(config.wuiTlsCaPath) ]; }
-}
-
-// Basic Auth
-let basic = null;
-const basicAuthEnabled = config.wuiUsers && (config.wuiUsers.length > 0);
-if (basicAuthEnabled) {
-	basic = auth.basic({
-		realm: 'Authentication.'
-	}, function (username, password, callback) {
-		callback(config.wuiUsers.indexOf([username, password].join(':')) !== -1);
-	});
-}
-
 // Open Server
 const openServerEnabled = config.wuiOpenServer === true;
 
@@ -208,95 +149,74 @@ var recording = [];
 var recorded  = [];
 
 // Init HTTP Server
-let server, openServer, httpOpenServer;
-let serverMdns, openServerMdns;
+let openServer;
+let socketServer;
+let shutdownStarted = false;
 
-if (tlsEnabled) {
-	if (basicAuthEnabled) {
-		server = https.createServer(basic, tlsOption, httpServer);
-	} else {
-		server = https.createServer(tlsOption, httpServer);
+function shutdownWui(signal) {
+	if (shutdownStarted) {
+		return;
 	}
-} else {
-	if (basicAuthEnabled) {
-		server = http.createServer(basic, httpServer);
+	shutdownStarted = true;
+	util.log('SHUTDOWN: ' + signal);
+
+	const timeout = setTimeout(() => {
+		console.error('FATAL: WUI graceful shutdown timed out.');
+		process.exit(1);
+	}, 10000);
+
+	const complete = () => {
+		clearTimeout(timeout);
+		process.exit(0);
+	};
+
+	if (socketServer) {
+		socketServer.close(complete);
+	} else if (openServer && openServer.listening) {
+		openServer.close(complete);
 	} else {
-		server = http.createServer(httpServer);
+		complete();
 	}
 }
 
-if (config.wuiPort) {
-	server.timeout = 240000;
-
-	server.listen(config.wuiPort, config.wuiHost || '0.0.0.0', function () {
-		util.log((tlsEnabled ? 'HTTPS' : 'HTTP') + ' Server Listening on ' + util.inspect(server.address()));
-		if (config.wuiMdnsAdvertisement === true) {
-			// Start mDNS advertisement
-			serverMdns = mdns.createAdvertisement(mdns.tcp(tlsEnabled ? '_https' : '_http'), config.wuiPort, {
-				name: 'Chinachu on ' + os.hostname(),
-				host: os.hostname(),
-				txt: {
-					txtvers: '1',
-					'Version': 'gamma',
-					'Password': basicAuthEnabled
-				}
-			});
-			serverMdns.start();
-			util.log((tlsEnabled ? 'HTTPS' : 'HTTP') + ' Server mDNS advertising started.');
-		}
-	});
-
-	console.error('**DEPRECATION WARNING**: please remove `wuiPort` and use `wuiOpenServer` instead.');
-}
+[ 'SIGINT', 'SIGTERM', 'SIGQUIT' ].forEach(signal => {
+	process.on(signal, () => shutdownWui(signal));
+});
 
 // Open Server for Access from LAN.
 if (openServerEnabled) {
-	openServer = http.createServer(httpServer);
-	openServer.timeout = 0;
-
-	let hostIp = config.wuiOpenHost;
-	if (!hostIp) {
-		const addresses = [];
-
-		const interfaces = os.networkInterfaces();
-		Object.keys(interfaces).forEach(k => {
-			interfaces[k]
-				.filter(a => {
-					return (
-						a.family === "IPv4" &&
-						a.internal === false &&
-						ip.isPrivate(a.address) === true
-					);
-				})
-				.forEach(a => addresses.push(a.address));
-		});
-
-		hostIp = addresses[0];
-
-		console.log("============================================================");
-		console.log("Detected Private IPv4:", addresses);
-		console.log("Selected Private IPv4 for Open Server:", addresses[0]);
-		console.log("NOTE: set `wuiOpenHost` to fix address for listen.");
-		console.log("============================================================");
+	let selection = null;
+	try {
+		selection = openHost.resolveOpenServerHost(config.wuiOpenHost);
+	} catch (error) {
+		console.error('ERROR: ' + error.message);
 	}
 
-	openServer.listen(config.wuiOpenPort || 20772, hostIp, () => {
-		util.log('HTTP Open Server Listening on ' + util.inspect(openServer.address()));
-		if (config.wuiMdnsAdvertisement === true) {
-			// Start mDNS advertisement
-			openServerMdns = mdns.createAdvertisement(mdns.tcp('_http'), config.wuiOpenPort || 20772, {
-				name: 'Chinachu Open Server on ' + os.hostname(),
-				host: os.hostname(),
-				txt: {
-					txtvers: '1',
-					'Version': 'gamma',
-					'Password': false
-				}
-			});
-			openServerMdns.start();
-			util.log('HTTP Open Server mDNS advertising started.');
+	if (selection) {
+		if (selection.autoDetected) {
+			console.log("============================================================");
+			console.log("Detected Private IPv4:", selection.addresses);
+			console.log("Selected Private IPv4 for Open Server:", selection.host);
+			console.log("NOTE: set `wuiOpenHost` to fix address for listen.");
+			console.log("============================================================");
 		}
-	});
+
+		openServer = http.createServer(httpServer);
+		openServer.timeout = 0;
+
+		const onOpenServerStartupError = error => {
+			const code = error && error.code ? ' [' + error.code + ']' : '';
+			console.error('FATAL: HTTP Open Server failed to listen' + code + ': ' + error.message);
+			process.exit(1);
+		};
+		openServer.once('error', onOpenServerStartupError);
+
+		openServer.listen(config.wuiOpenPort || 20772, selection.host, () => {
+			openServer.removeListener('error', onOpenServerStartupError);
+			socketServer = ioAddListener(openServer);
+			util.log('HTTP Open Server Listening on ' + util.inspect(openServer.address()));
+		});
+	}
 }
 
 // HTTP Server
@@ -361,10 +281,6 @@ function httpServer(req, res) {
 function httpServerMain(req, res, query) {
 	var remoteAddress = req.client.remoteAddress;
 
-	if (config.wuiXFF === true && req.headers['x-forwarded-for']) {
-		remoteAddress = req.headers['x-forwarded-for'].split(',')[0];
-	}
-
 	if (/^\:\:ffff\:[^\:]+/.test(remoteAddress) === true) {
 		remoteAddress = remoteAddress.split(':')[3];
 	}
@@ -378,17 +294,6 @@ function httpServerMain(req, res, query) {
 			'"' + (req.headers['user-agent'] || '-') + '"'
 		].join(' '));
 	};
-
-	// country restriction
-	if (Array.isArray(config.wuiAllowCountries) && config.wuiAllowCountries.length > 0) {
-		var geo = geoip.lookup(remoteAddress);
-		if (geo !== null && config.wuiAllowCountries.indexOf(geo.country) === -1) {
-			res.writeHead(403, {'content-type': 'text/plain'});
-			res.end('403 Forbidden\n');
-			log(403);
-			console.warn('Non-allowed Country IP Blocked', remoteAddress, JSON.stringify(geo));
-		}
-	}
 
 	// serve static file
 	var location = req.url;
@@ -818,10 +723,14 @@ function iosAddEventListner(io, eventName) {
 	});
 }
 
-function ioAddListener(server, isOpen) {
-	var io = socketio(server);
+function ioAddListener(server) {
+	// Preserve the pre-P1-E transport model: polling first, then WebSocket upgrade.
+	// WebTransport and the legacy Engine.IO 3 compatibility mode are not enabled.
+	var io = new SocketIOServer(server, {
+		transports: [ 'polling', 'websocket' ]
+	});
 
-	io.on('connection', isOpen ? ioOpenServer : ioServer);
+	io.on('connection', ioServer);
 
 	// listen event
 	iosAddEventListner(io, 'status');
@@ -834,43 +743,7 @@ function ioAddListener(server, isOpen) {
 	return io;
 }
 
-ioAddListener(server);
-if (openServerEnabled === true) {
-	ioAddListener(openServer, true);
-}
-
-function ioOpenServer(socket) {
-	socket.isOpen = true;
-	ioServer(socket);
-}
-
 function ioServer(socket) {
-	if (basicAuthEnabled && !socket.isOpen) {
-		// ヘッダを確認
-		if (!socket.handshake.headers.authorization || (socket.handshake.headers.authorization.match(/^Basic .+$/) === null)) {
-			socket.disconnect();
-			return;
-		}
-
-		// Base64文字列を取り出す
-		var auth = socket.handshake.headers.authorization.split(' ')[1];
-
-		// Base64デコード
-		try {
-			auth = Buffer.from(auth, 'base64').toString('ascii');
-		} catch (e) {
-			socket.disconnect();
-			return;
-		}
-
-		// 認証
-		if (config.wuiUsers && config.wuiUsers.indexOf(auth) === -1) {
-			socket.disconnect();
-			return;
-		}
-	}
-
-	// 通ってよし
 	ioServerMain(socket);
 }
 

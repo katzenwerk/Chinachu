@@ -51,23 +51,20 @@ if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./w
 	process.exit(1);
 }
 
-// 終了処理
-process.on('SIGQUIT', () => {
-	setTimeout(() => {
-		process.exit(0);
-	}, 0);
-});
-
 // 例外処理
 process.on('uncaughtException', (err) => {
 	console.error('uncaughtException: ' + err.stack);
 });
 
 // 追加モジュールのロード
-const dateFormat = require('dateformat');
+const dateFormat = require('dateformat').default;
 // Node.js 18.15.0 以降の fs.statfs() を使用するため diskusage は不要
-const nodemailer = require("nodemailer");
-const sendmail = require("nodemailer-sendmail-transport");
+const notification = require('./lib/notification');
+const recordingAttempt = require('./lib/recording-attempt');
+const storageLow = require('./lib/storage-low');
+const runtimePrivileges = require('./lib/runtime-privileges');
+const mirakurunConnection = require('./lib/mirakurun-connection');
+const mirakurunDropWatch = require('./lib/mirakurun-drop-watch');
 const chinachu = require('chinachu-common');
 const mirakurun = new (require("mirakurun").default)();
 
@@ -90,8 +87,8 @@ const recordingPriority = config.recordingPriority || 2;
 const conflictedPriority = config.conflictedPriority || 1;
 const storageLowSpaceThresholdMB = config.storageLowSpaceThresholdMB || 3000;// 3 GB
 const storageLowSpaceAction = config.storageLowSpaceAction || "remove"; // "none" | "stop" | "remove"
-const storageLowSpaceNotifyTo = config.storageLowSpaceNotifyTo;// e-mail address
-const storageLowSpaceCommand = config.storageLowSpaceCommand || null;// command
+const notificationSettings = notification.resolveNotificationCommand(config);
+const sendNotification = notification.createNotificationSender(notificationSettings.command, { log: operatorLog });
 const recordedStorageWakeupBeforeSec = getRecordedStorageWakeupBeforeSec();// 録画開始前HDD起動秒数。0/null/未指定は無効
 const recordedStorageWakeupBeforeTime = recordedStorageWakeupBeforeSec * 1000;
 const mirakurunDropCheckIntervalTime = getMirakurunDropCheckIntervalTime();// 録画中drop監視間隔。0以下で無効
@@ -189,51 +186,23 @@ function getPrepReserveCheckIntervalTime() {
 	return Math.max(1, Math.floor(seconds)) * 1000;
 }
 
-// setuid
-if (process.platform !== "win32") {
-	if (process.getuid() === 0) {
-		if (typeof config.gid === "string" || typeof config.gid === "number") {
-			process.setgid(config.gid);
-		} else {
-			process.setgid('video');
-		}
-		if (typeof config.uid === "string" || typeof config.uid === "number") {
-			process.setuid(config.uid);
-		} else {
-			console.error("[fatal] 'uid' required in config.");
-			process.exit(1);
-		}
-	}
+// root管理方式ではsupplementary groupsを初期化してから権限を降格する。
+try {
+	runtimePrivileges.dropPrivileges(process, config);
+} catch (error) {
+	console.error('[fatal] failed to drop privileges: ' + error.message);
+	process.exit(1);
 }
 
 // Mirakurun Client
-const mirakurunPath = config.mirakurunPath || config.schedulerMirakurunPath || "http+unix://%2Fvar%2Frun%2Fmirakurun.sock/";
-
-if (/(?:\/|\+)unix:/.test(mirakurunPath) === true) {
-	const standardFormat = /^http\+unix:\/\/([^\/]+)(\/?.*)$/;
-	const legacyFormat = /^http:\/\/unix:([^:]+):?(.*)$/;
-
-	if (standardFormat.test(mirakurunPath) === true) {
-		mirakurun.socketPath = mirakurunPath.replace(standardFormat, "$1").replace(/%2F/g, "/");
-		mirakurun.basePath = path.join(mirakurunPath.replace(standardFormat, "$2"), mirakurun.basePath);
-	} else {
-		mirakurun.socketPath = mirakurunPath.replace(legacyFormat, "$1");
-		mirakurun.basePath = path.join(mirakurunPath.replace(legacyFormat, "$2"), mirakurun.basePath);
-	}
-} else {
-	const urlObject = new URL(mirakurunPath);
-	mirakurun.host = urlObject.hostname;
-	mirakurun.port = urlObject.port;
-	mirakurun.basePath = path.join(urlObject.pathname, mirakurun.basePath);
-}
+const mirakurunPath = mirakurunConnection.configureClient(mirakurun, config);
 
 mirakurun.userAgent = `Chinachu/${pkg.version} (operator)`;
 mirakurun.priority = recordingPriority;
 
 console.info(mirakurun);
 
-// sendmail
-const transporter = nodemailer.createTransport(sendmail());
+notificationSettings.warnings.forEach(message => operatorLog('WARNING: ' + message));
 
 // 初回起動や clean 環境向けに、不足している台帳JSONだけを作成する
 ensureJsonArrayFile(RESERVES_DATA_FILE);
@@ -269,12 +238,18 @@ let mirakurunDropChecked = 0;
 let mirakurunDropChecking = false;
 let mirakurunDropSnapshots = {};
 let reserveCheckTimer = null;
+let operatorInterval = null;
+let shutdownStarted = false;
+const activeRecordingOutputs = new Set();
 
 
 // メインループ
 // 通常時は3秒程度でざっくり確認し、録画準備期間に入っている予約がある間だけ1秒程度で確認する。
 // prepRecord() の判定は従来どおり reservesChecker() 側で行う。
 function reserveCheckLoop() {
+	if (shutdownStarted) {
+		return;
+	}
 
 	clock = Date.now();
 
@@ -317,7 +292,7 @@ function hasPrepReserveCheckTarget() {
 			continue;
 		}
 
-		if (isRecorded(program)) {
+		if (isRecordedForReserve(program)) {
 			continue;
 		}
 
@@ -340,7 +315,7 @@ function hasPrepReserveCheckTarget() {
 reserveCheckLoop();
 
 // 裏ループ
-setInterval(() => {
+operatorInterval = setInterval(() => {
 
 	if ((scheduler === null) && (clock - scheduled > schedulerIntervalTime)) {
 		startScheduler();
@@ -367,7 +342,7 @@ setInterval(() => {
 function reservesChecker(program) {
 
 	// スキップする
-	if (program.isSkip) {
+	if (program.isSkip || program._operatorNg || program._operatorAbort) {
 		return;
 	}
 
@@ -379,7 +354,7 @@ function reservesChecker(program) {
 	// すでに録画済みとして確定した番組は、同一放送時間内で再準備しない。
 	// 手動中止や LACK は短縮録画済みとして recorded.json に残すため、
 	// ここで再 PREPARE / 再 RECORD を防ぐ。
-	if (isRecorded(program)) {
+	if (isRecordedForReserve(program)) {
 		return;
 	}
 
@@ -413,6 +388,90 @@ function isRecorded(program) {
 	}
 
 	return false;
+}
+
+// graceful shutdown で中断した録画開始済みのルール予約だけを再開対象にする。
+// isRecorded() の通常の終端判定は変更せず、その前段で限定的に使用する。
+function getResumableInterruptedRecording(program) {
+	if (!program || program.isManualReserved || clock > program.end) {
+		return null;
+	}
+
+	for (let i = 0, l = recorded.length; i < l; i++) {
+		const interrupted = recorded[i];
+
+		if (!interrupted ||
+			interrupted.id !== program.id ||
+			interrupted.isManualReserved ||
+			interrupted.operatorResumePending !== true ||
+			interrupted.operatorAbort === true ||
+			interrupted.operatorEndLack === true ||
+			typeof interrupted.recorded !== 'string' ||
+			interrupted.recorded.trim() === '') {
+			continue;
+		}
+
+		return interrupted;
+	}
+
+	return null;
+}
+
+function isRecordedForReserve(program) {
+	return isRecorded(program) && getResumableInterruptedRecording(program) === null;
+}
+
+function inheritInterruptedRecording(program, interrupted) {
+	if (!program || !interrupted) {
+		return;
+	}
+
+	program.operatorResumePending = true;
+	program.operatorInterruptedAt = interrupted.operatorInterruptedAt;
+	program.operatorInterruptionCount = Number(interrupted.operatorInterruptionCount) || 1;
+
+	if (interrupted.operatorResumedAt) {
+		program.operatorResumedAt = interrupted.operatorResumedAt;
+	}
+
+	Object.defineProperty(program, '_operatorResumeRecordedPath', {
+		enumerable: false,
+		configurable: true,
+		value: interrupted.recorded
+	});
+}
+
+function markRecordingInterruptedForResume(program) {
+	if (!program ||
+		program.isManualReserved ||
+		program._operatorNg ||
+		program._operatorAbort ||
+		program._operatorEndLack ||
+		program.operatorAbort === true ||
+		program.operatorEndLack === true) {
+		return false;
+	}
+
+	program.operatorResumePending = true;
+	program.operatorInterruptedAt = Date.now();
+	program.operatorInterruptionCount = (Number(program.operatorInterruptionCount) || 0) + 1;
+	return true;
+}
+
+// 同一番組を異なる保存先へ録画した場合の旧録画IDを一意にする。
+// 最初の衝突では従来互換の <program id>-<start base36> を維持し、
+// そのIDも使用済みの場合だけ -2, -3, ... を付ける。
+function getUniqueRecordedCollisionId(program, recordedPrograms) {
+	const baseId = program.id + '-' + program.start.toString(36);
+	let candidate = baseId;
+	let sequence = 2;
+
+	while (recordedPrograms.some(recordedProgram => recordedProgram.id === candidate)) {
+		candidate = baseId + '-' + sequence;
+		sequence++;
+	}
+
+	return candidate;
 }
 
 // 録画中の番組を更新
@@ -456,59 +515,102 @@ function recordingUpdater(program) {
 
 // スケジューラーを停止
 function stopScheduler() {
-	process.removeListener('SIGINT',  stopScheduler);
-	process.removeListener('SIGQUIT', stopScheduler);
-	process.removeListener('SIGTERM', stopScheduler);
-
 	if (scheduler === null) { return; }
 
-	scheduler.kill('SIGQUIT');
-	operatorLog('KILL: SIGQUIT -> Scheduler (pid=' + scheduler.pid + ')');
+	const signal = 'SIGINT';
+	try {
+		if (process.platform !== 'win32') {
+			process.kill(-scheduler.pid, signal);
+		} else {
+			scheduler.kill(signal);
+		}
+		operatorLog('KILL: ' + signal + ' -> Scheduler group (pid=' + scheduler.pid + ')');
+	} catch (error) {
+		if (error.code !== 'ESRCH') {
+			operatorLog('WARNING: Scheduler stop failed: ' + error.message);
+		}
+	}
 }
 
 // スケジューラーを開始
 function startScheduler() {
 	if (scheduler !== null) { return; }
 
-	var output, finalize;
+	var finalize;
 
-	scheduler = child_process.spawn('./chinachu', [ 'update' ]);
+	scheduler = child_process.spawn('./chinachu', [ 'update' ], {
+		detached: process.platform !== 'win32'
+	});
 	operatorLog('SPAWN: ./chinachu update (pid=' + scheduler.pid + ')');
 
-	// ログ用
-	output = fs.createWriteStream('./log/scheduler', { flags: 'a' });
-	operatorLog('STREAM: ./log/scheduler');
+	// ./chinachu update 側の tee が scheduler log を保存する。
+	// 転送された stdout は再追記せず、pipe が詰まらないよう明示的に drain する。
+	scheduler.stdout.resume();
 
 	finalize = function () {
 
 		operatorLog('EXIT: node app-scheduler.js (pid=' + scheduler.pid + ')');
 
-		try {
-			process.removeListener('SIGINT', stopScheduler);
-			process.removeListener('SIGQUIT', stopScheduler);
-			process.removeListener('SIGTERM', stopScheduler);
-		} catch (e) {}
-
-		try { output.end(); } catch (ee) {}
-
 		scheduler = null;
+		completeOperatorShutdown();
 	};
-
-	scheduler.stdout.on('data', function (data) {
-		try {
-			output.write(data);
-		} catch (e) {
-			operatorLog('ERROR: Scheduler -> Abort (' + e + ')');
-			finalize();
-		}
-	});
 
 	scheduler.once('exit', finalize);
 
-	process.once('SIGINT', stopScheduler);
-	process.once('SIGQUIT', stopScheduler);
-	process.once('SIGTERM', stopScheduler);
 }
+
+function completeOperatorShutdown() {
+	if (!shutdownStarted || scheduler !== null || activeRecordingOutputs.size !== 0) {
+		return;
+	}
+
+	operatorLog('SHUTDOWN: complete');
+	process.exit(0);
+}
+
+function shutdownOperator(signal) {
+	if (shutdownStarted) {
+		return;
+	}
+	shutdownStarted = true;
+	operatorLog('SHUTDOWN: ' + signal);
+
+	if (reserveCheckTimer !== null) {
+		clearTimeout(reserveCheckTimer);
+		reserveCheckTimer = null;
+	}
+	if (operatorInterval !== null) {
+		clearInterval(operatorInterval);
+		operatorInterval = null;
+	}
+
+	stopScheduler();
+	recording.slice().forEach(program => {
+		if (typeof program._operatorFinalize === 'function') {
+			markRecordingInterruptedForResume(program);
+			program._operatorFinalize();
+		}
+	});
+
+	setTimeout(() => {
+		operatorLog('FATAL: graceful shutdown timed out.');
+		if (scheduler !== null && process.platform !== 'win32') {
+			try {
+				process.kill(-scheduler.pid, 'SIGKILL');
+			} catch (error) {
+				if (error.code !== 'ESRCH') {
+					operatorLog('WARNING: Scheduler force stop failed: ' + error.message);
+				}
+			}
+		}
+		process.exit(1);
+	}, 10000);
+	completeOperatorShutdown();
+}
+
+[ 'SIGINT', 'SIGTERM', 'SIGQUIT' ].forEach(signal => {
+	process.on(signal, () => shutdownOperator(signal));
+});
 
 // 番組ログ用
 function printProgram(program) {
@@ -910,6 +1012,27 @@ function removeRecording(programId, reason) {
 	}
 }
 
+// 手動予約はskipではなく予約解除として扱う。
+// 録画開始後のfinalizeと、ユーザーによるstream取得前の停止で同じ削除処理を使う。
+function removeManualReserve(program) {
+	if (!program || !program.isManualReserved) {
+		return false;
+	}
+
+	for (let i = 0, l = reserves.length; i < l; i++) {
+		if (reserves[i].id !== program.id) {
+			continue;
+		}
+
+		reserves.splice(i, 1);
+		fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(reserves));
+		operatorLog('WRITE: ' + RESERVES_DATA_FILE);
+		return true;
+	}
+
+	return false;
+}
+
 // ストリームを安全に中止する
 function safeAbortStream(stream, reason) {
 	if (!stream) {
@@ -1061,21 +1184,6 @@ function formatSecondsForLog(seconds) {
 }
 
 
-// Mirakurun APIのパスを作成する
-// mirakurun.basePath は通常 /api を含むため、ここでは endpoint に /api を重ねない。
-function getMirakurunApiRequestPath(endpoint) {
-	const basePath = mirakurun.basePath || '/api';
-	let requestPath = path.posix.join('/', basePath, endpoint || '');
-
-	requestPath = requestPath.replace(/\\/g, '/');
-
-	if (requestPath.charAt(0) !== '/') {
-		requestPath = '/' + requestPath;
-	}
-
-	return requestPath;
-}
-
 // Mirakurun APIからJSONを1回取得する
 function getMirakurunJson(endpoint, timeoutMs) {
 	return new Promise((resolve) => {
@@ -1084,7 +1192,7 @@ function getMirakurunJson(endpoint, timeoutMs) {
 		let finished = false;
 		let req = null;
 		let chunks = [];
-		const requestPath = getMirakurunApiRequestPath(endpoint);
+		const requestPath = mirakurunDropWatch.getApiRequestPath(mirakurun, endpoint);
 
 		function done(err, data) {
 			if (finished) {
@@ -1121,7 +1229,7 @@ function getMirakurunJson(endpoint, timeoutMs) {
 		}, timeoutMs);
 
 		try {
-			if (mirakurun.socketPath) {
+			if (mirakurunDropWatch.usesUnixSocket(mirakurun)) {
 				req = http.request({
 					socketPath: mirakurun.socketPath,
 					path: requestPath,
@@ -1397,8 +1505,23 @@ function recordingStaleChecker() {
 // 録画準備
 function prepRecord(program) {
 
-	if (clock > program.end) {
+	if (program._operatorNg || program._operatorAbort || clock > program.end) {
 		return;
+	}
+
+	const interrupted = getResumableInterruptedRecording(program);
+	if (interrupted) {
+		inheritInterruptedRecording(program, interrupted);
+	}
+
+	const attempt = recordingAttempt.start(program);
+
+	function isCurrentAttempt() {
+		return recordingAttempt.isCurrent(program, attempt) &&
+			!program._operatorNg &&
+			!program._operatorAbort &&
+			isRecording(program) &&
+			clock <= program.end;
 	}
 
 	if (!program.operatorPrepareStart) {
@@ -1416,18 +1539,21 @@ function prepRecord(program) {
 	// get stream
 	mirakurun.getProgramStream(parseInt(program.id, 36), true)
 		.then(stream => {
-			if (program._operatorNg || !isRecording(program) || clock > program.end) {
+			if (!isCurrentAttempt()) {
 				operatorLog('DROP STREAM: ' + printProgram(program));
 				safeAbortStream(stream, 'drop stream');
+				recordingAttempt.clear(program, attempt);
 				return;
 			}
 
+			recordingAttempt.clear(program, attempt);
 			doRecord(program, stream);
 		})
 		.catch(err => {
 
-			if (program._stream) {
-				// 既に録画開始
+			if (!isCurrentAttempt()) {
+				operatorLog('DROP STREAM ERROR: ' + printProgram(program));
+				recordingAttempt.clear(program, attempt);
 				return;
 			}
 
@@ -1450,9 +1576,21 @@ function prepRecord(program) {
 						// 旧録画をLACKで閉じた直後だけ、次番組のstream取得を即再試行する。
 						setTimeout(() => {
 							clock = Date.now();
-							if (clock <= program.end && !isRecording(program) && !isRecorded(program)) {
-								prepRecord(program);
+							if (!recordingAttempt.isCurrent(program, attempt)) {
+								return;
 							}
+
+							if (program._operatorNg ||
+								program._operatorAbort ||
+								clock > program.end ||
+								isRecording(program) ||
+								isRecordedForReserve(program)) {
+								recordingAttempt.clear(program, attempt);
+								return;
+							}
+
+							recordingAttempt.clear(program, attempt);
+							prepRecord(program);
 						}, 500);
 						return;
 					}
@@ -1463,9 +1601,16 @@ function prepRecord(program) {
 
 			// リトライ
 			setTimeout(() => {
-				const recordingIndex = recording.indexOf(program);
-				if (recordingIndex !== -1) {
-					recording.splice(recordingIndex, 1);
+				if (!recordingAttempt.isCurrent(program, attempt)) {
+					return;
+				}
+
+				if (program._operatorNg || program._operatorAbort) {
+					recordingAttempt.clear(program, attempt);
+					return;
+				}
+
+				if (recordingAttempt.remove(recording, program, attempt)) {
 					writeRecordingData();
 				}
 			}, 5000);
@@ -1478,7 +1623,7 @@ function prepRecord(program) {
 // 録画実行
 function doRecord(program, stream) {
 
-	if (program._operatorNg || !isRecording(program) || clock > program.end) {
+	if (shutdownStarted || program._operatorNg || !isRecording(program) || clock > program.end) {
 		operatorLog('DROP RECORD: ' + printProgram(program));
 		safeAbortStream(stream, 'drop record');
 		return;
@@ -1501,9 +1646,19 @@ function doRecord(program, stream) {
 	program.command = `mirakurun type=${program.channel.type} url=${stream.req.path} priority=${program.priority}`;// dummy
 	program.pid = -1;// dummy
 
-	// 保存先パス
-	const recPath = getRecordedPath(program);
+	// 保存先パス。shutdown後の再開時だけ、暫定recordedに保存した同一pathを使う。
+	const isResumedRecording = typeof program._operatorResumeRecordedPath === 'string';
+	const recPath = isResumedRecording ? program._operatorResumeRecordedPath : getRecordedPath(program);
+	if (isResumedRecording && !fs.existsSync(recPath)) {
+		operatorLog('WARNING: RESUME RECORDING FILE NOT FOUND, recreate at same path: ' + recPath);
+	}
 	program.recorded = recPath;
+	if (isResumedRecording) {
+		program.operatorResumePending = false;
+		program.operatorResumedAt = Date.now();
+		delete program._operatorResumeRecordedPath;
+		operatorLog('RESUME RECORD: ' + printProgram(program));
+	}
 
 	// 保存先ディレクトリ
 	const recDirPath = path.dirname(recPath);
@@ -1514,19 +1669,58 @@ function doRecord(program, stream) {
 
 	// 保存ストリーム
 	const recFile = fs.createWriteStream(recPath, { flags: 'a' });
+	activeRecordingOutputs.add(recFile);
 	operatorLog('STREAM: ' + recPath);
-	stream.pipe(recFile);
+
+	let finalized = false;
+	let inputEnded = false;
+
+	function finalizeNg(reason, error) {
+		if (finalized) {
+			return;
+		}
+
+		const errorDetail = error && (error.code || error.message);
+		markRecordingNg(program, reason + (errorDetail ? ' (' + errorDetail + ')' : ''));
+		finalize();
+	}
+
+	function onInputEnd() {
+		inputEnded = true;
+		finalize();
+	}
+
+	function onInputAborted() {
+		finalizeNg('NG RECORDING: INPUT STREAM ABORTED');
+	}
+
+	function onInputError(error) {
+		finalizeNg('NG RECORDING: INPUT STREAM ERROR', error);
+	}
+
+	function onInputClose() {
+		stream.removeListener('error', onInputError);
+		if (!inputEnded) {
+			finalizeNg('NG RECORDING: INPUT STREAM CLOSED PREMATURELY');
+		}
+	}
+
+	function onOutputError(error) {
+		finalizeNg('NG RECORDING: OUTPUT STREAM ERROR', error);
+	}
 
 	// 録画プロセス終了時処理
-	stream.once('end', finalize);
-
-	// 終了シグナル時処理
-	process.on('SIGINT', finalize);
-	process.on('SIGQUIT', finalize);
-	process.on('SIGTERM', finalize);
-
-	// 状態更新
-	writeRecordingData();
+	stream.once('end', onInputEnd);
+	stream.once('aborted', onInputAborted);
+	// aborted後にもerrorが続くため、closeまではerror listenerを維持する
+	stream.on('error', onInputError);
+	stream.once('close', onInputClose);
+	recFile.once('error', onOutputError);
+	recFile.once('close', () => {
+		recFile.removeListener('error', onOutputError);
+		activeRecordingOutputs.delete(recFile);
+		completeOperatorShutdown();
+	});
 
 	// 内部用
 	Object.defineProperty(program, "_stream", {
@@ -1534,9 +1728,18 @@ function doRecord(program, stream) {
 		configurable: true,
 		value: stream
 	});
+	Object.defineProperty(program, "_operatorFinalize", {
+		enumerable: false,
+		configurable: true,
+		value: finalize
+	});
+
+	stream.pipe(recFile);
+
+	// 状態更新
+	writeRecordingData();
 
 	// お片付け
-	let finalized = false;
 	function finalize() {
 
 		if (finalized) {
@@ -1544,13 +1747,15 @@ function doRecord(program, stream) {
 		}
 		finalized = true;
 
+		stream.removeListener('end', onInputEnd);
+		stream.removeListener('aborted', onInputAborted);
+
 		applyMirakurunDropSnapshot(program);
 
 		safeAbortStream(stream, 'recording finalize');
 
-		process.removeListener('SIGINT', finalize);
-		process.removeListener('SIGQUIT', finalize);
-		process.removeListener('SIGTERM', finalize);
+		delete program._stream;
+		delete program._operatorFinalize;
 
 		// 書き込みストリームを閉じる
 		recFile.end();
@@ -1567,6 +1772,11 @@ function doRecord(program, stream) {
 		}
 
 		const isNgRecording = !!program._operatorNg;
+		const isResumePending = !isNgRecording &&
+			program.operatorResumePending === true &&
+			!program.isManualReserved &&
+			program.operatorAbort !== true &&
+			program.operatorEndLack !== true;
 
 		if (!isNgRecording) {
 			for (let i = 0, l = recorded.length; i < l; i++) {
@@ -1574,7 +1784,7 @@ function doRecord(program, stream) {
 					if (recorded[i].recorded === program.recorded) {
 						recorded.splice(i, 1);
 					} else {
-						recorded[i].id += '-' + recorded[i].start.toString(36);
+						recorded[i].id = getUniqueRecordedCollisionId(recorded[i], recorded);
 					}
 					break;
 				}
@@ -1582,7 +1792,9 @@ function doRecord(program, stream) {
 			recorded.push(program);
 			fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
 			operatorLog('WRITE: ' + RECORDED_DATA_FILE);
-			scheduleMatchLedgerUpdate('recorded finalize');
+			if (!isResumePending) {
+				scheduleMatchLedgerUpdate('recorded finalize');
+			}
 		} else {
 			operatorLog(program._operatorNg + ': ' + printProgram(program));
 		}
@@ -1593,24 +1805,17 @@ function doRecord(program, stream) {
 		}
 		writeRecordingData();
 		delete mirakurunDropSnapshots[program.id];
-		if (program.isManualReserved) {
-			for (let i = 0, l = reserves.length; i < l; i++) {
-				if (reserves[i].id === program.id) {
-					reserves.splice(i, 1);
-					fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(reserves));
-					operatorLog('WRITE: ' + RESERVES_DATA_FILE);
-					break;
-				}
-			}
-		}
+		removeManualReserve(program);
 
 		// ポストプロセス
-		if (!isNgRecording && config.recordedCommand) {
+		if (!isNgRecording && !isResumePending && config.recordedCommand) {
 			const postProcess = child_process.spawn(config.recordedCommand, [recPath, JSON.stringify(program)]);
 			operatorLog('SPAWN: ' + config.recordedCommand + ' (pid=' + postProcess.pid + ')');
 		}
 
-		if (program._operatorEndLack) {
+		if (isResumePending) {
+			operatorLog('FIN INTERRUPTED: resume pending: ' + printProgram(program));
+		} else if (program._operatorEndLack) {
 			operatorLog('FIN END LACK: ' + printProgram(program));
 		} else if (program._operatorAbort) {
 			operatorLog('FIN ABORT SHORT: ' + printProgram(program));
@@ -1619,11 +1824,6 @@ function doRecord(program, stream) {
 		}
 	}
 
-	Object.defineProperty(program, "_operatorFinalize", {
-		enumerable: false,
-		configurable: true,
-		value: finalize
-	});
 }
 
 // 録画中止
@@ -1654,6 +1854,9 @@ function stopRecording(programId, reason) {
 	// ストリーム取得前は録画ファイルが存在しないため、従来どおり NG 側で落とす。
 	markRecordingNg(program, abortReason);
 	removeRecording(program.id, abortReason);
+	if (abortReason === 'ABORT RECORDING') {
+		removeManualReserve(program);
+	}
 }
 
 
@@ -1666,6 +1869,7 @@ function isStorageCleanupTargetFile(filePath) {
 // 現在録画中の保存先パス一覧を取得する
 function getRecordingPathSet() {
 	const paths = new Set();
+	const now = Date.now();
 
 	for (let i = 0, l = recording.length; i < l; i++) {
 		if (!recording[i] || !recording[i].recorded) {
@@ -1673,6 +1877,19 @@ function getRecordingPathSet() {
 		}
 
 		paths.add(path.resolve(recording[i].recorded));
+	}
+
+	// 番組終了前のshutdown中断ファイルは、再開待ちの間も自動削除から保護する。
+	for (let i = 0, l = recorded.length; i < l; i++) {
+		if (!recorded[i] ||
+			recorded[i].operatorResumePending !== true ||
+			now > recorded[i].end ||
+			typeof recorded[i].recorded !== 'string' ||
+			recorded[i].recorded.trim() === '') {
+			continue;
+		}
+
+		paths.add(path.resolve(recorded[i].recorded));
 	}
 
 	return paths;
@@ -1792,16 +2009,31 @@ function storageChecker() {
 			stChecked = 0;// すぐに再チェックするため
 			operatorLog(`ALERT: Storage Low Space! (${freeMB} MB < ${storageLowSpaceThresholdMB} MB)`);
 
-			// 1. 指定コマンド実行
-			if (storageLowSpaceCommand) {
-				const command = child_process.spawn(storageLowSpaceCommand);
-				operatorLog('SPAWN: ' + storageLowSpaceCommand + ' (pid=' + command.pid + ')');
+			// 1. 外部通知コマンド実行
+			const shouldNotify = notification.shouldSendStorageLowNotification(
+				notificationSettings.source,
+				clock,
+				stNotified,
+				notifyIntervalTime
+			);
+			if (notificationSettings.command && shouldNotify) {
+				if (notificationSettings.source === 'notificationCommand') {
+					stNotified = clock;
+				}
+
+				sendNotification(notification.createStorageLowNotification({
+					availableBytes: info.available,
+					availableMB: freeMB,
+					thresholdMB: storageLowSpaceThresholdMB,
+					recordedDir: config.recordedDir,
+					action: storageLowSpaceAction
+				}));
 			}
 
 			// 2. アクション
 			if (storageLowSpaceAction === "stop") {
 				// 録画停止
-				recording.forEach(program => stopRecording(program.id, 'LOW STORAGE'));
+				storageLow.stopCurrentRecordings(recording, stopRecording);
 			} else if (storageLowSpaceAction === "remove") {
 				// config.recordedDir 直下の最古 ts/m2ts を1件削除する
 				removeOldestRecordedFileInRecordedDir();
@@ -1809,22 +2041,6 @@ function storageChecker() {
 				operatorLog('STORAGE LOW SPACE ACTION: none');
 			} else {
 				operatorLog('WARNING: Unknown storageLowSpaceAction: ' + storageLowSpaceAction);
-			}
-
-			// 3. メール通知
-			if (storageLowSpaceNotifyTo && clock - stNotified > notifyIntervalTime) {
-				stNotified = clock;
-
-				transporter.sendMail({
-					from: "Chinachu <chinachu@localhost>",
-					to: storageLowSpaceNotifyTo,
-					subject: "[Chinachu] ALERT: Storage Low Space!",
-					text: `Current Free Space is ${freeMB} MB.\nThreshold is ${storageLowSpaceThresholdMB} MB.`
-				}, (err, info) => {
-					if (err) {
-						console.log(err);
-					}
-				});
 			}
 		}
 	});
@@ -1885,4 +2101,3 @@ chinachu.jsonWatcher(
 	},
 	{ create: [], now: false }
 );
-

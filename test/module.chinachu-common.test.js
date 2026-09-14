@@ -3,7 +3,11 @@
 var os     = require("os");
 var path   = require("path");
 var fs     = require("fs");
-var should = require("should");
+var test   = require("node:test");
+var assert = require("node:assert/strict");
+
+var describe = test.describe;
+var it = test.it;
 
 var chinachu = require("chinachu-common");
 
@@ -31,38 +35,117 @@ describe("(init)", function() {
 describe("jsonWatcher", function() {
 	var test = null;
 
-	it("read", function(done) {
+	it("read", function() {
 		var finished = false;
 
-		watcher = chinachu.jsonWatcher(testDataPath, function(err, data, msg) {
-			if (finished) {
-				return;
-			}
+		return new Promise(function(resolve, reject) {
+			watcher = chinachu.jsonWatcher(testDataPath, function(err, data, msg) {
+				if (finished) {
+					return;
+				}
 
-			if (err) {
+				if (err) {
+					finished = true;
+					reject(new Error(err));
+					return;
+				}
+
 				finished = true;
-				done(new Error(err));
-				return;
-			}
+				test = data;
 
-			finished = true;
-			test = data;
+				assert.ok(test != null);
 
-			should.exist(test);
-
-			done();
-		}, { now: true });
+				resolve();
+			}, { now: true });
+		});
 	});
 
 	it("validate", function() {
-		should.strictEqual(test.a, 0);
-		should.strictEqual(test.b, 1);
-		should.strictEqual(test.c, "");
-		should.strictEqual(test.d, "string");
-		should.strictEqual(test.e, null);
+		assert.strictEqual(test.a, 0);
+		assert.strictEqual(test.b, 1);
+		assert.strictEqual(test.c, "");
+		assert.strictEqual(test.d, "string");
+		assert.strictEqual(test.e, null);
 	});
 
-	it.skip("watch");
+	it("watch", { timeout: 5000 }, function() {
+		var temporaryDirectory = null;
+		var temporaryFile = null;
+		var localWatcher = null;
+		var timeout = null;
+		var updatedData = { updated: true, value: "変更後" };
+
+		return new Promise(function(resolve, reject) {
+			var finished = false;
+
+			var finish = function(err) {
+				var cleanupError = null;
+
+				if (finished) {
+					return;
+				}
+
+				finished = true;
+				clearTimeout(timeout);
+
+				if (localWatcher && typeof localWatcher.close === "function") {
+					try {
+						localWatcher.close();
+					} catch (watcherError) {
+						cleanupError = watcherError;
+					}
+				}
+
+				if (temporaryDirectory) {
+					try {
+						fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+					} catch (fileError) {
+						cleanupError = cleanupError || fileError;
+					}
+				}
+
+				if (err || cleanupError) {
+					reject(err || cleanupError);
+					return;
+				}
+
+				resolve();
+			};
+
+			try {
+				temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "chinachu-json-watcher-"));
+				temporaryFile = path.join(temporaryDirectory, "watch.json");
+				fs.writeFileSync(temporaryFile, JSON.stringify({ updated: false }));
+
+				localWatcher = chinachu.jsonWatcher(temporaryFile, function(err, data, msg) {
+					if (err) {
+						finish(new Error(err));
+						return;
+					}
+
+					try {
+						assert.deepStrictEqual(data, updatedData);
+						assert.strictEqual(msg, "READ: `" + temporaryFile + "` is updated.");
+						finish();
+					} catch (assertionError) {
+						finish(assertionError);
+					}
+				}, { wait: 25 });
+
+				timeout = setTimeout(function() {
+					finish(new Error("Timed out waiting for jsonWatcher update."));
+				}, 3000);
+
+				fs.writeFile(temporaryFile, JSON.stringify(updatedData), function(err) {
+					if (err) {
+						finish(err);
+					}
+				});
+			} catch (err) {
+				finish(err);
+			}
+		});
+	});
 });
 
 describe("(clean up)", function() {
