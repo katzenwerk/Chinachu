@@ -1,33 +1,44 @@
-Chinachu [![Build Status](https://secure.travis-ci.org/Chinachu/Chinachu.svg)](http://travis-ci.org/Chinachu/Chinachu) [![tip for next commit](http://tip4commit.com/projects/689.svg)](http://tip4commit.com/projects/689)
-========
+# Chinachu thorn
 
-- This software is no longer under development.
-- Node.js v14 is the last supported version.
-- Node.js v14 will become [END-OF-LIFE on 2023-04-30](https://nodejs.org/en/about/releases/).
-- Please stop using this software by the above date and consider using a different software.
+`thorn` is an unofficial maintenance branch based on Chinachu `gamma`,
+updated for current Linux environments, Node.js 24, and continued usability.
 
-Stay in touch on Discord Community: <https://discord.gg/X7KU5W9>
+This unofficial fork includes compatibility, installer, Web UI, recording, and
+operational updates for current Node.js and Mirakurun environments. Some changes
+are experimental and should be verified before production use.
 
-<https://chinachu.moe/>
+Some internal behavior and operational details differ from upstream `gamma`.
 
+For release history and notable changes, see
+[CHANGELOG.md](CHANGELOG.md).
 
+## Requirements
 
-## Fork maintenance notes
+- Linux
+- Node.js 24.x
+- npm
+- Mirakurun 4.1.3
+- PM2 (optional, for service management)
 
-This branch contains personal, unofficial maintenance changes for running Chinachu with Node.js 24.17.0.
+The bundled installer can prepare the Chinachu runtime, Node.js dependencies,
+FFmpeg / ffprobe, and required runtime files as needed.
 
-Chinachu itself is no longer under active development, and the original project states that Node.js v14 is the last supported version. These changes are specific to this fork/branch, include experimental modifications, and do not imply official support by the upstream project.
+## Installation
 
-### Changes in this branch
+Make sure Mirakurun is installed, configured, and reachable from the Chinachu host.
 
-- Update bundled Node.js to 24.17.0
-- Update backend, API, application scripts, package metadata, and sample configuration for Node.js 24
-- Improve the web UI and usability
-- Add or improve GUI-based configuration handling
-- Improve channel selection by reducing direct use of hard-to-read channel IDs
-- Expand recorded-program views toward recording history information
-- Change the theme color and replace `gamma` branding with `thorn` to distinguish this heavily modified and experimental branch from the original gamma branch
+Clone the `thorn` branch and run the installer:
 
-### Notes
+```sh
+git clone -b thorn https://github.com/katzenwerk/Chinachu.git
+cd Chinachu
+./chinachu installer
+```
 
-These changes are intended as a personal compatibility and usability update for this fork/branch. Some changes are experimental, and additional verification is recommended for recording, reservation, rule matching, and Web UI behavior before production use.
+For a normal installation, use the recommended automatic installation option.
+
+If needed, install PM2 separately and run:
+
+```sh
+sudo ./chinachu service setup
+```
