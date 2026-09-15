@@ -57,6 +57,31 @@ service_setup_pm2_daemon_active () {
   ps -eo user=,args= | awk -v user="$user" '$1 == user && /PM2 .*God Daemon/ { found=1 } END { exit !found }'
 }
 
+service_setup_pm2_startup_enabled () {
+  local user="$1" unit
+  command -v systemctl > /dev/null 2>&1 || return 1
+  unit="pm2-${user}.service"
+  [ "$(systemctl is-enabled "$unit" 2>/dev/null)" = enabled ]
+}
+
+service_setup_ensure_local_startup () {
+  local user="$1" home
+  [ "$(id -u)" -eq 0 ] || return 1
+  [ -n "$user" ] && [ "$user" != root ] || return 1
+  command -v systemctl > /dev/null 2>&1 || return 1
+  [ -n "$SERVICE_SETUP_PM2_BIN" ] || return 1
+
+  if service_setup_pm2_startup_enabled "$user"; then
+    return 0
+  fi
+
+  home=$(service_setup_user_home "$user") || return 1
+  [ -n "$home" ] || return 1
+
+  env PATH="$PATH:/usr/bin" "$SERVICE_SETUP_PM2_BIN" startup systemd -u "$user" --hp "$home" || return 1
+  service_setup_pm2_startup_enabled "$user"
+}
+
 service_setup_json_has_chinachu () {
   "$BOOTSTRAP_NODE_COMMAND" -e '
     const list = JSON.parse(require("fs").readFileSync(0, "utf8").trim() || "[]");
@@ -543,7 +568,6 @@ service_setup_log_rotation_review () {
       case "$root_answer" in y | Y | yes | YES ) service_setup_install_logrotate ROOT || { service_setup_error 'Root PM2へのpm2-logrotate導入に失敗しました。既存registrationは変更しません。'; return 1; } ;; esac
     fi
   fi
-  printf '\npm2-logrotateはPM2 module databaseへ登録されるため、この処理では通常app向けpm2 saveを実行しません。\n'
 }
 
 service_setup_installer_offer () {
@@ -967,6 +991,60 @@ service_setup_has_healthy_existing () {
   fi
 }
 
+service_setup_local_saved_pair () {
+  [ "$SERVICE_SETUP_LOCAL_SAVED_KNOWN" = true ] || return 1
+  printf '%s' "$SERVICE_SETUP_LOCAL_SAVED" | service_setup_json_has_chinachu_pair
+}
+
+service_setup_local_persistence_needs_repair () {
+  printf '%s' "$SERVICE_SETUP_LOCAL_ACTIVE" | service_setup_json_has_online_chinachu_pair || return 1
+  service_setup_local_saved_pair || return 0
+  service_setup_pm2_startup_enabled "$SERVICE_SETUP_LOCAL_USER" || return 0
+  return 1
+}
+
+service_setup_repair_local_persistence () {
+  local active_var saved_var
+  [ "$(id -u)" -eq 0 ] || return 1
+  SERVICE_SETUP_PM2_BIN=${SERVICE_SETUP_PM2_BIN:-$(command -v pm2 2>/dev/null)}
+  [ -n "$SERVICE_SETUP_PM2_BIN" ] || { service_setup_error 'PM2が見つかりません。'; return 1; }
+
+  active_var=SERVICE_SETUP_LOCAL_ACTIVE
+  saved_var=SERVICE_SETUP_LOCAL_SAVED
+
+  if ! service_setup_local_saved_pair; then
+    if ! service_setup_json_active_only_is_chinachu "${!active_var}" "${!saved_var}"; then
+      service_setup_error 'Chinachu以外の未保存PM2 processがあるため、自動でpm2 saveを実行しません。'
+      return 1
+    fi
+    service_setup_persistence_save_environment LOCAL || {
+      service_setup_error 'Local PM2の保存状態を修復できませんでした。'
+      return 1
+    }
+  fi
+
+  service_setup_ensure_local_startup "$SERVICE_SETUP_LOCAL_USER" || {
+    service_setup_error 'Local PM2のOS自動起動設定を構成できませんでした。'
+    return 1
+  }
+
+  service_setup_capture_state true || return 1
+  printf '%s' "$SERVICE_SETUP_LOCAL_ACTIVE" | service_setup_json_has_online_chinachu_pair || {
+    service_setup_error '修復後にChinachu operator / WUIがONLINEではありません。'
+    return 1
+  }
+  service_setup_local_saved_pair || {
+    service_setup_error '修復後のPM2 saved stateにChinachu operator / WUIを確認できません。'
+    return 1
+  }
+  service_setup_pm2_startup_enabled "$SERVICE_SETUP_LOCAL_USER" || {
+    service_setup_error '修復後にLocal PM2のOS自動起動設定を確認できません。'
+    return 1
+  }
+
+  printf '\nLocal PM2の保存・OS自動起動設定を修復しました。\n'
+}
+
 service_setup_maintenance () {
   service_setup_persistence_review || return 1
   service_setup_log_rotation_review || return 1
@@ -1007,6 +1085,13 @@ service_setup_run_setup () {
   if ! printf '%s' "${!saved_var}" | service_setup_json_has_chinachu_pair; then
     service_setup_error 'pm2 save後の保存状態にChinachu operator / WUIを確認できません。'
     return 1
+  fi
+
+  if [ "$mode" = local ]; then
+    service_setup_ensure_local_startup "$SERVICE_SETUP_LOCAL_USER" || {
+      service_setup_error 'Local PM2のOS自動起動設定に失敗しました。Chinachu active/saved stateは維持します。'
+      return 1
+    }
   fi
 
   service_setup_log_rotation_review || return 1
@@ -1052,7 +1137,15 @@ service_setup_run_setup () {
     return 1
   }
 
-  printf '✓ 最終確認: ONLINE / PM2保存済み\n'
+  if [ "$mode" = local ]; then
+    service_setup_pm2_startup_enabled "$SERVICE_SETUP_LOCAL_USER" || {
+      service_setup_error '最終確認でLocal PM2のOS自動起動設定を確認できません。'
+      return 1
+    }
+    printf '✓ 最終確認: ONLINE / PM2保存済み / 自動起動設定済み\n'
+  else
+    printf '✓ 最終確認: ONLINE / PM2保存済み\n'
+  fi
   service_setup_display_status '最終確認後のPM2状態'
 }
 
@@ -1077,14 +1170,28 @@ service_setup_run_menu () {
 
     if service_setup_has_healthy_existing; then
       [ "$SERVICE_SETUP_EXISTING_MODE" = local ] && mode_label='現在のユーザー方式' || mode_label='従来方式'
-      printf '\nChinachu PM2サービスは設定済みです（%s）。\n\n' "$mode_label"
-      printf '1) Chinachu PM2構成を解除・整理\n0) Exit\n'
-      if service_setup_is_tty && [ -z "$choice" ]; then read -r -p '> ' choice; fi
-      case "$choice" in
-        1 ) service_setup_cleanup; result=$? ;;
-        0 | '' ) return 0 ;;
-        * ) return 1 ;;
-      esac
+      if [ "$SERVICE_SETUP_EXISTING_MODE" = local ] && service_setup_local_persistence_needs_repair; then
+        printf '\nChinachu PM2サービスは起動していますが、保存またはOS自動起動設定に不足があります。\n\n'
+        printf '1) Local PM2の保存・OS自動起動設定を修復\n'
+        printf '2) Chinachu PM2構成を解除・整理\n'
+        printf '0) Exit\n'
+        if service_setup_is_tty && [ -z "$choice" ]; then read -r -p '> ' choice; fi
+        case "$choice" in
+          1 ) service_setup_repair_local_persistence; result=$? ;;
+          2 ) service_setup_cleanup; result=$? ;;
+          0 | '' ) return 0 ;;
+          * ) return 1 ;;
+        esac
+      else
+        printf '\nChinachu PM2サービスは設定済みです（%s）。\n\n' "$mode_label"
+        printf '1) Chinachu PM2構成を解除・整理\n0) Exit\n'
+        if service_setup_is_tty && [ -z "$choice" ]; then read -r -p '> ' choice; fi
+        case "$choice" in
+          1 ) service_setup_cleanup; result=$? ;;
+          0 | '' ) return 0 ;;
+          * ) return 1 ;;
+        esac
+      fi
     elif service_setup_state_has_trace; then
       printf '\n既存のChinachu PM2構成または関連fileを検出しました。\n'
       printf '\n1) 既存Chinachu PM2構成を解除・整理\n0) Exit\n'

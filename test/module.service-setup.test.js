@@ -460,7 +460,7 @@ describe('Service Setup registration', function() {
 });
 
 describe('Service Setup finalization', function() {
-	it('automatically saves Chinachu and verifies the final PM2 state', function() {
+	it('automatically saves Chinachu, ensures local startup, and verifies the final PM2 state', function() {
 		const online = JSON.stringify([
 			{
 				name: 'chinachu-operator',
@@ -492,6 +492,8 @@ describe('Service Setup finalization', function() {
 			'service_setup_register() { printf "REGISTER:%s\\n" "$1"; }',
 			'service_setup_capture_state() { return 0; }',
 			'service_setup_persistence_save_environment() { printf "SAVE:%s\\n" "$1"; SERVICE_SETUP_LOCAL_SAVED="$SERVICE_SETUP_LOCAL_ACTIVE"; }',
+			'service_setup_ensure_local_startup() { printf "STARTUP:%s\\n" "$1"; return 0; }',
+			'service_setup_pm2_startup_enabled() { [ "$1" = testuser ]; }',
 			'service_setup_log_rotation_review() { echo LOGROTATE; }',
 			'service_setup_processes_are_attributed() { return 0; }',
 			'service_setup_display_status() { printf "STATUS:%s\\n" "$1"; }',
@@ -516,7 +518,17 @@ describe('Service Setup finalization', function() {
 
 		assert.match(
 			result.stdout,
+			/^STARTUP:testuser$/m
+		);
+
+		assert.match(
+			result.stdout,
 			/^LOGROTATE$/m
+		);
+
+		assert.match(
+			result.stdout,
+			/ONLINE \/ PM2保存済み \/ 自動起動設定済み/
 		);
 
 		assert.match(
