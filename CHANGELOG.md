@@ -62,3 +62,37 @@ service management, WUI modernization, and recording reliability.
 - Consolidated dependency management around the root lockfile.
 - Migrated tests to the built-in Node.js test runner.
 - Replaced Travis CI with GitHub Actions.
+
+
+# Chinachu 0.10.7-thorn.22
+
+This release improves recorded-duration handling and PM2 service persistence.
+
+## Highlights
+
+- Added ffprobe-based recorded duration detection.
+- Improved recorded duration display in the WUI.
+- Fixed Local PM2 startup configuration so Chinachu can be restored automatically after an OS reboot.
+
+## Installer / PM2
+
+- Added verification and configuration of the Local PM2 systemd startup service.
+- Fixed a case where `pm2 save` succeeded but Chinachu was not automatically restored after an OS reboot.
+- Preserved the existing PM2 startup service during Chinachu cleanup so unrelated PM2 applications remain unaffected.
+
+## Recording
+
+- Added asynchronous ffprobe duration detection after recording completion.
+- Stores measured duration as `recordedDurationSeconds`.
+- ffprobe failures and timeouts do not prevent recording finalization.
+- Recording completion commands are not delayed by duration probing.
+- Improved handling of measured duration for uninterrupted and resumed recordings.
+
+## WUI
+
+- Recorded program details now prefer the measured file duration when available.
+- Recorded lists now prefer the measured file duration over the scheduled recording duration.
+- Head-cut estimation uses measured duration only for uninterrupted recordings.
+- Existing recordings without measured duration retain the previous fallback behavior.
+- Waits for private IPv4 availability during startup before starting the Open Server.
+- Exits with an error if automatic host detection still fails after the startup wait, allowing PM2 to recover the service.
