@@ -141,6 +141,8 @@ const status = {
 
 // Open Server
 const openServerEnabled = config.wuiOpenServer === true;
+const OPEN_SERVER_HOST_RETRY_INTERVAL_MS = 1000;
+const OPEN_SERVER_HOST_RETRY_TIMEOUT_MS = 60000;
 
 var rules     = [];
 var schedule  = [];
@@ -152,6 +154,8 @@ var recorded  = [];
 let openServer;
 let socketServer;
 let shutdownStarted = false;
+let openServerStartRetryTimer = null;
+let openServerHostRetryLogged = false;
 
 function shutdownWui(signal) {
 	if (shutdownStarted) {
@@ -159,6 +163,11 @@ function shutdownWui(signal) {
 	}
 	shutdownStarted = true;
 	util.log('SHUTDOWN: ' + signal);
+
+	if (openServerStartRetryTimer) {
+		clearTimeout(openServerStartRetryTimer);
+		openServerStartRetryTimer = null;
+	}
 
 	const timeout = setTimeout(() => {
 		console.error('FATAL: WUI graceful shutdown timed out.');
@@ -184,39 +193,67 @@ function shutdownWui(signal) {
 });
 
 // Open Server for Access from LAN.
-if (openServerEnabled) {
-	let selection = null;
+function startOpenServer(startedAt) {
+	let selection;
+
 	try {
 		selection = openHost.resolveOpenServerHost(config.wuiOpenHost);
 	} catch (error) {
-		console.error('ERROR: ' + error.message);
-	}
+		const elapsedMs = Date.now() - startedAt;
 
-	if (selection) {
-		if (selection.autoDetected) {
-			console.log("============================================================");
-			console.log("Detected Private IPv4:", selection.addresses);
-			console.log("Selected Private IPv4 for Open Server:", selection.host);
-			console.log("NOTE: set `wuiOpenHost` to fix address for listen.");
-			console.log("============================================================");
+		if (!config.wuiOpenHost && elapsedMs < OPEN_SERVER_HOST_RETRY_TIMEOUT_MS) {
+			if (!openServerHostRetryLogged) {
+				console.error(
+					'WARNING: No private IPv4 address was detected. ' +
+					'Waiting for network configuration before starting the WUI Open Server.'
+				);
+				openServerHostRetryLogged = true;
+			}
+
+			openServerStartRetryTimer = setTimeout(() => {
+				openServerStartRetryTimer = null;
+				startOpenServer(startedAt);
+			}, OPEN_SERVER_HOST_RETRY_INTERVAL_MS);
+
+			return;
 		}
 
-		openServer = http.createServer(httpServer);
-		openServer.timeout = 0;
-
-		const onOpenServerStartupError = error => {
-			const code = error && error.code ? ' [' + error.code + ']' : '';
-			console.error('FATAL: HTTP Open Server failed to listen' + code + ': ' + error.message);
-			process.exit(1);
-		};
-		openServer.once('error', onOpenServerStartupError);
-
-		openServer.listen(config.wuiOpenPort || 20772, selection.host, () => {
-			openServer.removeListener('error', onOpenServerStartupError);
-			socketServer = ioAddListener(openServer);
-			util.log('HTTP Open Server Listening on ' + util.inspect(openServer.address()));
-		});
+		console.error('FATAL: ' + error.message);
+		process.exit(1);
+		return;
 	}
+
+	if (openServerHostRetryLogged) {
+		console.log('Private IPv4 address became available. Starting the WUI Open Server.');
+	}
+
+	if (selection.autoDetected) {
+		console.log("============================================================");
+		console.log("Detected Private IPv4:", selection.addresses);
+		console.log("Selected Private IPv4 for Open Server:", selection.host);
+		console.log("NOTE: set `wuiOpenHost` to fix address for listen.");
+		console.log("============================================================");
+	}
+
+	openServer = http.createServer(httpServer);
+	openServer.timeout = 0;
+
+	const onOpenServerStartupError = error => {
+		const code = error && error.code ? ' [' + error.code + ']' : '';
+		console.error('FATAL: HTTP Open Server failed to listen' + code + ': ' + error.message);
+		process.exit(1);
+	};
+	openServer.once('error', onOpenServerStartupError);
+
+	openServer.listen(config.wuiOpenPort || 20772, selection.host, () => {
+		openServer.removeListener('error', onOpenServerStartupError);
+		socketServer = ioAddListener(openServer);
+		util.log('HTTP Open Server Listening on ' + util.inspect(openServer.address()));
+	});
+}
+
+if (openServerEnabled) {
+	startOpenServer(Date.now());
 }
 
 // HTTP Server

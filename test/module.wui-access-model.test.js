@@ -227,6 +227,94 @@ describe('WUI access model', function() {
 		assert.match(browserSource, /transports:\s*\[\s*'polling',\s*'websocket'\s*\]/);
 	});
 
+	it('waits for network availability before starting an auto-detected Open Server', { timeout: 10000 }, async function() {
+		const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-wui-network-wait-'));
+		const dataDir = path.join(temporaryDir, 'data');
+		const logDir = path.join(temporaryDir, 'log');
+		const libDir = path.join(temporaryDir, 'lib');
+		const openPort = await reservePort('127.0.0.1');
+		const output = { value: '' };
+		let child = null;
+
+		try {
+			fs.mkdirSync(dataDir);
+			fs.mkdirSync(logDir);
+			fs.mkdirSync(libDir);
+
+			fs.symlinkSync(path.join(repositoryRoot, 'api'), path.join(temporaryDir, 'api'), 'dir');
+			fs.symlinkSync(path.join(repositoryRoot, 'node_modules'), path.join(temporaryDir, 'node_modules'), 'dir');
+			fs.symlinkSync(path.join(repositoryRoot, 'web'), path.join(temporaryDir, 'web'), 'dir');
+
+			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/runtime-privileges.js'),
+				path.join(libDir, 'runtime-privileges.js')
+			);
+			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/mirakurun-connection.js'),
+				path.join(libDir, 'mirakurun-connection.js')
+			);
+
+			fs.writeFileSync(
+				path.join(libDir, 'wui-open-host.js'),
+				[
+					"'use strict';",
+					'let attempts = 0;',
+					'module.exports.resolveOpenServerHost = function() {',
+					'\tattempts += 1;',
+					'\tif (attempts === 1) {',
+					'\t\tthrow new Error("No private IPv4 address was detected. Configure `wuiOpenHost` explicitly; the WUI Open Server was not started.");',
+					'\t}',
+					"\treturn { host: '127.0.0.1', autoDetected: false, addresses: [] };",
+					'};'
+				].join('\n') + '\n'
+			);
+
+			fs.copyFileSync(path.join(repositoryRoot, 'app-wui.js'), path.join(temporaryDir, 'app-wui.js'));
+			fs.copyFileSync(path.join(repositoryRoot, 'package.json'), path.join(temporaryDir, 'package.json'));
+			fs.copyFileSync(path.join(repositoryRoot, 'processes.json'), path.join(temporaryDir, 'processes.json'));
+
+			fs.writeFileSync(path.join(temporaryDir, 'rules.json'), '[]');
+			[ 'rules', 'reserves', 'schedule', 'recording', 'recorded', 'match' ].forEach(name => {
+				fs.writeFileSync(path.join(dataDir, name + '.json'), '[]');
+			});
+
+			fs.writeFileSync(path.join(temporaryDir, 'config.json'), JSON.stringify({
+				mirakurunPath: 'http://127.0.0.1:9/',
+				wuiOpenServer: true,
+				wuiOpenHost: null,
+				wuiOpenPort: openPort
+			}));
+
+			child = childProcess.spawn(process.execPath, [ 'app-wui.js' ], {
+				cwd: temporaryDir,
+				stdio: [ 'ignore', 'pipe', 'pipe' ]
+			});
+
+			child.stdout.on('data', chunk => { output.value += chunk.toString(); });
+			child.stderr.on('data', chunk => { output.value += chunk.toString(); });
+
+			await waitForOutput(child, output, /HTTP Open Server Listening/);
+
+			assert.match(
+				output.value,
+				/WARNING: No private IPv4 address was detected/
+			);
+			assert.match(
+				output.value,
+				/Private IPv4 address became available\. Starting the WUI Open Server\./
+			);
+			assert.match(
+				output.value,
+				/HTTP Open Server Listening/
+			);
+		} finally {
+			if (child && child.exitCode === null && child.signalCode === null) {
+				await waitForExit(child);
+			}
+			fs.rmSync(temporaryDir, { recursive: true, force: true });
+		}
+	});
+
 	it('exits non-zero when the Open Server port is already in use', { timeout: 10000 }, async function() {
 		const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-wui-eaddrinuse-'));
 		const dataDir = path.join(temporaryDir, 'data');
