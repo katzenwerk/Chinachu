@@ -325,7 +325,8 @@ describe('Operator recording preparation attempts', function() {
 			await waitForCondition(
 				() => fixture.read('recording').length === 0 &&
 					fixture.read('reserves').length === 0 &&
-					fixture.read('recorded').some(item => item.id === '2'),
+					fixture.read('recorded').some(item => item.id === '2') &&
+					/FIN ABORT SHORT: #2\b/.test(fixture.output()),
 				'started manual stop did not finalize as a shortened recording',
 				3000
 			);
@@ -355,9 +356,15 @@ describe('Operator recording preparation attempts', function() {
 
 		try {
 			await waitForCondition(
-				() => !!pendingTarget &&
-					/RECORD: #1\b/.test(fixture.output()) &&
-					[ '1', '2' ].every(id => fixture.read('recording').some(item => item.id === id)),
+				() => {
+					const state = fixture.read('recording');
+					const candidate = state.find(item => item.id === '1');
+
+					return !!pendingTarget &&
+						!!candidate &&
+						Number(candidate.operatorRecordingStart) > 0 &&
+						state.some(item => item.id === '2');
+				},
 				'candidate recording and target request did not start',
 				7000
 			);
@@ -466,7 +473,12 @@ describe('Operator recording preparation attempts', function() {
 			ffprobeScript: [
 				'const fs = require("fs");',
 				'fs.appendFileSync(process.env.CHINACHU_TEST_FFPROBE_LOG, process.argv[process.argv.length - 1] + "\\n");',
-				'setTimeout(() => process.stdout.write("12.3456789\\n"), 500);'
+				'const releaseFile = process.env.CHINACHU_TEST_FFPROBE_LOG + ".release";',
+				'const timer = setInterval(() => {',
+				'  if (!fs.existsSync(releaseFile)) return;',
+				'  clearInterval(timer);',
+				'  process.stdout.write("12.3456789\\n");',
+				'}, 20);'
 			].join('\n')
 		});
 
@@ -474,14 +486,20 @@ describe('Operator recording preparation attempts', function() {
 			await waitForCondition(() => !!response && /RECORD: #2\b/.test(fixture.output()), 'recording did not start', 7000);
 			response.end();
 			await waitForCondition(
-				() => fixture.read('recording').length === 0 && fixture.read('recorded').length === 1 && fs.existsSync(fixture.recordedCommandLog),
+				() => fixture.read('recording').length === 0 &&
+					fixture.read('recorded').length === 1 &&
+					fs.existsSync(fixture.recordedCommandLog) &&
+					fs.existsSync(fixture.ffprobeLog),
 				'recording completion or recordedCommand was delayed by ffprobe',
 				3000
 			);
 			assert.strictEqual(fixture.read('recorded')[0].recordedDurationSeconds, undefined);
 
+			fs.writeFileSync(fixture.ffprobeLog + '.release', 'release\n');
+
 			await waitForCondition(
-				() => fixture.read('recorded')[0].recordedDurationSeconds === 12.345679,
+				() => fixture.read('recorded')[0].recordedDurationSeconds === 12.345679 &&
+					/DURATION: 12\.345679 sec/.test(fixture.output()),
 				'ffprobe duration was not persisted',
 				3000
 			);
