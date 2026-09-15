@@ -701,6 +701,18 @@ P = Class.create(P, {
 		return 0;
 	},
 
+	getRecordedDurationSeconds: function _getRecordedDurationSeconds(program) {
+
+		var duration = this.toFiniteNumber(program && program.recordedDurationSeconds);
+
+		return duration > 0 ? duration : 0;
+	},
+
+	getDisplayedDurationSeconds: function _getDisplayedDurationSeconds(program) {
+
+		return this.getRecordedDurationSeconds(program) || this.getOperatorActualSeconds(program);
+	},
+
 	formatDurationShort: function _formatDurationShort(seconds) {
 
 		var s = Math.floor(Number(seconds) || 0);
@@ -723,7 +735,7 @@ P = Class.create(P, {
 
 	isOperatorDurationShort: function _isOperatorDurationShort(program) {
 
-		var actualSeconds = this.getOperatorActualSeconds(program);
+		var actualSeconds = this.getDisplayedDurationSeconds(program);
 		var expectedSeconds = this.toFiniteNumber(program && program.seconds);
 
 		return actualSeconds > 0 && expectedSeconds > 0 && actualSeconds < expectedSeconds - 1;
@@ -731,12 +743,13 @@ P = Class.create(P, {
 
 	getDurationTitle: function _getDurationTitle(program) {
 
-		var actualSeconds = this.getOperatorActualSeconds(program);
+		var recordedDurationSeconds = this.getRecordedDurationSeconds(program);
+		var actualSeconds = recordedDurationSeconds || this.getOperatorActualSeconds(program);
 		var expectedSeconds = this.toFiniteNumber(program && program.seconds);
 		var messages = [];
 
 		if (actualSeconds > 0) {
-			messages.push('録画実績: ' + this.formatDurationShort(actualSeconds));
+			messages.push((recordedDurationSeconds > 0 ? '実ファイル: ' : '録画実績: ') + this.formatDurationShort(actualSeconds));
 		}
 
 		if (expectedSeconds > 0) {
@@ -781,6 +794,8 @@ P = Class.create(P, {
 			operatorRecordingStart: this.pickOperatorValue(source, result, 'operatorRecordingStart', recordedProgram),
 			operatorRecordingEnd  : this.pickOperatorValue(source, result, 'operatorRecordingEnd', recordedProgram),
 			operatorActualSeconds : this.pickOperatorValue(source, result, 'operatorActualSeconds', recordedProgram),
+			recordedDurationSeconds: this.pickOperatorValue(source, result, 'recordedDurationSeconds', recordedProgram),
+			operatorInterruptionCount: this.pickOperatorValue(source, result, 'operatorInterruptionCount', recordedProgram),
 			operatorAbort         : source.operatorAbort === true || result.operatorAbort === true || recordedProgram && recordedProgram.operatorAbort === true,
 			operatorAbortReason   : source.operatorAbortReason || result.operatorAbortReason || recordedProgram && recordedProgram.operatorAbortReason || '',
 			operatorEndLack       : source.operatorEndLack === true || result.operatorEndLack === true || recordedProgram && recordedProgram.operatorEndLack === true,
@@ -1020,7 +1035,7 @@ P = Class.create(P, {
 				}
 			};
 
-			var actualSeconds = this.getOperatorActualSeconds(program);
+			var actualSeconds = this.getDisplayedDurationSeconds(program);
 			var durationText = actualSeconds > 0 ? this.formatDurationShort(actualSeconds) : Math.round(program.seconds / 60) + 'm';
 			var durationTitle = this.getDurationTitle(program);
 

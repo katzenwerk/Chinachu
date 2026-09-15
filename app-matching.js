@@ -18,6 +18,15 @@ function safeInt(value, defaultValue) {
 	return isNaN(n) ? defaultValue : n;
 }
 
+function safeNumber(value, defaultValue) {
+	if (typeof defaultValue === "undefined") {
+		defaultValue = 0;
+	}
+
+	var n = Number(value);
+	return Number.isFinite(n) ? n : defaultValue;
+}
+
 function safeBool(value) {
 	return value == null ? false : !!value;
 }
@@ -596,9 +605,16 @@ function copyOperatorRecordingMeta(source, output) {
 		"operatorPrepareStart",
 		"operatorRecordingStart",
 		"operatorRecordingEnd",
-		"operatorActualSeconds"
+		"operatorActualSeconds",
+		"operatorInterruptedAt",
+		"operatorResumedAt",
+		"operatorInterruptionCount"
+	];
+	var decimalFields = [
+		"recordedDurationSeconds"
 	];
 	var copyFields = [
+		"operatorResumePending",
 		"operatorAbort",
 		"operatorAbortReason",
 		"operatorAbortAt",
@@ -618,6 +634,14 @@ function copyOperatorRecordingMeta(source, output) {
 
 	numberFields.forEach(function (field) {
 		var value = safeInt(source[field], 0);
+
+		if (value > 0) {
+			output[field] = value;
+		}
+	});
+
+	decimalFields.forEach(function (field) {
+		var value = safeNumber(source[field], 0);
 
 		if (value > 0) {
 			output[field] = value;
@@ -1451,6 +1475,7 @@ module.exports = {
 	DEFAULT_RETENTION_DAYS: DEFAULT_RETENTION_DAYS,
 	DEFAULT_READ_DAYS: DEFAULT_READ_DAYS,
 	safeInt: safeInt,
+	safeNumber: safeNumber,
 	safeBool: safeBool,
 	readConfigFile: readConfigFile,
 	getRetentionDays: getRetentionDays,

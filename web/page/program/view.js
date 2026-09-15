@@ -824,6 +824,8 @@ P = Class.create(P, {
 			'operatorRecordingStart',
 			'operatorRecordingEnd',
 			'operatorActualSeconds',
+			'recordedDurationSeconds',
+			'operatorInterruptionCount',
 			'operatorAbort',
 			'operatorAbortReason',
 			'operatorAbortAt',
@@ -874,10 +876,12 @@ P = Class.create(P, {
 	getOperatorTiming: function _getOperatorTiming(fileJson, program, item) {
 
 		var timing = {
-			prepareStart  : this.toFiniteNumber(this.pickOperatorTimingValue('operatorPrepareStart', fileJson, program, item)),
-			recordingStart: this.toFiniteNumber(this.pickOperatorTimingValue('operatorRecordingStart', fileJson, program, item)),
-			recordingEnd  : this.toFiniteNumber(this.pickOperatorTimingValue('operatorRecordingEnd', fileJson, program, item)),
-			actualSeconds : this.toFiniteNumber(this.pickOperatorTimingValue('operatorActualSeconds', fileJson, program, item))
+			prepareStart           : this.toFiniteNumber(this.pickOperatorTimingValue('operatorPrepareStart', fileJson, program, item)),
+			recordingStart         : this.toFiniteNumber(this.pickOperatorTimingValue('operatorRecordingStart', fileJson, program, item)),
+			recordingEnd           : this.toFiniteNumber(this.pickOperatorTimingValue('operatorRecordingEnd', fileJson, program, item)),
+			actualSeconds          : this.toFiniteNumber(this.pickOperatorTimingValue('operatorActualSeconds', fileJson, program, item)),
+			recordedDurationSeconds: this.toFiniteNumber(this.pickOperatorTimingValue('recordedDurationSeconds', fileJson, program, item)),
+			interruptionCount      : this.toFiniteNumber(this.pickOperatorTimingValue('operatorInterruptionCount', fileJson, program, item))
 		};
 
 		if (timing.actualSeconds <= 0 && timing.recordingStart > 0 && timing.recordingEnd > timing.recordingStart) {
@@ -907,15 +911,61 @@ P = Class.create(P, {
 		return m + '分' + ('0' + s).slice(-2) + '秒';
 	},
 
+	formatDurationPrecise: function _formatDurationPrecise(seconds) {
+
+		var value = Number(seconds);
+		var h, m, s;
+
+		if (!isFinite(value) || value <= 0) {
+			return '';
+		}
+
+		h = Math.floor(value / 3600);
+		m = Math.floor((value % 3600) / 60);
+		s = value - h * 3600 - m * 60;
+
+		if (h > 0) {
+			return h + '時間' + m + '分' + ('0' + s.toFixed(3)).slice(-6) + '秒';
+		}
+
+		if (m > 0) {
+			return m + '分' + ('0' + s.toFixed(3)).slice(-6) + '秒';
+		}
+
+		return s.toFixed(3) + '秒';
+	},
+
 	buildRecordedFileInfoBody: function _buildRecordedFileInfoBody(fileJson, program, item) {
 
 		var size = this.toFiniteNumber(fileJson && fileJson.size);
 		var timing = this.getOperatorTiming(fileJson, program, item);
-		var body = size > 0 ? (size / 1024 / 1024 / 1024 / 1).toFixed(2) + 'GB' : '-';
-		var durationText = this.formatDuration(timing.actualSeconds);
+		var programStart = this.toFiniteNumber(program && program.start);
+		var body = size > 0 ? (size / 1024 / 1024 / 1024).toFixed(2) + 'GB' : '-';
+		var durationText;
+		var estimatedFileStart;
+		var headMarginMilliseconds;
 
-		if (durationText) {
-			body += '　' + durationText;
+		if (timing.recordedDurationSeconds > 0) {
+			durationText = this.formatDurationPrecise(timing.recordedDurationSeconds);
+			body += '　実ファイル ' + durationText;
+		} else {
+			durationText = this.formatDuration(timing.actualSeconds);
+			if (durationText) {
+				body += '　録画実績 ' + durationText;
+			}
+		}
+
+		if (timing.recordedDurationSeconds > 0 && timing.recordingEnd > 0 && programStart > 0 && timing.interruptionCount <= 0) {
+			estimatedFileStart = timing.recordingEnd - timing.recordedDurationSeconds * 1000;
+			headMarginMilliseconds = programStart - estimatedFileStart;
+
+			if (Math.abs(headMarginMilliseconds) <= 50) {
+				body += '<br>推定先頭: 番組開始と同時';
+			} else if (headMarginMilliseconds > 0) {
+				body += '<br>推定先頭: 番組開始の ' + this.formatDurationPrecise(headMarginMilliseconds / 1000) + ' 前';
+			} else {
+				body += '<br>推定先頭: 番組開始の ' + this.formatDurationPrecise(Math.abs(headMarginMilliseconds) / 1000) + ' 後';
+			}
 		}
 
 		return body;
@@ -1031,14 +1081,29 @@ P = Class.create(P, {
 		var messages = [];
 		var headDelaySeconds;
 		var tailShortageSeconds;
+		var estimatedFileStart;
+		var estimatedHeadDelayMilliseconds;
+		var measuredDurationSeconds;
+		var headJudgementToleranceMilliseconds = 1000;
 
-		if (!target || timing.actualSeconds <= 0) {
+		if (!target) {
 			return this;
 		}
 
-		if (programStart > 0 && timing.recordingStart > programStart + 1000) {
-			headDelaySeconds = Math.ceil((timing.recordingStart - programStart) / 1000);
-			messages.push('頭切れの可能性: 番組開始より ' + this.formatDuration(headDelaySeconds) + ' 遅れて録画開始');
+		if (programStart > 0) {
+			if (timing.recordedDurationSeconds > 0 && timing.recordingEnd > 0 && timing.interruptionCount <= 0) {
+				estimatedFileStart = timing.recordingEnd - timing.recordedDurationSeconds * 1000;
+				estimatedHeadDelayMilliseconds = estimatedFileStart - programStart;
+
+				if (estimatedHeadDelayMilliseconds > headJudgementToleranceMilliseconds) {
+					headDelaySeconds = estimatedHeadDelayMilliseconds / 1000;
+					messages.push('頭切れの可能性: 推定ファイル先頭が番組開始より ' + this.formatDurationPrecise(headDelaySeconds) + ' 遅れています');
+				}
+			} else if (timing.recordedDurationSeconds <= 0 && timing.recordingStart > programStart + 1000) {
+				// 実ファイル長がない既存録画はthorn.21の1秒基準を維持する。
+				headDelaySeconds = Math.ceil((timing.recordingStart - programStart) / 1000);
+				messages.push('頭切れの可能性: 番組開始より ' + this.formatDuration(headDelaySeconds) + ' 遅れて録画開始');
+			}
 		}
 
 		if (programEnd > 0 && timing.recordingEnd > 0 && timing.recordingEnd < programEnd - 1000) {
@@ -1046,8 +1111,14 @@ P = Class.create(P, {
 			messages.push('尻切れの可能性: 番組終了より ' + this.formatDuration(tailShortageSeconds) + ' 早く録画終了');
 		}
 
-		if (messages.length === 0 && expectedSeconds > 0 && timing.actualSeconds < expectedSeconds - 1) {
-			messages.push('予定時間 ' + this.formatDuration(expectedSeconds) + ' に対して、録画実績は ' + this.formatDuration(timing.actualSeconds) + ' です。');
+		measuredDurationSeconds = timing.recordedDurationSeconds > 0 ? timing.recordedDurationSeconds : timing.actualSeconds;
+
+		if (messages.length === 0 && expectedSeconds > 0 && measuredDurationSeconds > 0 && measuredDurationSeconds < expectedSeconds - 1) {
+			messages.push(
+				'予定時間 ' + this.formatDuration(expectedSeconds) + ' に対して、' +
+				(timing.recordedDurationSeconds > 0 ? '実ファイル長は ' + this.formatDurationPrecise(measuredDurationSeconds) : '録画実績は ' + this.formatDuration(measuredDurationSeconds)) +
+				' です。'
+			);
 		}
 
 		if (messages.length > 0) {
@@ -1392,7 +1463,7 @@ P = Class.create(P, {
 						var fileJson = t.responseJSON || {};
 
 						new sakura.ui.Alert({
-							title       : 'ファイルサイズ',
+							title       : 'ファイル情報',
 							type        : 'white',
 							body        : this.buildRecordedFileInfoBody(fileJson, program, this.matchItem),
 							disableClose: true

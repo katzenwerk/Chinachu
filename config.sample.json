@@ -6,6 +6,8 @@
   "temporaryDir": null,
   "recordedFormat": "[<date:yymmdd-HHMM>][<type><channel>][<channel-name>]<title>.m2ts",
   "recordedCommand": "",
+  "ffprobeCommand": "ffprobe",
+  "recordedDurationProbeTimeoutMs": 8000,
   "recordedNameReplaceEnclosingCharacters": false,
   "recordedNameEnclosingCharacterMap": {},
   "normalizationForm": "NFKC",

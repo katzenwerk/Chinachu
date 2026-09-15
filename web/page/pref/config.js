@@ -546,6 +546,8 @@ P = Class.create(P, {
 		panel.body.insert(this.createFieldRow('recordedNameReplaceEnclosingCharacters', null, this.checkboxInput('recordedNameReplaceEnclosingCharacters'), '録画ファイル名に含まれる番組表の囲み文字を、[字] [再] [新] などの表記へ置き換えます。対象例: →[字]、→[再]、→[新]、→[終]、→[デ]、→[二]、→[多]、→[解]、→[映]、㊙→[秘]、㊗→[祝] など。録画ファイル名だけに効き、番組データ自体は変更しません。'));
 		panel.body.insert(this.createFieldRow('recordedNameEnclosingCharacterMap', 'recordedNameEnclosingCharacterMap', this.textareaInput('recordedNameEnclosingCharacterMap', 4), '囲み文字置換の追加・上書き用JSONオブジェクトです。空欄の場合は既定の置き換え一覧を使用します。指定したキーは既定値へ追加・上書きされます。例: {"":"[字幕]","SS":"[SS]"}'));
 		panel.body.insert(this.createFieldRow('recordedCommand', 'recordedCommand', this.textareaInput('recordedCommand', 3), '録画コマンド。空欄ならChinachu標準の録画処理を使用。独自ffmpeg/rivarun等を使う場合のみ指定。'));
+		panel.body.insert(this.createFieldRow('ffprobeCommand', 'ffprobeCommand', this.textInput('ffprobeCommand'), '録画済みTSの実ファイル長取得に使うffprobe実行ファイル。未指定時はPATH上のffprobeを使用します。追加引数は指定できません。'));
+		panel.body.insert(this.createFieldRow('recordedDurationProbeTimeoutMs', 'recordedDurationProbeTimeoutMs', this.numberInput('recordedDurationProbeTimeoutMs'), '録画済みTSのffprobe timeout（ミリ秒）。未指定・不正値は8000msです。probeは録画完了やshutdownを待たせません。'));
 		panel.body.insert(this.createFieldRow('normalizationForm', 'normalizationForm', this.selectInput('normalizationForm', [
 			{ value: 'NFC', label: 'NFC - くっつける・標準' },
 			{ value: 'NFD', label: 'NFD - バラバラにする' },

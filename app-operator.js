@@ -94,6 +94,7 @@ const recordedStorageWakeupBeforeTime = recordedStorageWakeupBeforeSec * 1000;
 const mirakurunDropCheckIntervalTime = getMirakurunDropCheckIntervalTime();// 録画中drop監視間隔。0以下で無効
 const reserveCheckIntervalTime = getReserveCheckIntervalTime();// 通常時の予約チェック間隔
 const prepReserveCheckIntervalTime = getPrepReserveCheckIntervalTime();// 準備期間内の予約チェック間隔。通常間隔以上なら高速化なし
+const recordedDurationProbeTimeoutMs = getRecordedDurationProbeTimeoutMs();// 録画済みTSのffprobe timeout
 
 
 // 録画境界の準備猶予を取得する
@@ -186,6 +187,18 @@ function getPrepReserveCheckIntervalTime() {
 	return Math.max(1, Math.floor(seconds)) * 1000;
 }
 
+// ffprobeは録画完了・shutdownの必須経路に含めない。
+// timeoutは通常時の補助情報取得を長時間残さないための上限で、未指定時は8秒。
+function getRecordedDurationProbeTimeoutMs() {
+	const timeoutMs = Number(config.recordedDurationProbeTimeoutMs);
+
+	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+		return 8000;
+	}
+
+	return Math.min(Math.floor(timeoutMs), 0x7fffffff);
+}
+
 // root管理方式ではsupplementary groupsを初期化してから権限を降格する。
 try {
 	runtimePrivileges.dropPrivileges(process, config);
@@ -241,6 +254,7 @@ let reserveCheckTimer = null;
 let operatorInterval = null;
 let shutdownStarted = false;
 const activeRecordingOutputs = new Set();
+const activeDurationProbes = new Set();
 
 
 // メインループ
@@ -585,6 +599,7 @@ function shutdownOperator(signal) {
 	}
 
 	stopScheduler();
+	stopActiveDurationProbes();
 	recording.slice().forEach(program => {
 		if (typeof program._operatorFinalize === 'function') {
 			markRecordingInterruptedForResume(program);
@@ -645,6 +660,115 @@ function getDiskUsage(targetPath, callback) {
 function writeRecordingData() {
 	fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));
 	operatorLog('WRITE: ' + RECORDING_DATA_FILE);
+}
+
+// 録画済みTSの実ファイル長をffprobeで取得する。
+// probeは録画完了後のbest-effort処理であり、失敗しても完了状態を変更しない。
+function probeRecordedDuration(filePath, callback) {
+	if (shutdownStarted) {
+		return null;
+	}
+
+	const configuredCommand = typeof config.ffprobeCommand === 'string' ? config.ffprobeCommand.trim() : '';
+	const command = configuredCommand || 'ffprobe';
+	let probe = null;
+	let completed = false;
+
+	function complete(duration) {
+		if (completed) {
+			return;
+		}
+		completed = true;
+		if (probe) {
+			activeDurationProbes.delete(probe);
+		}
+		callback(duration);
+	}
+
+	try {
+		probe = child_process.execFile(
+			command,
+			[
+				'-v', 'fatal',
+				'-show_entries', 'format=duration',
+				'-of', 'default=noprint_wrappers=1:nokey=1',
+				filePath
+			],
+			{
+				timeout: recordedDurationProbeTimeoutMs,
+				maxBuffer: 64 * 1024,
+				encoding: 'utf8'
+			},
+			(error, stdout) => {
+				if (error) {
+					operatorLog('WARNING: ffprobe duration failed: ' + filePath + ' (' + error.message + ')');
+					complete(null);
+					return;
+				}
+
+				const duration = Number(String(stdout || '').trim());
+
+				if (!Number.isFinite(duration) || duration <= 0) {
+					operatorLog('WARNING: ffprobe duration invalid: ' + filePath + ' (' + String(stdout || '').trim() + ')');
+					complete(null);
+					return;
+				}
+
+				complete(Math.round(duration * 1000000) / 1000000);
+			}
+		);
+		activeDurationProbes.add(probe);
+	} catch (error) {
+		operatorLog('WARNING: ffprobe duration failed: ' + filePath + ' (' + error.message + ')');
+		complete(null);
+	}
+
+	return probe;
+}
+
+// probe開始後にもrecorded.jsonはcleanup等で変化し得るため、disk上の現行entryを再確認して追記する。
+function persistRecordedDuration(programId, recordedPath, duration) {
+	let currentRecorded;
+	let currentEntry;
+
+	try {
+		currentRecorded = JSON.parse(fs.readFileSync(RECORDED_DATA_FILE, { encoding: 'utf8' }));
+		if (!Array.isArray(currentRecorded)) {
+			throw new Error('recorded data is not an array');
+		}
+
+		currentEntry = currentRecorded.find(entry => entry && entry.id === programId && entry.recorded === recordedPath);
+		if (!currentEntry || currentEntry.operatorResumePending === true) {
+			operatorLog('WARNING: ffprobe duration target changed, skip update: ' + recordedPath);
+			return false;
+		}
+
+		currentEntry.recordedDurationSeconds = duration;
+		fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(currentRecorded));
+		operatorLog('WRITE: ' + RECORDED_DATA_FILE);
+
+		const memoryEntry = recorded.find(entry => entry && entry.id === programId && entry.recorded === recordedPath);
+		if (memoryEntry && memoryEntry.operatorResumePending !== true) {
+			memoryEntry.recordedDurationSeconds = duration;
+		}
+
+		operatorLog('DURATION: ' + duration.toFixed(6) + ' sec ' + recordedPath);
+		scheduleMatchLedgerUpdate('recorded duration');
+		return true;
+	} catch (error) {
+		operatorLog('WARNING: ffprobe duration update failed: ' + recordedPath + ' (' + error.message + ')');
+		return false;
+	}
+}
+
+function stopActiveDurationProbes() {
+	activeDurationProbes.forEach(probe => {
+		try {
+			probe.kill('SIGTERM');
+		} catch (error) {
+			operatorLog('WARNING: ffprobe stop failed: ' + error.message);
+		}
+	});
 }
 
 let matchLedgerUpdateTimer = null;
@@ -1674,6 +1798,7 @@ function doRecord(program, stream) {
 
 	let finalized = false;
 	let inputEnded = false;
+	let probeDurationAfterClose = false;
 
 	function finalizeNg(reason, error) {
 		if (finalized) {
@@ -1719,6 +1844,13 @@ function doRecord(program, stream) {
 	recFile.once('close', () => {
 		recFile.removeListener('error', onOutputError);
 		activeRecordingOutputs.delete(recFile);
+		if (probeDurationAfterClose && !shutdownStarted) {
+			probeRecordedDuration(recPath, duration => {
+				if (duration !== null) {
+					persistRecordedDuration(program.id, recPath, duration);
+				}
+			});
+		}
 		completeOperatorShutdown();
 	});
 
@@ -1777,6 +1909,7 @@ function doRecord(program, stream) {
 			!program.isManualReserved &&
 			program.operatorAbort !== true &&
 			program.operatorEndLack !== true;
+		probeDurationAfterClose = !isNgRecording && !isResumePending;
 
 		if (!isNgRecording) {
 			for (let i = 0, l = recorded.length; i < l; i++) {

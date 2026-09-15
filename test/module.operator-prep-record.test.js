@@ -67,6 +67,7 @@ async function createOperatorFixture(programs, onStream, options) {
 	const recordedDir = path.join(temporaryDir, 'recorded');
 	const recordedCommandLog = path.join(temporaryDir, 'recorded-command.log');
 	const matchingLog = path.join(temporaryDir, 'matching.log');
+	const ffprobeLog = path.join(temporaryDir, 'ffprobe.log');
 	const sockets = new Set();
 	const requests = [];
 	const docs = {
@@ -135,6 +136,12 @@ async function createOperatorFixture(programs, onStream, options) {
 	if (options.trackMatching) {
 		fs.writeFileSync(path.join(temporaryDir, 'app-matching.js'), 'require("fs").appendFileSync(process.env.CHINACHU_TEST_MATCHING_LOG, "matching\\n");\n');
 	}
+	if (options.ffprobeScript) {
+		const ffprobeCommand = path.join(temporaryDir, 'ffprobe-test.js');
+		fs.writeFileSync(ffprobeCommand, '#!/usr/bin/env node\n' + options.ffprobeScript + '\n');
+		fs.chmodSync(ffprobeCommand, 0o755);
+		options.config = Object.assign({}, options.config, { ffprobeCommand: ffprobeCommand });
+	}
 	fs.writeFileSync(path.join(temporaryDir, 'config.json'), JSON.stringify(Object.assign({
 		mirakurunPath: 'http://127.0.0.1:' + server.address().port + '/',
 		recordedDir: recordedDir,
@@ -166,7 +173,8 @@ async function createOperatorFixture(programs, onStream, options) {
 			stdio: [ 'ignore', 'pipe', 'pipe' ],
 			env: Object.assign({}, process.env, {
 				CHINACHU_TEST_RECORDED_COMMAND_LOG: recordedCommandLog,
-				CHINACHU_TEST_MATCHING_LOG: matchingLog
+				CHINACHU_TEST_MATCHING_LOG: matchingLog,
+				CHINACHU_TEST_FFPROBE_LOG: ffprobeLog
 			})
 		});
 		child.stdout.on('data', chunk => { output += chunk.toString(); });
@@ -211,6 +219,7 @@ async function createOperatorFixture(programs, onStream, options) {
 		recordedDir,
 		recordedCommandLog,
 		matchingLog,
+		ffprobeLog,
 		get child() {
 			return child;
 		},
@@ -446,6 +455,163 @@ describe('Operator recording preparation attempts', function() {
 		}
 	});
 
+	it('persists decimal ffprobe duration after completion without delaying recordedCommand', { timeout: 15000 }, async function() {
+		let response = null;
+		const fixture = await createOperatorFixture([ createProgram('2') ], request => {
+			response = request.res;
+			request.res.writeHead(200, { 'Content-Type': 'video/MP2T' });
+			request.res.write('RECORDED');
+		}, {
+			trackRecordedCommand: true,
+			ffprobeScript: [
+				'const fs = require("fs");',
+				'fs.appendFileSync(process.env.CHINACHU_TEST_FFPROBE_LOG, process.argv[process.argv.length - 1] + "\\n");',
+				'setTimeout(() => process.stdout.write("12.3456789\\n"), 500);'
+			].join('\n')
+		});
+
+		try {
+			await waitForCondition(() => !!response && /RECORD: #2\b/.test(fixture.output()), 'recording did not start', 7000);
+			response.end();
+			await waitForCondition(
+				() => fixture.read('recording').length === 0 && fixture.read('recorded').length === 1 && fs.existsSync(fixture.recordedCommandLog),
+				'recording completion or recordedCommand was delayed by ffprobe',
+				3000
+			);
+			assert.strictEqual(fixture.read('recorded')[0].recordedDurationSeconds, undefined);
+
+			await waitForCondition(
+				() => fixture.read('recorded')[0].recordedDurationSeconds === 12.345679,
+				'ffprobe duration was not persisted',
+				3000
+			);
+			assert.strictEqual(fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length, 1);
+			assert.strictEqual(fs.readFileSync(fixture.ffprobeLog, 'utf8').trim(), path.join(fixture.recordedDir, '2.m2ts'));
+			assert.match(fixture.output(), /DURATION: 12\.345679 sec/);
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it('keeps recordings finalized when ffprobe fails, returns invalid output, or times out', { timeout: 30000 }, async function() {
+		const cases = [
+			{
+				name: 'failure',
+				script: 'process.exit(2);',
+				config: {},
+				warning: /WARNING: ffprobe duration failed:/
+			},
+			{
+				name: 'invalid',
+				script: 'process.stdout.write("not-a-duration\\n");',
+				config: {},
+				warning: /WARNING: ffprobe duration invalid:/
+			},
+			{
+				name: 'timeout',
+				script: 'setTimeout(() => process.stdout.write("60\\n"), 2000);',
+				config: { recordedDurationProbeTimeoutMs: 100 },
+				warning: /WARNING: ffprobe duration failed:/
+			}
+		];
+
+		for (const item of cases) {
+			let response = null;
+			const fixture = await createOperatorFixture([ createProgram('2') ], request => {
+				response = request.res;
+				request.res.writeHead(200, { 'Content-Type': 'video/MP2T' });
+				request.res.write(item.name);
+			}, {
+				ffprobeScript: item.script,
+				config: item.config
+			});
+
+			try {
+				await waitForCondition(() => !!response && /RECORD: #2\b/.test(fixture.output()), item.name + ' recording did not start', 7000);
+				response.end();
+				await waitForCondition(() => item.warning.test(fixture.output()), item.name + ' warning was not logged', 4000);
+				assert.strictEqual(fixture.read('recording').length, 0);
+				assert.strictEqual(fixture.read('recorded').length, 1);
+				assert.strictEqual(fixture.read('recorded')[0].recordedDurationSeconds, undefined);
+				assert.match(fixture.output(), /FIN: #2\b/);
+				assert.doesNotMatch(fixture.output(), /uncaughtException/);
+			} finally {
+				await fixture.close();
+			}
+		}
+	});
+
+	it('does not wait for an active duration probe during graceful shutdown', { timeout: 15000 }, async function() {
+		let response = null;
+		const fixture = await createOperatorFixture([ createProgram('2') ], request => {
+			response = request.res;
+			request.res.writeHead(200, { 'Content-Type': 'video/MP2T' });
+			request.res.write('RECORDED');
+		}, {
+			trackRecordedCommand: true,
+			config: { recordedDurationProbeTimeoutMs: 8000 },
+			ffprobeScript: [
+				'const fs = require("fs");',
+				'fs.appendFileSync(process.env.CHINACHU_TEST_FFPROBE_LOG, "started\\n");',
+				'setTimeout(() => process.stdout.write("60\\n"), 5000);'
+			].join('\n')
+		});
+
+		try {
+			await waitForCondition(() => !!response && /RECORD: #2\b/.test(fixture.output()), 'recording did not start', 7000);
+			response.end();
+			await waitForCondition(
+				() => fixture.read('recording').length === 0 && fixture.read('recorded').length === 1 &&
+					fs.existsSync(fixture.ffprobeLog) && fs.existsSync(fixture.recordedCommandLog),
+				'finalization did not complete before the slow probe',
+				3000
+			);
+
+			const startedAt = Date.now();
+			const exit = await fixture.gracefulStop('SIGTERM');
+			assert.deepStrictEqual(exit, { code: 0, signal: null });
+			assert.ok(Date.now() - startedAt < 3000);
+			assert.strictEqual(fixture.read('recorded')[0].recordedDurationSeconds, undefined);
+			assert.strictEqual(fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length, 1);
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it('does not resurrect a recorded entry removed while duration probing is in flight', { timeout: 15000 }, async function() {
+		let response = null;
+		const fixture = await createOperatorFixture([ createProgram('2') ], request => {
+			response = request.res;
+			request.res.writeHead(200, { 'Content-Type': 'video/MP2T' });
+			request.res.write('RECORDED');
+		}, {
+			ffprobeScript: [
+				'const fs = require("fs");',
+				'fs.appendFileSync(process.env.CHINACHU_TEST_FFPROBE_LOG, "started\\n");',
+				'setTimeout(() => process.stdout.write("60.25\\n"), 500);'
+			].join('\n')
+		});
+
+		try {
+			await waitForCondition(() => !!response && /RECORD: #2\b/.test(fixture.output()), 'recording did not start', 7000);
+			response.end();
+			await waitForCondition(
+				() => fixture.read('recorded').length === 1 && fs.existsSync(fixture.ffprobeLog),
+				'probe did not start after recording completion',
+				3000
+			);
+			fs.writeFileSync(path.join(fixture.dataDir, 'recorded.json'), '[]');
+			await waitForCondition(
+				() => /ffprobe duration target changed, skip update/.test(fixture.output()),
+				'changed duration target was not detected',
+				3000
+			);
+			assert.deepStrictEqual(fixture.read('recorded'), []);
+		} finally {
+			await fixture.close();
+		}
+	});
+
 	it('resumes a shutdown-interrupted rule recording at the same path and runs completion work only after natural end', { timeout: 20000 }, async function() {
 		const responses = [];
 		const fixture = await createOperatorFixture([ createProgram('2') ], request => {
@@ -455,7 +621,12 @@ describe('Operator recording preparation attempts', function() {
 		}, {
 			trackRecordedCommand: true,
 			trackMatching: true,
-			config: { matchUpdateDelayMs: 0 }
+			config: { matchUpdateDelayMs: 0 },
+			ffprobeScript: [
+				'const fs = require("fs");',
+				'fs.appendFileSync(process.env.CHINACHU_TEST_FFPROBE_LOG, "probe\\n");',
+				'process.stdout.write("10.500001\\n");'
+			].join('\n')
 		});
 		const recordedPath = path.join(fixture.recordedDir, '2.m2ts');
 
@@ -479,6 +650,7 @@ describe('Operator recording preparation attempts', function() {
 			assert.strictEqual(fixture.read('reserves').length, 1);
 			assert.strictEqual(fs.existsSync(fixture.recordedCommandLog), false);
 			assert.strictEqual(fs.existsSync(fixture.matchingLog), false);
+			assert.strictEqual(fs.existsSync(fixture.ffprobeLog), false);
 			assert.match(fixture.output(), /FIN INTERRUPTED: resume pending: #2\b/);
 
 			fixture.start();
@@ -498,6 +670,11 @@ describe('Operator recording preparation attempts', function() {
 				'final recording completion work did not finish',
 				5000
 			);
+			await waitForCondition(
+				() => fixture.read('recorded')[0].recordedDurationSeconds === 10.500001,
+				'final resumed recording was not probed',
+				3000
+			);
 
 			const finalized = fixture.read('recorded')[0];
 			assert.strictEqual(finalized.recorded, recordedPath);
@@ -505,7 +682,8 @@ describe('Operator recording preparation attempts', function() {
 			assert.ok(finalized.operatorResumedAt >= finalized.operatorInterruptedAt);
 			assert.strictEqual(fs.readFileSync(recordedPath, 'utf8'), 'PART1PART2');
 			assert.strictEqual(fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length, 1);
-			assert.strictEqual(fs.readFileSync(fixture.matchingLog, 'utf8').trim().split('\n').length, 1);
+			assert.ok(fs.readFileSync(fixture.matchingLog, 'utf8').trim().split('\n').length >= 1);
+			assert.strictEqual(fs.readFileSync(fixture.ffprobeLog, 'utf8').trim().split('\n').length, 1);
 			assert.match(fixture.output(), /RESUME RECORD: #2\b/);
 		} finally {
 			await fixture.close();
