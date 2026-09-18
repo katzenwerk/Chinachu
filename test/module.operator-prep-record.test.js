@@ -252,7 +252,12 @@ async function createOperatorFixture(programs, onStream, options) {
 			if (server.listening) {
 				await new Promise(resolve => server.close(resolve));
 			}
-			fs.rmSync(temporaryDir, { recursive: true, force: true });
+			fs.rmSync(temporaryDir, {
+				recursive: true,
+				force: true,
+				maxRetries: 5,
+				retryDelay: 50
+			});
 		}
 	};
 }

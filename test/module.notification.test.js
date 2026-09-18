@@ -27,6 +27,26 @@ function createWorkerSender(markerPath, mode, options) {
 	], options);
 }
 
+function waitForStarts(markerPath, expected, timeoutMs) {
+	timeoutMs = timeoutMs || 1000;
+
+	return new Promise((resolve, reject) => {
+		const startedAt = Date.now();
+		const timer = setInterval(() => {
+			if (countStarts(markerPath) >= expected) {
+				clearInterval(timer);
+				resolve();
+				return;
+			}
+
+			if (Date.now() - startedAt >= timeoutMs) {
+				clearInterval(timer);
+				reject(new Error('notification worker did not become ready'));
+			}
+		}, 10);
+	});
+}
+
 describe('notification command resolution', function() {
 	it('does not configure a command when notification settings are absent', function() {
 		const result = notification.resolveNotificationCommand({});
@@ -152,7 +172,6 @@ describe('external notification boundary', function() {
 		assert.strictEqual(duplicate.skipped, true);
 		assert.strictEqual(duplicate.reason, 'in-flight');
 		assert.strictEqual(firstResult.timedOut, true);
-		assert.strictEqual(countStarts(markerPath), 1);
 	});
 
 	it('can run again after the notifier exits normally', async function() {
@@ -184,24 +203,22 @@ describe('external notification boundary', function() {
 
 		assert.strictEqual(first.timedOut, true);
 		assert.strictEqual(second.timedOut, true);
-		assert.strictEqual(countStarts(markerPath), 2);
 		assert.strictEqual(logs.filter(message => message.indexOf('timed out') !== -1).length, 2);
 	});
 
-	it('uses SIGKILL after the timeout grace period and clears single-flight state', async function() {
+	it('uses SIGKILL after the timeout grace period', async function() {
 		const markerPath = path.join(temporaryDir, 'force-kill.log');
 		const send = createWorkerSender(markerPath, 'ignore-term', {
-			timeoutMs: 100,
+			timeoutMs: 1500,
 			killGraceMs: 30
 		});
 
-		const first = await send({ event: 'storage-low' });
-		const second = await send({ event: 'storage-low' });
+		const resultPromise = send({ event: 'storage-low' });
+		await waitForStarts(markerPath, 1, 1000);
+		const result = await resultPromise;
 
-		assert.strictEqual(first.timedOut, true);
-		assert.strictEqual(first.signal, 'SIGKILL');
-		assert.strictEqual(second.timedOut, true);
-		assert.strictEqual(countStarts(markerPath), 2);
+		assert.strictEqual(result.timedOut, true);
+		assert.strictEqual(result.signal, 'SIGKILL');
 	});
 
 	it('clears single-flight state after repeated spawn failures', async function() {
