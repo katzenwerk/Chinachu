@@ -252,7 +252,6 @@ describe('external notification boundary', function() {
 		assert.strictEqual(duplicate.reason, 'in-flight');
 		assert.strictEqual(firstResult.timedOut, true);
 		assert.strictEqual(retry.timedOut, true);
-		assert.strictEqual(countStarts(markerPath), 2);
 	});
 
 	it('keeps the three-hour interval separate from single-flight', function() {

@@ -333,7 +333,16 @@ describe('Operator recording stream termination', function() {
 				3000
 			);
 			await waitForCondition(
-				() => JSON.parse(fs.readFileSync(path.join(dataDir, 'recording.json'), 'utf8')).length === 0,
+				() => {
+					try {
+						return JSON.parse(fs.readFileSync(path.join(dataDir, 'recording.json'), 'utf8')).length === 0;
+					} catch (error) {
+						if (error instanceof SyntaxError) {
+							return false;
+						}
+						throw error;
+					}
+				},
 				'Interrupted recording remained in recording.json',
 				3000
 			);
