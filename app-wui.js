@@ -14,6 +14,7 @@ const RESERVES_DATA_FILE = __dirname + '/data/reserves.json';
 const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
 const RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 const RECORDED_DATA_FILE = __dirname + '/data/recorded.json';
+const MATCH_DATA_FILE = __dirname + '/data/match.json';
 const SCHEDULER_LOG_FILE = __dirname + '/log/scheduler';
 
 // Load Config
@@ -149,6 +150,139 @@ var schedule  = [];
 var reserves  = [];
 var recording = [];
 var recorded  = [];
+
+// MATCH CACHE BEGIN
+// match.json は正本のまま維持し、parse 済み配列だけを WUI プロセスの RAM に保持する。
+// API 要求時に stat を比較し、ファイルが変化した場合だけ再 read/parse する。
+// 録画実ファイル(recordedDir配下)には一切触れない。
+function createMatchCache(file) {
+	var state = {
+		hasValue: false,
+		signature: null,
+		items: []
+	};
+
+	function getSignature() {
+		var stat;
+
+		try {
+			stat = fs.statSync(file);
+		} catch (e) {
+			if (e && e.code === 'ENOENT') {
+				return null;
+			}
+			throw e;
+		}
+
+		return {
+			dev: stat.dev,
+			ino: stat.ino,
+			size: stat.size,
+			mtimeMs: stat.mtimeMs,
+			ctimeMs: stat.ctimeMs
+		};
+	}
+
+	function isSameSignature(a, b) {
+		if (a === null || b === null) {
+			return a === b;
+		}
+
+		return a.dev === b.dev &&
+			a.ino === b.ino &&
+			a.size === b.size &&
+			a.mtimeMs === b.mtimeMs &&
+			a.ctimeMs === b.ctimeMs;
+	}
+
+	function readStableItems(initialSignature) {
+		var before = initialSignature;
+		var after;
+		var text;
+		var items;
+		var attempt;
+
+		// direct write と atomic rename のどちらでも、読み取り中に更新された場合は1回だけ取り直す。
+		for (attempt = 0; attempt < 2; attempt++) {
+			text = fs.readFileSync(file, { encoding: 'utf8' }).replace(/^\uFEFF/, '');
+			items = JSON.parse(text || '[]');
+
+			if (!Array.isArray(items)) {
+				throw new Error('match.json is not an array');
+			}
+
+			after = getSignature();
+			if (after !== null && isSameSignature(before, after)) {
+				return {
+					signature: after,
+					items: items
+				};
+			}
+
+			if (after === null) {
+				throw new Error('match.json disappeared while reading');
+			}
+
+			before = after;
+		}
+
+		throw new Error('match.json changed repeatedly while reading');
+	}
+
+	function getItems() {
+		var signature;
+		var loaded;
+		var rssMB;
+
+		try {
+			signature = getSignature();
+		} catch (e) {
+			if (state.hasValue) {
+				util.log('WARNING: MATCH CACHE stat failed; keeping previous cache: ' + e.message);
+				return state.items;
+			}
+			throw e;
+		}
+
+		if (signature === null) {
+			state.hasValue = true;
+			state.signature = null;
+			state.items = [];
+			return state.items;
+		}
+
+		if (state.hasValue && isSameSignature(signature, state.signature)) {
+			return state.items;
+		}
+
+		try {
+			loaded = readStableItems(signature);
+		} catch (e) {
+			if (state.hasValue) {
+				// 書き込み途中などで一時的に壊れて見えた場合は、直前の正常キャッシュを維持する。
+				// signature は更新しないため、次回API要求で再度読み込みを試す。
+				util.log('WARNING: MATCH CACHE reload failed; keeping previous cache: ' + e.message);
+				return state.items;
+			}
+			throw e;
+		}
+
+		state.hasValue = true;
+		state.signature = loaded.signature;
+		state.items = loaded.items;
+		rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
+		util.log('MATCH CACHE: loaded items=' + state.items.length + ' size=' + state.signature.size + ' rss=' + rssMB + 'MB');
+
+		return state.items;
+	}
+
+	return {
+		getItems: getItems
+	};
+}
+
+const matchCache = createMatchCache(MATCH_DATA_FILE);
+// MATCH CACHE END
 
 // Init HTTP Server
 let openServer;
@@ -621,6 +755,7 @@ function httpServerMain(req, res, query) {
 				chinachu     : chinachu,
 				mirakurun    : mirakurun,
 				config       : config,
+				matchCache   : matchCache,
 				define: {
 					CONFIG_FILE        : CONFIG_FILE,
 					RULES_FILE         : RULES_FILE,
@@ -628,6 +763,7 @@ function httpServerMain(req, res, query) {
 					SCHEDULE_DATA_FILE : SCHEDULE_DATA_FILE,
 					RECORDING_DATA_FILE: RECORDING_DATA_FILE,
 					RECORDED_DATA_FILE : RECORDED_DATA_FILE,
+					MATCH_DATA_FILE    : MATCH_DATA_FILE,
 					OPERATOR_LOG_FILE  : OPERATOR_LOG_FILE,
 					WUI_LOG_FILE       : WUI_LOG_FILE,
 					SCHEDULER_LOG_FILE : SCHEDULER_LOG_FILE,

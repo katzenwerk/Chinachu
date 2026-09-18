@@ -6,7 +6,7 @@ P = Class.create(P, {
 
 		this.matchItems = [];
 		this.matchLoaded = false;
-		this.matchApiUrl = './api/match.json';
+		this.matchApiUrl = './api/match.json?mode=list';
 
 		this.initToolbar();
 		this.draw();
@@ -489,6 +489,10 @@ P = Class.create(P, {
 	,
 	getMatchKind: function(item) {
 
+		if (item && item._listSlim === true && item._matchKind) {
+			return item._matchKind;
+		}
+
 		if (this.hasRecordedResult(item)) {
 			if (!this.isPastMatch(item)) {
 				return null;
@@ -942,7 +946,7 @@ P = Class.create(P, {
 		this.syncMatchResultFilterToolbar();
 
 		this.getVisibleMatchItems().forEach(function(item) {
-			programs.push(this.normalizeMatchItem(item));
+			programs.push(item && item._listSlim === true ? item : this.normalizeMatchItem(item));
 		}.bind(this));
 
 		programs.sort(function(a, b) {

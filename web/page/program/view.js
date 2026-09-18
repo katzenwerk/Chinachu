@@ -15,6 +15,11 @@ P = Class.create(P, {
 		this.recordingPreviewImage = null;
 		this.recordedFileStateTarget = null;
 		this.recordedFileStateAlert = null;
+		// match履歴詳細（key指定、または通常データに存在せずmatch fallbackになる画面）は、
+		// WUI接続直後の schedule/reserves/recording/recorded 通知で再描画しない。
+		// 履歴自体は基本的に静的で、初期通知による連続refreshは表示のちらつきだけを生むため。
+		this.isMatchHistoryView = !!(this.self.query && (this.self.query.key || this.self.query.matchKey)) || this.program === null;
+		this.awaitingRecordedRefresh = false;
 
 		this.onNotify = this.handleNotify.bindAsEventListener(this);
 		document.observe('chinachu:schedule', this.onNotify);
@@ -78,6 +83,17 @@ P = Class.create(P, {
 
 		var program;
 
+		// match履歴詳細では、WUI接続直後を含む全体通知でページを作り直さない。
+		// 自画面から録画削除を実行した場合だけ recorded 通知を1回受けて再読込する。
+		if (this.isMatchHistoryView) {
+			if (ev && ev.type === 'chinachu:recorded' && this.awaitingRecordedRefresh) {
+				this.awaitingRecordedRefresh = false;
+				return this.refresh();
+			}
+
+			return this;
+		}
+
 		// 録画中イベントでは画面全体を再描画せず、サムネイルだけを差し替える。
 		// 録画が終了している場合は通常 refresh に戻し、録画済み表示へ遷移させる。
 		if (ev && ev.type === 'chinachu:recording' && this.program && this.program._isRecording) {
@@ -126,27 +142,56 @@ P = Class.create(P, {
 		return this;
 	},
 
+	getMatchItemApiUrl: function _getMatchItemApiUrl() {
+
+		var key = this.self.query.key || this.self.query.matchKey || '';
+		var id = this.self.query.id || this.program && (this.program.id || this.program.origId || this.program.programId) || '';
+
+		if (key) {
+			try {
+				key = decodeURIComponent(key);
+			} catch (e) {}
+
+			return this.matchApiUrl + '?mode=item&key=' + encodeURIComponent(key);
+		}
+
+		if (id) {
+			try {
+				id = decodeURIComponent(id);
+			} catch (e) {}
+
+			return this.matchApiUrl + '?mode=item&id=' + encodeURIComponent(id);
+		}
+
+		return this.matchApiUrl + '?mode=item';
+	},
+
 	loadMatchFallback: function _loadMatchFallback() {
 
-		new Ajax.Request(this.matchApiUrl, {
+		new Ajax.Request(this.getMatchItemApiUrl(), {
 			method: 'get',
 			onSuccess: function(t) {
 				var json;
+				var item;
 
 				if (this.app.pm.p.id !== this.id) return;
 
 				try {
 					json = t.responseText.evalJSON();
 				} catch (e) {
-					json = [];
+					json = null;
 				}
 
-				if (!Object.isArray(json)) {
-					json = [];
+				if (Object.isArray(json)) {
+					item = this.findMatchItem(json, null);
+				} else if (json && typeof json === 'object') {
+					item = json;
+				} else {
+					item = null;
 				}
 
-				this.matchItems = json;
-				this.matchItem = this.findMatchItem(json, null);
+				this.matchItems = item ? [item] : [];
+				this.matchItem = item;
 
 				if (!this.matchItem) {
 					this.timer.notFound = setTimeout(function () {
@@ -258,25 +303,30 @@ P = Class.create(P, {
 
 	loadMatch: function _loadMatch() {
 
-		new Ajax.Request(this.matchApiUrl, {
+		new Ajax.Request(this.getMatchItemApiUrl(), {
 			method: 'get',
 			onSuccess: function(t) {
 				var json;
+				var item;
 
 				if (this.app.pm.p.id !== this.id) return;
 
 				try {
 					json = t.responseText.evalJSON();
 				} catch (e) {
-					json = [];
+					json = null;
 				}
 
-				if (!Object.isArray(json)) {
-					json = [];
+				if (Object.isArray(json)) {
+					item = this.findMatchItem(json, this.program);
+				} else if (json && typeof json === 'object') {
+					item = json;
+				} else {
+					item = null;
 				}
 
-				this.matchItems = json;
-				this.matchItem = this.findMatchItem(json, this.program);
+				this.matchItems = item ? [item] : [];
+				this.matchItem = item;
 				this.decorateProgramWithMatch(this.matchItem);
 				this.renderRecordedFileStateAlert();
 				this.renderMatchInfo();
@@ -654,6 +704,9 @@ P = Class.create(P, {
 					icon   : './icons/cross-script.png',
 					onClick: function() {
 						var recordedApiId = this.getRecordedApiId(program, this.matchItem) || program.id;
+						if (this.isMatchHistoryView) {
+							this.awaitingRecordedRefresh = true;
+						}
 						new chinachu.ui.RemoveRecordedProgram(recordedApiId);
 					}.bind(this)
 				})

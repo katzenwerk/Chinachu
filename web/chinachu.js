@@ -523,34 +523,23 @@
 	};
 
 	var updateRecordedBadgeFromMatch = function _updateRecordedBadgeFromMatch() {
-		new Ajax.Request('./api/match.json', {
+		new Ajax.Request('./api/match.json?mode=summary&limit=0', {
 			method: 'get',
 			onSuccess: function (t) {
-				var items = [];
+				var summary = {};
 				var rec = 0;
 				var ng = 0;
 
 				try {
-					items = t.responseText.evalJSON();
+					summary = t.responseText.evalJSON();
 				} catch (e) {
-					items = [];
+					summary = {};
 				}
 
-				if (!Object.isArray(items)) {
-					items = [];
+				if (summary && summary.counts) {
+					rec = Number(summary.counts.recorded) || 0;
+					ng = Number(summary.counts.ng) || 0;
 				}
-
-				items.each(function (item) {
-					if (!isFinishedMatchForRecordedBadge(item)) {
-						return;
-					}
-
-					if (item.status === 'RECORDED') {
-						rec++;
-					} else if (item.status === 'MISSED') {
-						ng++;
-					}
-				});
 
 				if ($('category-recorded-badge')) {
 					$('category-recorded-badge').writeAttribute('title', '録画済 / NG');

@@ -269,19 +269,26 @@ P = Class.create(P, {
 
 	drawRecorded: function () {
 
-		new Ajax.Request('./api/match.json', {
+		new Ajax.Request('./api/match.json?mode=summary&limit=16', {
 			method: 'get',
 			onSuccess: function (t) {
+				var summary = {};
 				var items = [];
+				var counts = { recorded: 0, ng: 0 };
 
 				try {
-					items = t.responseText.evalJSON();
+					summary = t.responseText.evalJSON();
 				} catch (e) {
-					items = [];
+					summary = {};
 				}
 
-				if (!Object.isArray(items)) {
-					items = [];
+				if (summary && Object.isArray(summary.items)) {
+					items = summary.items;
+				}
+
+				if (summary && summary.counts) {
+					counts.recorded = Number(summary.counts.recorded) || 0;
+					counts.ng = Number(summary.counts.ng) || 0;
 				}
 
 				this.drawMatchRecorded(
@@ -289,7 +296,9 @@ P = Class.create(P, {
 					"recorded",
 					"panel-success",
 					this.r3R,
-					items
+					items,
+					counts,
+					summary.hasMore === true
 				);
 			}.bind(this),
 			onFailure: function () {
@@ -357,7 +366,7 @@ P = Class.create(P, {
 		}.bind(this));
 	},
 
-	drawMatchRecorded: function (title, type, className, container, matchItems) {
+	drawMatchRecorded: function (title, type, className, container, matchItems, summaryCounts, summaryHasMore) {
 
 		container.update();
 
@@ -365,7 +374,7 @@ P = Class.create(P, {
 			"class": "panel " + className
 		}).insertTo(container);
 
-		var counts = this.getRecordedHistoryCounts(matchItems);
+		var counts = summaryCounts || this.getRecordedHistoryCounts(matchItems);
 		var heading = flagrate.createElement("div", {
 			"class": "panel-heading"
 		}).insertTo(panel);
@@ -392,10 +401,10 @@ P = Class.create(P, {
 		});
 
 		var ul = flagrate.createElement("ul", { "class": "list-group" }).insertTo(panel);
-		var hasMore = false;
+		var hasMore = summaryHasMore === true;
 
 		programs.each(function (item, i) {
-			if (i > 10) {
+			if (i > 15) {
 				hasMore = true;
 				throw $break;
 			}
