@@ -96,3 +96,41 @@ This release improves recorded-duration handling and PM2 service persistence.
 - Existing recordings without measured duration retain the previous fallback behavior.
 - Waits for private IPv4 availability during startup before starting the Open Server.
 - Exits with an error if automatic host detection still fails after the startup wait, allowing PM2 to recover the service.
+
+
+# Chinachu 0.10.7-thorn.23
+
+This release improves WUI performance when handling large match histories.
+
+## Highlights
+
+- Optimized match history loading for large `match.json` files.
+- Added lightweight summary, list, and item access for match history.
+- Added an in-memory WUI cache for parsed match history data.
+- Reduced unnecessary transfer and parsing of the full match history.
+- Stabilized asynchronous runtime tests.
+
+## Match History / WUI
+
+- Added summary mode for retrieving match status counts and recent completed entries without transferring the full history.
+- Added list mode for loading a reduced representation of completed match history.
+- Added item mode for retrieving a single full match record when opening program details.
+- Updated the dashboard, recorded history list, and program detail views to use the lighter match APIs where appropriate.
+- Added a process-local parsed `match.json` cache in the WUI.
+- The cache is automatically reloaded when the source `match.json` changes.
+- A previously valid cache is retained if a reload encounters invalid JSON.
+- The original full `/api/match.json` response remains available for compatibility.
+
+## Performance / Maintenance
+
+- Large match histories no longer need to be fully transferred and parsed by the browser for routine dashboard, list, and detail operations.
+- Approximately 4,000 match-history entries have been verified in the current production environment without issue.
+- Around 6,000 entries may be used as a provisional maintenance guideline, but this is not a tested upper limit.
+- WUI memory usage still increases as the match history grows because the parsed history is cached in memory.
+
+## Testing
+
+- Reduced timing dependencies in external notification process tests.
+- Improved readiness handling for notification worker tests.
+- Made temporary operator test cleanup more tolerant of short-lived filesystem races.
+- Made recording-state polling tolerant of transient partial JSON reads during test execution.
