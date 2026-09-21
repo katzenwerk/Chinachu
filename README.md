@@ -21,15 +21,8 @@ For release history and notable changes, see
 - System FFmpeg / ffprobe
 - PM2 (optional, for service management)
 
-The installer uses FFmpeg / ffprobe provided by the operating system. On Ubuntu
-and Linux Mint, these commands are provided by the `ffmpeg` package. Existing
-working system commands are used as-is; when either command is missing, the
-interactive installer asks before running `apt-get install -- ffmpeg`.
-
-Repository-local `usr/bin/ffmpeg` and `usr/bin/ffprobe` override the system
-commands at runtime. After verifying the system commands, the installer can
-remove the recognized legacy bundled FFmpeg 4.1.4 after explicit confirmation,
-but it does not modify unknown local binaries.
+On Ubuntu and Linux Mint, FFmpeg and ffprobe are provided by the `ffmpeg` package.
+If they are missing, the interactive installer offers to install the package.
 
 ## Installation
 
@@ -45,8 +38,26 @@ cd Chinachu
 
 For a normal installation, use the recommended automatic installation option.
 
-If needed, install PM2 separately and run:
+PM2 service setup is optional and can be configured from the installer.
+To configure or review the PM2 service setup later, run:
 
 ```sh
 sudo ./chinachu service setup
 ```
+
+## Updating
+
+### From thorn.20 or later
+
+Update to the latest `thorn` release and run the installer again:
+
+```sh
+git pull --ff-only
+./chinachu installer
+```
+
+Use the recommended automatic installation option and follow any migration prompts.
+
+### From gamma or older releases
+
+A fresh installation is recommended.

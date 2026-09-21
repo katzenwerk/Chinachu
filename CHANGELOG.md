@@ -134,3 +134,65 @@ This release improves WUI performance when handling large match histories.
 - Improved readiness handling for notification worker tests.
 - Made temporary operator test cleanup more tolerant of short-lived filesystem races.
 - Made recording-state polling tolerant of transient partial JSON reads during test execution.
+
+# Chinachu 0.10.7-thorn.24
+
+This release removes the bundled FFmpeg 4.1.4 dependency and improves preview
+stream selection for current system FFmpeg environments.
+
+## Highlights
+
+- Removed the bundled FFmpeg 4.1.4 download and installation path.
+- Updated the installer to use system-provided `ffmpeg` and `ffprobe`.
+- Fixed preview generation when input stream index 0 is not a video stream.
+- Added safer handling for legacy and unknown repository-local FFmpeg binaries.
+- Expanded installer verification and regression coverage for FFmpeg handling.
+
+## Preview
+
+- Recording and recorded-program previews now select the first video stream
+  with `0:v:0` instead of assuming that input stream index `0:0` is video.
+- Fixed preview generation for transport streams where data, audio, or other
+  non-video streams appear before the video stream.
+- The change is compatible with both the previous bundled FFmpeg 4.1.4 and
+  current system FFmpeg versions.
+- This fixes a latent stream-selection assumption that became visible while
+  validating migration away from the bundled FFmpeg 4.1.4.
+
+## Installer / FFmpeg
+
+- Removed the legacy FFmpeg 4.1.4 static archive download, architecture-specific
+  archive selection, extraction, and repository-local installation path.
+- Removed creation of the legacy `avconv` and `avprobe` compatibility aliases.
+- Existing working system `ffmpeg` and `ffprobe` commands are used without
+  modifying system packages.
+- On Ubuntu and Linux Mint systems, the installer can offer to install the
+  `ffmpeg` package when the required commands are missing.
+- System package installation requires explicit user confirmation.
+- The installer does not run `apt update`, upgrade, or autoremove operations as
+  part of FFmpeg setup.
+- Recognized legacy repository-local FFmpeg 4.1.4 binaries are removed only
+  after system FFmpeg has been verified and the user explicitly confirms the
+  migration.
+- Unknown repository-local FFmpeg binaries are left unchanged and cause the
+  installer stage to stop safely.
+- Legacy cleanup is limited to `ffmpeg`, `ffprobe`, `avconv`, and `avprobe`;
+  other files from the old static archive are not modified.
+
+## Verification
+
+- Installer verification now checks the resolved `ffmpeg` and `ffprobe`
+  commands.
+- Both commands must be executable and successfully return version information.
+- Verification reports the resolved command paths and version information.
+- Repository-local overrides are detected so they cannot silently shadow the
+  intended system FFmpeg environment.
+
+## Testing
+
+- Added regression coverage for preview video-stream selection.
+- Added installer coverage for existing system FFmpeg detection.
+- Added coverage for package-installation decisions without invoking real APT,
+  sudo, or network operations.
+- Added coverage for legacy FFmpeg migration and unknown local binary protection.
+- Added verification coverage for resolved `ffmpeg` and `ffprobe` commands.
