@@ -39,7 +39,7 @@
 		(
 			'tail -c 3200000 "' + program.recorded + '" | ' +
 			'ffmpeg -f mpegts -r 10 -i pipe:0 -ss 1.5 -r 10 -frames:v 1 -f image2 -codec:v ' + vcodec +
-			' -an -s ' + width + 'x' + height + ' -map 0:0 -y pipe:1'
+			' -an -s ' + width + 'x' + height + ' -map 0:v:0 -y pipe:1'
 		)
 		,
 		{

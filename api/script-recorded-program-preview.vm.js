@@ -199,7 +199,7 @@ function hasRecordedFile(program) {
 	var ffmpeg = child_process.exec(
 		(
 			'ffmpeg -f mpegts -ss ' + pos + ' -r 10 -i "' + program.recorded + '" -ss 1.5 -r 10 -frames:v 1' +
-			' -c:v ' + vcodec + ' -an -f image2 -s ' + width + 'x' + height + ' -map 0:0 -y pipe:1'
+			' -c:v ' + vcodec + ' -an -f image2 -s ' + width + 'x' + height + ' -map 0:v:0 -y pipe:1'
 		)
 		,
 		{
