@@ -18,10 +18,18 @@ For release history and notable changes, see
 - Node.js 24.x
 - npm
 - Mirakurun 4.1.3
+- System FFmpeg / ffprobe
 - PM2 (optional, for service management)
 
-The bundled installer can prepare the Chinachu runtime, Node.js dependencies,
-FFmpeg / ffprobe, and required runtime files as needed.
+The installer uses FFmpeg / ffprobe provided by the operating system. On Ubuntu
+and Linux Mint, these commands are provided by the `ffmpeg` package. Existing
+working system commands are used as-is; when either command is missing, the
+interactive installer asks before running `apt-get install -- ffmpeg`.
+
+Repository-local `usr/bin/ffmpeg` and `usr/bin/ffprobe` override the system
+commands at runtime. After verifying the system commands, the installer can
+remove the recognized legacy bundled FFmpeg 4.1.4 after explicit confirmation,
+but it does not modify unknown local binaries.
 
 ## Installation
 

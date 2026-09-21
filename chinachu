@@ -22,6 +22,11 @@ declare -A BOOTSTRAP_EXISTING_CHECKSUMS=()
 BOOTSTRAP_NODE_COMMAND=""
 BOOTSTRAP_RUNTIME_USER=""
 BOOTSTRAP_RECORDED_DIR=""
+FFMPEG_COMMAND=""
+FFPROBE_COMMAND=""
+FFMPEG_VERSION=""
+FFPROBE_VERSION=""
+FFMPEG_LOCAL_STATE=""
 
 if [ -t 1 ]; then
   INSTALLER_GREEN=$'\033[32m'
@@ -215,44 +220,227 @@ chinachu_installer_node_modules () {
 }
 
 chinachu_installer_ffmpeg () {
-  remove_dir "$USR_DIR/src/ffmpeg" || return 1
-  ensure_dir "$USR_DIR/src/ffmpeg" || return 1
+  local system_path
 
-  cd "$USR_DIR" || return 1
-
-  MACHINE=`uname -m`
-  if [ ${MACHINE} == "aarch64" ] || [ ${MACHINE} == "arm64" ] || [ ${MACHINE} == "armv8l" ]; then
-    local FFMPEG_FN="ffmpeg-4.1.4-arm64-static"
-  elif [ ${MACHINE} == "armhf" ] || [ ${MACHINE} == "armv7l" ]; then
-    local FFMPEG_FN="ffmpeg-4.1.4-armhf-static"
-  elif [ `echo ${MACHINE} | grep 'arm'` ]; then
-    local FFMPEG_FN="ffmpeg-4.1.4-armel-static"
-  elif [ ${MACHINE} == "x86_64" ]; then
-    local FFMPEG_FN="ffmpeg-4.1.4-amd64-static"
-  else
-    local FFMPEG_FN="ffmpeg-4.1.4-i686-static"
+  inspect_repository_ffmpeg
+  if [ "$FFMPEG_LOCAL_STATE" = "unknown" ]; then
+    installer_warning "Unknown repository-local FFmpeg override detected."
+    print_repository_ffmpeg_paths
+    printf 'Move or review these files explicitly before rerunning the installer. No files or packages were changed.\n' >&2
+    return 1
   fi
 
-  local FFMPEG_XZ="https://johnvansickle.com/ffmpeg/old-releases/${FFMPEG_FN}.tar.xz"
+  system_path=$(ffmpeg_system_path)
+  if ! capture_ffmpeg_commands "$system_path"; then
+    printf 'System ffmpeg and ffprobe are required but were not both executable.\n' >&2
+    install_system_ffmpeg_package || return 1
+    system_path=$(ffmpeg_system_path)
+    capture_ffmpeg_commands "$system_path" || {
+      installer_warning "ffmpeg or ffprobe is still unavailable after package installation."
+      return 1
+    }
+  fi
+  print_ffmpeg_commands "System"
 
-  wget -O "${FFMPEG_FN}.tar.xz" "$FFMPEG_XZ" || return 1
-  xz -dv "${FFMPEG_FN}.tar.xz" || return 1
+  if [ "$FFMPEG_LOCAL_STATE" = "legacy" ]; then
+    printf '\nLegacy bundled FFmpeg 4.1.4 was detected:\n'
+    print_repository_ffmpeg_paths
+    printf 'The four entries above shadow the verified system FFmpeg and will be removed.\n'
+    if ! confirm_installer_action "Remove the legacy bundled FFmpeg and use the system FFmpeg"; then
+      printf 'Legacy FFmpeg migration was not approved. No files were changed.\n' >&2
+      return 1
+    fi
+    remove_legacy_ffmpeg || return 1
+  fi
 
-  tar -xvf "${FFMPEG_FN}.tar" -C bin --strip-components 1 || return 1
-  rm -v "${FFMPEG_FN}.tar" || return 1
+  hash -r
+  verify_runtime_ffmpeg || return 1
 
-  cd "$CHINACHU_DIR" || return 1
-
-  echo "Creating libav aliases..."
-
-  rm -rfv "$USR_DIR/bin/avconv" || return 1
-  rm -rfv "$USR_DIR/bin/avprobe" || return 1
-  ln -sv "$USR_DIR/bin/ffmpeg" "$USR_DIR/bin/avconv" || return 1
-  ln -sv "$USR_DIR/bin/ffprobe" "$USR_DIR/bin/avprobe" || return 1
-
-  echo "ffmpeg --> done."
+  print_ffmpeg_commands "Runtime"
+  echo "ffmpeg --> ready."
 
   return 0
+}
+
+ffmpeg_system_path () {
+  local entry local_bin result=""
+  local -a entries=()
+
+  local_bin="${USR_DIR%/}/bin"
+  IFS=':' read -r -a entries <<< "${PATH:-}"
+  for entry in "${entries[@]}"
+  do
+    [ "${entry%/}" = "$local_bin" ] && continue
+    if [ -z "$result" ]; then
+      result="$entry"
+    else
+      result="${result}:$entry"
+    fi
+  done
+
+  printf '%s\n' "$result"
+}
+
+capture_ffmpeg_commands () {
+  local lookup_path="$1" output
+
+  hash -r
+  FFMPEG_COMMAND=$(PATH="$lookup_path" command -v ffmpeg 2>/dev/null) || return 1
+  FFPROBE_COMMAND=$(PATH="$lookup_path" command -v ffprobe 2>/dev/null) || return 1
+  [ -x "$FFMPEG_COMMAND" ] || return 1
+  [ -x "$FFPROBE_COMMAND" ] || return 1
+
+  output=$("$FFMPEG_COMMAND" -version 2>&1) || return 1
+  FFMPEG_VERSION=${output%%$'\n'*}
+  [ -n "$FFMPEG_VERSION" ] || return 1
+
+  output=$("$FFPROBE_COMMAND" -version 2>&1) || return 1
+  FFPROBE_VERSION=${output%%$'\n'*}
+  [ -n "$FFPROBE_VERSION" ] || return 1
+}
+
+print_ffmpeg_commands () {
+  printf '%s ffmpeg: %s\n  %s\n' "$1" "$FFMPEG_COMMAND" "$FFMPEG_VERSION"
+  printf '%s ffprobe: %s\n  %s\n' "$1" "$FFPROBE_COMMAND" "$FFPROBE_VERSION"
+}
+
+inspect_repository_ffmpeg () {
+  local ffmpeg_path ffprobe_path ffmpeg_output ffprobe_output
+  local avconv_target avprobe_target
+
+  ffmpeg_path="$USR_DIR/bin/ffmpeg"
+  ffprobe_path="$USR_DIR/bin/ffprobe"
+  FFMPEG_LOCAL_STATE="none"
+
+  if ! path_exists "$ffmpeg_path" && ! path_exists "$ffprobe_path"; then
+    return 0
+  fi
+
+  FFMPEG_LOCAL_STATE="unknown"
+  [ -f "$ffmpeg_path" ] && [ ! -L "$ffmpeg_path" ] && [ -x "$ffmpeg_path" ] || return 0
+  [ -f "$ffprobe_path" ] && [ ! -L "$ffprobe_path" ] && [ -x "$ffprobe_path" ] || return 0
+  [ -L "$USR_DIR/bin/avconv" ] && [ -L "$USR_DIR/bin/avprobe" ] || return 0
+
+  ffmpeg_output=$("$ffmpeg_path" -version 2>/dev/null) || return 0
+  ffprobe_output=$("$ffprobe_path" -version 2>/dev/null) || return 0
+  case "${ffmpeg_output%%$'\n'*}" in
+    "ffmpeg version 4.1.4-static https://johnvansickle.com/ffmpeg/"* ) ;;
+    * ) return 0 ;;
+  esac
+  case "${ffprobe_output%%$'\n'*}" in
+    "ffprobe version 4.1.4-static https://johnvansickle.com/ffmpeg/"* ) ;;
+    * ) return 0 ;;
+  esac
+
+  avconv_target=$(readlink -- "$USR_DIR/bin/avconv") || return 0
+  avprobe_target=$(readlink -- "$USR_DIR/bin/avprobe") || return 0
+  [ "$avconv_target" = "$ffmpeg_path" ] || return 0
+  [ "$avprobe_target" = "$ffprobe_path" ] || return 0
+
+  FFMPEG_LOCAL_STATE="legacy"
+}
+
+print_repository_ffmpeg_paths () {
+  local name target="$USR_DIR/bin"
+
+  for name in ffmpeg ffprobe avconv avprobe
+  do
+    if path_exists "$target/$name"; then
+      printf '  %s' "$target/$name"
+      if [ -L "$target/$name" ]; then
+        printf ' -> %s' "$(readlink -- "$target/$name")"
+      fi
+      printf '\n'
+    fi
+  done
+}
+
+confirm_installer_action () {
+  local answer
+
+  [ -t 0 ] || return 1
+  read -r -p "$1 [y/N]? " answer || return 1
+  case "$answer" in
+    y | Y | yes | YES ) return 0 ;;
+    * ) return 1 ;;
+  esac
+}
+
+resolve_apt_commands () {
+  local os_id="" os_like="" system_path
+
+  [ -r /etc/os-release ] || return 1
+  os_id=$( ( . /etc/os-release; printf '%s' "${ID:-}" ) ) || return 1
+  os_like=$( ( . /etc/os-release; printf '%s' "${ID_LIKE:-}" ) ) || return 1
+  case " $os_id $os_like " in
+    *" linuxmint "* | *" ubuntu "* ) ;;
+    * ) return 1 ;;
+  esac
+
+  system_path=$(ffmpeg_system_path)
+  APT_GET_COMMAND=$(PATH="$system_path" command -v apt-get 2>/dev/null) || return 1
+  [ -x "$APT_GET_COMMAND" ] || return 1
+
+  SUDO_COMMAND=""
+  if [ "$(id -u)" -ne 0 ]; then
+    SUDO_COMMAND=$(PATH="$system_path" command -v sudo 2>/dev/null) || return 1
+    [ -x "$SUDO_COMMAND" ] || return 1
+  fi
+}
+
+install_system_ffmpeg_package () {
+  if ! resolve_apt_commands; then
+    printf 'Automatic installation is available only on Ubuntu/Linux Mint with apt-get' >&2
+    printf ' and sudo when running as a normal user.\n' >&2
+    if [ "$(id -u)" -eq 0 ]; then
+      printf 'Install the FFmpeg package, then rerun this stage: apt-get install -- ffmpeg\n' >&2
+    else
+      printf 'Install the FFmpeg package, then rerun this stage: sudo -- apt-get install -- ffmpeg\n' >&2
+    fi
+    return 1
+  fi
+
+  if [ "$(id -u)" -eq 0 ]; then
+    printf 'Required command: apt-get install -- ffmpeg\n'
+  else
+    printf 'Required command: sudo -- apt-get install -- ffmpeg\n'
+  fi
+
+  if ! confirm_installer_action "Install the system FFmpeg package"; then
+    printf 'FFmpeg package installation was not approved or the installer is non-interactive.\n' >&2
+    return 1
+  fi
+
+  if [ "$(id -u)" -eq 0 ]; then
+    "$APT_GET_COMMAND" install -- ffmpeg || return 1
+  else
+    "$SUDO_COMMAND" -- "$APT_GET_COMMAND" install -- ffmpeg || return 1
+  fi
+}
+
+remove_legacy_ffmpeg () {
+  inspect_repository_ffmpeg
+  if [ "$FFMPEG_LOCAL_STATE" != "legacy" ]; then
+    installer_warning "Repository-local FFmpeg changed before removal; no files were removed."
+    print_repository_ffmpeg_paths
+    return 1
+  fi
+
+  rm -- \
+    "$USR_DIR/bin/ffmpeg" \
+    "$USR_DIR/bin/ffprobe" \
+    "$USR_DIR/bin/avconv" \
+    "$USR_DIR/bin/avprobe"
+}
+
+verify_runtime_ffmpeg () {
+  if path_exists "$USR_DIR/bin/ffmpeg" || path_exists "$USR_DIR/bin/ffprobe"; then
+    installer_warning "Repository-local ffmpeg or ffprobe still shadows the system commands."
+    print_repository_ffmpeg_paths
+    return 1
+  fi
+
+  capture_ffmpeg_commands "$PATH"
 }
 
 chinachu_updater () {
@@ -972,6 +1160,9 @@ chinachu_installer_verify () {
   [ -x "$NPM_PATH" ] || installer_error "Nave npm is not executable: $NPM_PATH"
   "$NPM_PATH" --version > /dev/null || installer_error "Nave npm could not be executed."
   "$NPM_PATH" ls --all > /dev/null || installer_error "npm dependency tree is invalid."
+
+  verify_runtime_ffmpeg || installer_error "System ffmpeg and ffprobe verification failed."
+  print_ffmpeg_commands "Runtime"
 
   "$NODE_PATH" -e '
     const fs = require("fs");
