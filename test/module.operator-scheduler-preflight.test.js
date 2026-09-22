@@ -119,7 +119,7 @@ function createFixture(options) {
 	};
 }
 
-describe('Operator scheduler shadow preflight', function() {
+describe('Operator scheduler preflight', function() {
 	it('is clean when all successful scheduler baselines still match', async function() {
 		const fixture = createFixture();
 		try {
@@ -357,24 +357,32 @@ describe('Operator scheduler shadow preflight', function() {
 		}
 	});
 
-	it('starts one periodic scheduler in shadow mode for clean and dirty results', async function() {
-		for (const result of [
-			{ dirty: false, reasons: [], advisory: [] },
-			{ dirty: true, reasons: [ 'rules' ], advisory: [] }
+	it('skips clean periodic checks and starts one scheduler for dirty results', async function() {
+		for (const testCase of [
+			{
+				result: { dirty: false, reasons: [], advisory: [] },
+				expectedStarted: false,
+				expectedStarts: 0
+			},
+			{
+				result: { dirty: true, reasons: [ 'rules' ], advisory: [] },
+				expectedStarted: true,
+				expectedStarts: 1
+			}
 		]) {
 			let starts = 0;
 			const logs = [];
 			const runner = new preflightModule.ShadowPeriodicScheduler({
-				preflight: { check: () => Promise.resolve(result) },
+				preflight: { check: () => Promise.resolve(testCase.result) },
 				startScheduler: () => { starts++; return true; },
 				log: message => logs.push(message)
 			});
 			const first = runner.request();
 			const second = runner.request();
 			assert.strictEqual(first, second);
-			assert.strictEqual((await first).started, true);
-			assert.strictEqual(starts, 1);
-			assert.match(logs[0], result.dirty ? /preflight dirty reasons=rules/ : /preflight clean/);
+			assert.strictEqual((await first).started, testCase.expectedStarted);
+			assert.strictEqual(starts, testCase.expectedStarts);
+			assert.match(logs[0], testCase.result.dirty ? /preflight dirty reasons=rules/ : /preflight clean/);
 		}
 	});
 

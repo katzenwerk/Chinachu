@@ -268,7 +268,7 @@ const activeRecordingOutputs = new Set();
 const activeDurationProbes = new Set();
 
 // EPG由来のscheduler要求だけをsingle pendingへ集約する。
-// periodic schedulerはshadow preflight後も従来どおりstartScheduler()を要求する。
+// periodic schedulerはpreflightがdirtyの場合のみstartScheduler()を要求する。
 const schedulerStateStore = new schedulerState.SchedulerStateStore(SCHEDULER_STATE_FILE, {
 	legacyFilePath: LEGACY_SCHEDULER_STATE_FILE
 });
@@ -430,7 +430,7 @@ function startPeriodicSchedulerWithPreflight() {
 	}
 	periodicPreflightPending = true;
 	shadowPeriodicScheduler.request().then(outcome => {
-		if (outcome && outcome.started) {
+		if (outcome && (outcome.started || (outcome.result && outcome.result.dirty === false))) {
 			scheduled = clock;
 		}
 	}).finally(() => {
