@@ -554,7 +554,8 @@ P = Class.create(P, {
 			{ value: 'NFKC', label: 'NFKC - 見た目もそろえて・くっつける（既定）' },
 			{ value: 'NFKD', label: 'NFKD - 見た目もそろえて・バラバラにする' }
 		], '(未指定: NFKC)'), '予約ルールと番組情報をマッチさせるため、比較前に全角・半角などの文字の取扱いをそろえる設定です。既定はNFKCです。\nNFC: 「か」+「゛」を1文字の「が」にします。一般的なWebサイトやシステムでよく使われる形です。\nNFD: 1文字の「が」を「か」+「゛」に分けます。Macのファイルシステム内部処理などで見られる形です。\nNFKC: 全角/半角の違いや特殊記号を普通の文字に寄せてからくっつけます。検索や入力フォームの表記ゆれ対策向きです。\nNFKD: 特殊記号を普通の文字に寄せたうえで、さらにバラバラに分けます。録画ファイル名の置換とは別です。'));
-		panel.body.insert(this.createFieldRow('storageLowSpaceThresholdMB', 'storageLowSpaceThresholdMB', this.numberInput('storageLowSpaceThresholdMB'), '空き容量の閾値(MB)。この値を下回った場合に storageLowSpaceAction が動作対象になります。'));
+		panel.body.insert(this.createFieldRow('storageLowSpaceWarningThresholdMB', 'storageLowSpaceWarningThresholdMB', this.numberInput('storageLowSpaceWarningThresholdMB'), '空き容量の警告閾値(MB)。cleanup閾値以上かつこの値未満では通知だけを行います。未指定時はstorageLowSpaceThresholdMBと同値です。'));
+		panel.body.insert(this.createFieldRow('storageLowSpaceThresholdMB', 'storageLowSpaceThresholdMB', this.numberInput('storageLowSpaceThresholdMB'), '空き容量のcleanup閾値(MB)。この値を下回った場合にstorageLowSpaceActionが動作対象になります。'));
 		panel.body.insert(this.createFieldRow('storageLowSpaceAction', 'storageLowSpaceAction', this.selectInput('storageLowSpaceAction', [
 			{ value: 'none', label: 'none - ログのみ（削除しない）' },
 			{ value: 'stop', label: 'stop - 録画中番組を停止' },
@@ -1112,6 +1113,7 @@ P = Class.create(P, {
 		};
 		var numericKeys = {
 			wuiOpenPort: true,
+			storageLowSpaceWarningThresholdMB: true,
 			storageLowSpaceThresholdMB: true,
 			recordedStorageWakeupBeforeSec: true,
 			matchRetentionDays: true,

@@ -280,6 +280,36 @@ describe('external notification boundary', function() {
 		assert.strictEqual(notification.shouldSendStorageLowNotification('storageLowSpaceCommand', lastNotifiedAt + 1, lastNotifiedAt, interval), true);
 	});
 
+	it('does not let a recent warning suppress a cleanup notification', function() {
+		const interval = 3 * 60 * 60 * 1000;
+		const now = interval + 1001;
+		const notifiedAt = { warning: now - 1, cleanup: 0 };
+
+		assert.strictEqual(
+			notification.shouldSendStorageLowPhaseNotification('notificationCommand', 'warning', now, notifiedAt, interval),
+			false
+		);
+		assert.strictEqual(
+			notification.shouldSendStorageLowPhaseNotification('notificationCommand', 'cleanup', now, notifiedAt, interval),
+			true
+		);
+	});
+
+	it('retries a phase after single-flight skips its notification attempt', async function() {
+		const notifiedAt = { warning: 1000, cleanup: 0 };
+		const result = await notification.sendStorageLowPhaseNotification(
+			() => Promise.resolve({ ok: false, skipped: true, reason: 'in-flight' }),
+			{ event: 'storage-low' },
+			'cleanup',
+			2000,
+			notifiedAt
+		);
+
+		assert.strictEqual(result.skipped, true);
+		assert.strictEqual(notifiedAt.warning, 1000);
+		assert.strictEqual(notifiedAt.cleanup, 0);
+	});
+
 	it('executes only notificationCommand when both new and legacy settings exist', async function() {
 		const newOutputPath = path.join(temporaryDir, 'new.jsonl');
 		const legacyOutputPath = path.join(temporaryDir, 'legacy.jsonl');
@@ -318,5 +348,22 @@ describe('external notification boundary', function() {
 			recordedDir: '/録画 data',
 			action: 'none'
 		});
+	});
+
+	it('adds warning phase metadata without changing the storage-low event shape', function() {
+		const payload = notification.createStorageLowNotification({
+			availableBytes: 5242880,
+			availableMB: 5,
+			thresholdMB: 10000,
+			recordedDir: '/recorded',
+			action: 'remove',
+			severity: 'warning',
+			phase: 'warning'
+		});
+
+		assert.strictEqual(payload.event, 'storage-low');
+		assert.strictEqual(payload.severity, 'warning');
+		assert.strictEqual(payload.metadata.phase, 'warning');
+		assert.strictEqual(payload.metadata.action, 'remove');
 	});
 });

@@ -49,6 +49,7 @@ if (typeof util.log !== 'function') {
 	util.log = schedulerLog;
 }
 const child_process = require('child_process');
+const matchOutput = require('./lib/match-output');
 
 // ディレクトリチェック
 if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./web/')) {
@@ -476,12 +477,14 @@ function outputReserves() {
 function emitChildProcessOutput(commandProcess, prefix) {
 	var stdoutLines;
 	var stderrLines;
+	var compacted;
 
 	if (!commandProcess) {
 		return;
 	}
 
-	stdoutLines = String(commandProcess.stdout || '').split(/\r?\n/).map(function (line) {
+	compacted = prefix === 'MATCH' ? matchOutput.compactKeepRecordedStatus(commandProcess.stdout || '') : null;
+	stdoutLines = compacted ? compacted.lines : String(commandProcess.stdout || '').split(/\r?\n/).map(function (line) {
 		return line.trim();
 	}).filter(Boolean);
 
@@ -497,6 +500,10 @@ function emitChildProcessOutput(commandProcess, prefix) {
 
 		schedulerLog((prefix || 'CHILD') + ': ' + line);
 	});
+
+	if (compacted && compacted.keepRecordedOverMissed > 0) {
+		schedulerLog((prefix || 'CHILD') + ': keep_recorded_over_missed=' + compacted.keepRecordedOverMissed);
+	}
 
 	stderrLines.forEach(function (line) {
 		schedulerLog((prefix || 'CHILD') + ' STDERR: ' + line);

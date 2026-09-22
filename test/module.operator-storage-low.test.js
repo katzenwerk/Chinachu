@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 
 const storageLow = require('../lib/storage-low');
 
-describe('Operator low-storage recording stop', function() {
+describe('Operator low-storage handling', function() {
 	it('stops every recording present at the start of one low-storage pass', function() {
 		function runPass(ids) {
 			const recording = ids.map(id => ({ id: id }));
@@ -33,5 +33,19 @@ describe('Operator low-storage recording stop', function() {
 		const single = runPass([ 'A' ]);
 		assert.deepStrictEqual(single.stopped, [ { id: 'A', reason: 'LOW STORAGE' } ]);
 		assert.deepStrictEqual(single.recording, []);
+	});
+
+	it('does not infer a match deletion without a recorded ledger entry', function() {
+		const item = {
+			status: 'RECORDED',
+			program: { id: 'program-id', recorded: '/recorded/orphan.m2ts' },
+			recordingResult: { id: 'recorded-id', recorded: '/recorded/orphan.m2ts' }
+		};
+
+		assert.strictEqual(
+			storageLow.markMatchRecordingDeleted([ item ], [], '/recorded/orphan.m2ts', 1, 'storage-low'),
+			false
+		);
+		assert.strictEqual(item.recordingResult.cleanupState, undefined);
 	});
 });

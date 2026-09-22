@@ -16,6 +16,7 @@
   "recordingPriority": 2,
   "conflictedPriority": 1,
   "handoffPrepSeconds": 20,
+  "storageLowSpaceWarningThresholdMB": 3000,
   "storageLowSpaceThresholdMB": 3000,
   "storageLowSpaceAction": "remove",
   "notificationCommand": null,

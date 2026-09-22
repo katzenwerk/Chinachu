@@ -66,6 +66,7 @@ const dateFormat = require('dateformat').default;
 const notification = require('./lib/notification');
 const recordingAttempt = require('./lib/recording-attempt');
 const storageLow = require('./lib/storage-low');
+const matchOutput = require('./lib/match-output');
 const runtimePrivileges = require('./lib/runtime-privileges');
 const mirakurunConnection = require('./lib/mirakurun-connection');
 const mirakurunDropWatch = require('./lib/mirakurun-drop-watch');
@@ -95,6 +96,8 @@ const recordingExpireGraceTime = 1000 * 60 * 5;// 終了後5分で録画中固�
 const recordingPriority = config.recordingPriority || 2;
 const conflictedPriority = config.conflictedPriority || 1;
 const storageLowSpaceThresholdMB = config.storageLowSpaceThresholdMB || 3000;// 3 GB
+const storageLowSpaceWarningThresholdMB = typeof config.storageLowSpaceWarningThresholdMB === 'number' ?
+	config.storageLowSpaceWarningThresholdMB : storageLowSpaceThresholdMB;
 const storageLowSpaceAction = config.storageLowSpaceAction || "remove"; // "none" | "stop" | "remove"
 const notificationSettings = notification.resolveNotificationCommand(config);
 const sendNotification = notification.createNotificationSender(notificationSettings.command, { log: operatorLog });
@@ -254,7 +257,10 @@ let scheduler = null;
 let schedulerStartedAt = 0;
 let scheduled = 0;
 let stChecked = 0;
-let stNotified = 0;
+const stNotified = {
+	warning: 0,
+	cleanup: 0
+};
 let recordingChecked = 0;
 let recordedStorageWakeupHistory = {};
 let mirakurunDropChecked = 0;
@@ -889,9 +895,10 @@ function scheduleMatchLedgerUpdate(reason) {
 }
 
 function compactMatchOutput(stdout) {
-	const lines = String(stdout || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+	const compacted = matchOutput.compactKeepRecordedStatus(stdout);
+	const lines = compacted.lines;
 	const summary = {};
-	let keepRecordedOverMissed = 0;
+	const keepRecordedOverMissed = compacted.keepRecordedOverMissed;
 	let cleanup = null;
 	let oldNgRemoved = null;
 	let inSummary = false;
@@ -899,11 +906,6 @@ function compactMatchOutput(stdout) {
 
 	lines.forEach(line => {
 		let m;
-
-		if (line === 'KEEP_RECORDED_STATUS: RECORDED over MISSED') {
-			keepRecordedOverMissed++;
-			return;
-		}
 
 		if (line === '---- match summary ----') {
 			inSummary = true;
@@ -2182,8 +2184,31 @@ function findOldestRecordedFileInRecordedDir() {
 
 // 実ファイル削除後、recorded.json 側に同一パスの記録が残っていれば整合更新する
 // 削除対象の選定には recorded 台帳を使わない
-function removeRecordedLedgerEntriesByPath(filePath) {
+function markMatchRecordingDeleted(recordedEntries, filePath, deletedAt) {
+	let items;
+
+	try {
+		items = JSON.parse(fs.readFileSync(MATCH_DATA_FILE, { encoding: 'utf8' }));
+		if (!Array.isArray(items)) {
+			throw new Error('match data is not an array');
+		}
+
+		if (!storageLow.markMatchRecordingDeleted(items, recordedEntries, filePath, deletedAt, 'storage-low')) {
+			return false;
+		}
+
+		fs.writeFileSync(MATCH_DATA_FILE, JSON.stringify(items));
+		operatorLog('WRITE: ' + MATCH_DATA_FILE);
+		return true;
+	} catch (error) {
+		operatorLog('WARNING: Storage cleanup match history update failed: ' + filePath + ' (' + error.message + ')');
+		return false;
+	}
+}
+
+function removeRecordedLedgerEntriesByPath(filePath, deletedAt) {
 	const resolvedFilePath = path.resolve(filePath);
+	const removed = [];
 	let changed = false;
 
 	for (let i = recorded.length - 1; i >= 0; i--) {
@@ -2195,6 +2220,7 @@ function removeRecordedLedgerEntriesByPath(filePath) {
 			continue;
 		}
 
+		removed.push(recorded[i]);
 		recorded.splice(i, 1);
 		changed = true;
 	}
@@ -2202,6 +2228,7 @@ function removeRecordedLedgerEntriesByPath(filePath) {
 	if (changed) {
 		fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
 		operatorLog('WRITE: ' + RECORDED_DATA_FILE);
+		markMatchRecordingDeleted(removed, filePath, deletedAt);
 		scheduleMatchLedgerUpdate('recorded cleanup');
 	}
 }
@@ -2218,7 +2245,7 @@ function removeOldestRecordedFileInRecordedDir() {
 	try {
 		fs.unlinkSync(target.path);
 		operatorLog('REMOVE: Storage cleanup -> ' + target.path + ' (' + target.size + ' bytes)');
-		removeRecordedLedgerEntriesByPath(target.path);
+		removeRecordedLedgerEntriesByPath(target.path, Date.now());
 		return true;
 	} catch (e) {
 		operatorLog('WARNING: Storage cleanup remove failed: ' + target.path + ' (' + e.message + ')');
@@ -2236,33 +2263,53 @@ function storageChecker() {
 		}
 
 		const freeMB = info.available / 1024 / 1024;
-		if (freeMB < storageLowSpaceThresholdMB) {
-			stChecked = 0;// すぐに再チェックするため
-			operatorLog(`ALERT: Storage Low Space! (${freeMB} MB < ${storageLowSpaceThresholdMB} MB)`);
+		const phase = storageLow.getPhase(freeMB, storageLowSpaceThresholdMB, storageLowSpaceWarningThresholdMB);
+		if (phase) {
+			const thresholdMB = phase === 'cleanup' ? storageLowSpaceThresholdMB : storageLowSpaceWarningThresholdMB;
+			const severity = phase === 'cleanup' ? 'critical' : 'warning';
+
+			if (phase === 'cleanup') {
+				stChecked = 0;// すぐに再チェックするため
+				operatorLog(`ALERT: Storage Low Space! (${freeMB} MB < ${storageLowSpaceThresholdMB} MB)`);
+			}
 
 			// 1. 外部通知コマンド実行
-			const shouldNotify = notification.shouldSendStorageLowNotification(
+			const shouldNotify = notification.shouldSendStorageLowPhaseNotification(
 				notificationSettings.source,
+				phase,
 				clock,
 				stNotified,
 				notifyIntervalTime
 			);
 			if (notificationSettings.command && shouldNotify) {
-				if (notificationSettings.source === 'notificationCommand') {
-					stNotified = clock;
+				const notifiedAt = clock;
+
+				if (phase === 'warning') {
+					operatorLog(`WARNING: Storage Low Space! (${freeMB} MB < ${storageLowSpaceWarningThresholdMB} MB)`);
 				}
 
-				sendNotification(notification.createStorageLowNotification({
+				const payload = notification.createStorageLowNotification({
 					availableBytes: info.available,
 					availableMB: freeMB,
-					thresholdMB: storageLowSpaceThresholdMB,
+					thresholdMB: thresholdMB,
 					recordedDir: config.recordedDir,
-					action: storageLowSpaceAction
-				}));
+					action: storageLowSpaceAction,
+					severity: severity,
+					phase: phase
+				});
+
+				// 別段階の通知が実行中でsingle-flightによりskipされた場合は、次回checkで再試行可能にする。
+				if (notificationSettings.source === 'notificationCommand') {
+					notification.sendStorageLowPhaseNotification(sendNotification, payload, phase, notifiedAt, stNotified);
+				} else {
+					sendNotification(payload);
+				}
 			}
 
 			// 2. アクション
-			if (storageLowSpaceAction === "stop") {
+			if (phase === 'warning') {
+				return;
+			} else if (storageLowSpaceAction === "stop") {
 				// 録画停止
 				storageLow.stopCurrentRecordings(recording, stopRecording);
 			} else if (storageLowSpaceAction === "remove") {
