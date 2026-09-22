@@ -14,6 +14,8 @@ const RESERVES2_DATA_FILE = __dirname + '/data/reserves2.json';
 const RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 const RECORDED_DATA_FILE  = __dirname + '/data/recorded.json';
 const MATCH_DATA_FILE     = __dirname + '/data/match.json';
+const SCHEDULER_STATE_FILE = __dirname + '/data/scheduler-state.json';
+const LEGACY_SCHEDULER_STATE_FILE = __dirname + '/data/epg-scheduler-state.json';
 
 // 標準モジュールのロード
 const path = require('path');
@@ -65,6 +67,10 @@ const storageLow = require('./lib/storage-low');
 const runtimePrivileges = require('./lib/runtime-privileges');
 const mirakurunConnection = require('./lib/mirakurun-connection');
 const mirakurunDropWatch = require('./lib/mirakurun-drop-watch');
+const mirakurunEpgJobWatch = require('./lib/mirakurun-epg-job-watch');
+const mirakurunEpgReconcile = require('./lib/mirakurun-epg-reconcile');
+const operatorSchedulerRequest = require('./lib/operator-scheduler-request');
+const schedulerState = require('./lib/scheduler-state');
 const chinachu = require('chinachu-common');
 const mirakurun = new (require("mirakurun").default)();
 
@@ -242,6 +248,7 @@ if (config.operTweeter) {
 
 let clock = Date.now();
 let scheduler = null;
+let schedulerStartedAt = 0;
 let scheduled = 0;
 let stChecked = 0;
 let stNotified = 0;
@@ -255,6 +262,39 @@ let operatorInterval = null;
 let shutdownStarted = false;
 const activeRecordingOutputs = new Set();
 const activeDurationProbes = new Set();
+
+// EPG由来のscheduler要求だけをsingle pendingへ集約する。
+// periodic schedulerは従来どおりstartScheduler()を直接使用する。
+const schedulerRequest = operatorSchedulerRequest.createSchedulerRequest({
+	isSchedulerRunning: () => scheduler !== null,
+	getSchedulerStartedAt: () => schedulerStartedAt,
+	startScheduler: startScheduler,
+	isShuttingDown: () => shutdownStarted,
+	log: operatorLog,
+	stateStore: new schedulerState.SchedulerStateStore(SCHEDULER_STATE_FILE, {
+		legacyFilePath: LEGACY_SCHEDULER_STATE_FILE
+	})
+});
+
+async function fetchMirakurunJobs() {
+	const response = await mirakurun.call('getJobs');
+	return response && Object.prototype.hasOwnProperty.call(response, 'body') ? response.body : response;
+}
+
+const epgJobWatcher = mirakurunEpgJobWatch.createWatcher({
+	client: mirakurun,
+	fetchJobs: fetchMirakurunJobs,
+	log: operatorLog,
+	onCycleSettled: (parentId, summary) => schedulerRequest.requestEpgCycle(parentId, summary)
+});
+epgJobWatcher.start();
+
+const epgJobReconciler = mirakurunEpgReconcile.createReconciler({
+	fetchJobs: fetchMirakurunJobs,
+	requestCycle: (parentId, summary, metadata) => schedulerRequest.requestEpgCycle(parentId, summary, metadata),
+	log: operatorLog
+});
+epgJobReconciler.start();
 
 
 // メインループ
@@ -548,28 +588,36 @@ function stopScheduler() {
 
 // スケジューラーを開始
 function startScheduler() {
-	if (scheduler !== null) { return; }
+	if (scheduler !== null) { return false; }
 
 	var finalize;
 
 	scheduler = child_process.spawn('./chinachu', [ 'update' ], {
 		detached: process.platform !== 'win32'
 	});
+	schedulerStartedAt = Date.now();
+	const startedScheduler = scheduler;
 	operatorLog('SPAWN: ./chinachu update (pid=' + scheduler.pid + ')');
 
 	// ./chinachu update 側の tee が scheduler log を保存する。
 	// 転送された stdout は再追記せず、pipe が詰まらないよう明示的に drain する。
 	scheduler.stdout.resume();
 
-	finalize = function () {
+	finalize = function (code, signal) {
 
-		operatorLog('EXIT: node app-scheduler.js (pid=' + scheduler.pid + ')');
+		operatorLog('EXIT: node app-scheduler.js (pid=' + startedScheduler.pid + ')');
 
 		scheduler = null;
+		schedulerStartedAt = 0;
+		schedulerRequest.onSchedulerExit({
+			successful: code === 0 && signal === null,
+			finishedAt: Date.now()
+		});
 		completeOperatorShutdown();
 	};
 
 	scheduler.once('exit', finalize);
+	return true;
 
 }
 
@@ -598,6 +646,8 @@ function shutdownOperator(signal) {
 		operatorInterval = null;
 	}
 
+	epgJobReconciler.stop();
+	epgJobWatcher.stop();
 	stopScheduler();
 	stopActiveDurationProbes();
 	recording.slice().forEach(program => {

@@ -8,6 +8,9 @@
 
 const PID_FILE = __dirname + '/data/scheduler.pid';
 
+const SCHEDULER_STATE_FILE = __dirname + '/data/scheduler-state.json';
+const LEGACY_SCHEDULER_STATE_FILE = __dirname + '/data/epg-scheduler-state.json';
+
 const CONFIG_FILE = __dirname + '/config.json';
 const RULES_FILE = __dirname + '/rules.json';
 const RESERVES_DATA_FILE = __dirname + '/data/reserves.json';
@@ -20,6 +23,8 @@ const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
 const path = require('path');
 const fs = require('fs');
 const util = require('util');
+const schedulerState = require('./lib/scheduler-state');
+const schedulerStartedAt = Date.now();
 
 function formatJstLogTime() {
 	const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
@@ -514,6 +519,18 @@ function updateMatchLedger() {
 	}
 }
 
+// (function) persist the common successful scheduler boundary
+function recordSchedulerSuccess() {
+	try {
+		const stateStore = new schedulerState.SchedulerStateStore(SCHEDULER_STATE_FILE, {
+			legacyFilePath: LEGACY_SCHEDULER_STATE_FILE
+		});
+		stateStore.recordSchedulerSuccess(schedulerStartedAt, Date.now());
+	} catch (error) {
+		schedulerLog('WARNING: scheduler state save failed: ' + (error && error.message ? error.message : String(error)));
+	}
+}
+
 // (function) run epgEnd hook
 function runEpgEndCommand() {
 	if (config.epgEndCommand) {
@@ -738,6 +755,8 @@ function scheduler() {
 			commandProcess = child_process.spawn(config.schedulerEndCommand, [process.pid, RULES_FILE, RESERVES_DATA_FILE, SCHEDULE_DATA_FILE, matches.length.toString(10), duplicateCount.toString(10), conflictCount.toString(10), skipCount.toString(10), reservedCount.toString(10)]);
 			schedulerLog('SPAWN: ' + config.schedulerEndCommand + ' (pid=' + commandProcess.pid + ')');
 		}
+
+		recordSchedulerSuccess();
 	}
 
 	// プロセス終了
