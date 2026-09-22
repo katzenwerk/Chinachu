@@ -196,3 +196,15 @@ stream selection for current system FFmpeg environments.
   sudo, or network operations.
 - Added coverage for legacy FFmpeg migration and unknown local binary protection.
 - Added verification coverage for resolved `ffmpeg` and `ffprobe` commands.
+
+# Chinachu 0.10.7-thorn.25
+
+This release improves scheduler synchronization with Mirakurun EPG updates
+and reduces unnecessary periodic scheduler runs.
+
+## Highlights
+
+- Added scheduler synchronization with settled Mirakurun EPG gathering cycles.
+- Added recovery for missed EPG cycle notifications.
+- Added scheduler state and lightweight periodic preflight checks.
+- Reduced unnecessary full scheduler runs while retaining the periodic path as a fallback.
