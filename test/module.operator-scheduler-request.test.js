@@ -17,11 +17,12 @@ function cleanSummary(overrides) {
 
 function commonState(overrides) {
 	return Object.assign({
-		version: 2,
+		version: 3,
 		lastSchedulerStartedAt: 0,
 		lastSchedulerSuccessAt: 0,
 		lastAppliedParentId: null,
-		lastAppliedAt: 0
+		lastAppliedAt: 0,
+		baselines: {}
 	}, overrides || {});
 }
 

@@ -32,6 +32,7 @@ function writeFixture(mode) {
 		'void process.pid; // fixture: avoid changing process priority'
 	);
 	fs.writeFileSync(path.join(directory, 'app-scheduler.js'), schedulerSource);
+	fs.copyFileSync(path.join(repositoryRoot, 'app-matching.js'), path.join(directory, 'app-matching.js'));
 	fs.copyFileSync(path.join(repositoryRoot, 'chinachu'), path.join(directory, 'chinachu'));
 	fs.chmodSync(path.join(directory, 'chinachu'), 0o755);
 	fs.writeFileSync(path.join(binDirectory, 'renice'), '#!/bin/sh\nexit 0\n');
@@ -90,6 +91,9 @@ describe('Common scheduler success receipt', function() {
 			assert.ok(saved.lastSchedulerStartedAt >= before);
 			assert.ok(saved.lastSchedulerStartedAt <= saved.lastSchedulerSuccessAt);
 			assert.ok(saved.lastSchedulerSuccessAt <= after);
+			[ 'rules', 'config', 'reserves', 'services', 'tuners', 'recorded' ].forEach(name => {
+				assert.ok(saved.baselines[name] && typeof saved.baselines[name].hash === 'string');
+			});
 		} finally {
 			fs.rmSync(directory, { recursive: true, force: true });
 		}
@@ -107,6 +111,7 @@ describe('Common scheduler success receipt', function() {
 			assert.match(result.stdout + result.stderr, /test Mirakurun failure/);
 			assert.strictEqual(store.load().lastSchedulerStartedAt, 1000);
 			assert.strictEqual(store.load().lastSchedulerSuccessAt, 2000);
+			assert.deepStrictEqual(store.load().baselines, schedulerState.emptyBaselines());
 		} finally {
 			fs.rmSync(directory, { recursive: true, force: true });
 		}

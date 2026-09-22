@@ -24,6 +24,7 @@ const path = require('path');
 const fs = require('fs');
 const util = require('util');
 const schedulerState = require('./lib/scheduler-state');
+const schedulerPreflight = require('./lib/operator-scheduler-preflight');
 const schedulerStartedAt = Date.now();
 
 function formatJstLogTime() {
@@ -79,6 +80,14 @@ const config = require(CONFIG_FILE);
 const rules = JSON.parse(fs.readFileSync(RULES_FILE, { encoding: 'utf8' }) || '[]');
 let reserves = null;//まだ読み込まない
 let tuners = null;
+const schedulerBaselines = schedulerState.emptyBaselines();
+let reservesReadIdentity = null;
+let reservesOutputIdentity = null;
+let reservesReadFingerprint = null;
+let reservesChangedDuringRun = false;
+
+schedulerBaselines.config = schedulerPreflight.createFileBaseline(CONFIG_FILE, config);
+schedulerBaselines.rules = schedulerPreflight.createFileBaseline(RULES_FILE, rules);
 
 // Mirakurun Client
 const mirakurunPath = mirakurunConnection.configureClient(mirakurun, config);
@@ -427,8 +436,28 @@ function outputReserves() {
 		array.push(reserve);
 	});
 
+	try {
+		if (!schedulerPreflight.sameFileIdentity(
+			schedulerPreflight.fileIdentity(RESERVES_DATA_FILE),
+			reservesReadIdentity
+		) || schedulerPreflight.fingerprint(
+			schedulerPreflight.projectReserves(readJsonArray(RESERVES_DATA_FILE))
+		) !== reservesReadFingerprint) {
+			reservesChangedDuringRun = true;
+		}
+	} catch (_) {
+		reservesChangedDuringRun = true;
+	}
+
 	// Chinachu本体・Web側の更新検知互換性を優先し、元版と同じ直接書き込みにする
 	fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(array));
+	reservesOutputIdentity = schedulerPreflight.fileIdentity(RESERVES_DATA_FILE);
+	if (!reservesChangedDuringRun) {
+		schedulerBaselines.reserves = schedulerPreflight.createFileBaseline(
+			RESERVES_DATA_FILE,
+			schedulerPreflight.projectReserves(array)
+		);
+	}
 
 	// reserves2 は副次出力。失敗しても本体の reserves.json 更新と後続フックを止めない
 	try {
@@ -487,7 +516,8 @@ function updateMatchLedger() {
 			return;
 		}
 
-		readJsonArray(recordedDataFile, { createIfMissing: true });
+		var recordedForBaseline = readJsonArray(recordedDataFile, { createIfMissing: true });
+		schedulerBaselines.recorded = schedulerPreflight.createFileBaseline(recordedDataFile, recordedForBaseline);
 		readJsonArray(RESERVES2_DATA_FILE, { createIfMissing: true });
 		readJsonArray(matchDataFile, { createIfMissing: true });
 
@@ -522,10 +552,22 @@ function updateMatchLedger() {
 // (function) persist the common successful scheduler boundary
 function recordSchedulerSuccess() {
 	try {
+		try {
+			if (!schedulerPreflight.sameFileIdentity(
+				schedulerPreflight.fileIdentity(RESERVES_DATA_FILE),
+				reservesOutputIdentity
+			) || !schedulerBaselines.reserves || schedulerPreflight.fingerprint(
+				schedulerPreflight.projectReserves(readJsonArray(RESERVES_DATA_FILE))
+			) !== schedulerBaselines.reserves.hash) {
+				schedulerBaselines.reserves = null;
+			}
+		} catch (_) {
+			schedulerBaselines.reserves = null;
+		}
 		const stateStore = new schedulerState.SchedulerStateStore(SCHEDULER_STATE_FILE, {
 			legacyFilePath: LEGACY_SCHEDULER_STATE_FILE
 		});
-		stateStore.recordSchedulerSuccess(schedulerStartedAt, Date.now());
+		stateStore.recordSchedulerSuccess(schedulerStartedAt, Date.now(), schedulerBaselines);
 	} catch (error) {
 		schedulerLog('WARNING: scheduler state save failed: ' + (error && error.message ? error.message : String(error)));
 	}
@@ -569,6 +611,8 @@ function scheduler() {
 	});
 
 	reserves = readJsonArray(RESERVES_DATA_FILE, { createIfMissing: true });//読み込む
+	reservesReadIdentity = schedulerPreflight.fileIdentity(RESERVES_DATA_FILE);
+	reservesReadFingerprint = schedulerPreflight.fingerprint(schedulerPreflight.projectReserves(reserves));
 
 	var typeNum = {};
 
@@ -942,6 +986,9 @@ function getEpgFromMirakurun(path) {
 
 	mirakurun.getServices()
 		.then(services => {
+			schedulerBaselines.services = schedulerPreflight.createValueBaseline(
+				schedulerPreflight.projectServices(services)
+			);
 
 			schedulerLog('Mirakurun is OK.');
 			schedulerLog('Mirakurun -> services: ' + services.length);
@@ -1000,6 +1047,9 @@ function getEpgFromMirakurun(path) {
 		.then(_tuners => {
 
 			tuners = _tuners;
+			schedulerBaselines.tuners = schedulerPreflight.createValueBaseline(
+				schedulerPreflight.projectTuners(tuners)
+			);
 
 			schedulerLog('Mirakurun -> tuners: ' + tuners.length);
 

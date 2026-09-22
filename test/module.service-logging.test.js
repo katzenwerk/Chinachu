@@ -182,6 +182,7 @@ describe('Service logging regressions', function() {
 			assert.strictEqual((log.match(/^SCHEDULER_EVENT_ONCE$/gm) || []).length, 1);
 			assert.strictEqual((output.match(/SPAWN: \.\/chinachu update/g) || []).length, 1);
 			assert.strictEqual((output.match(/EXIT: node app-scheduler\.js/g) || []).length, 1);
+			assert.doesNotMatch(output, /SCHEDULER: preflight/, 'startup scheduler must remain unconditional');
 			assert.strictEqual(processHasOpenPath(operator.pid, schedulerLog), false);
 			assert.strictEqual(isProcessAlive(schedulerPid), false);
 			assert.strictEqual(fs.readFileSync('/proc/' + operator.pid + '/task/' + operator.pid + '/children', 'utf8').trim(), '');

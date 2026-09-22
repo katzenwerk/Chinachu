@@ -10,16 +10,17 @@ const schedulerState = require('../lib/scheduler-state');
 
 function state(overrides) {
 	return Object.assign({
-		version: 2,
+		version: 3,
 		lastSchedulerStartedAt: 0,
 		lastSchedulerSuccessAt: 0,
 		lastAppliedParentId: null,
-		lastAppliedAt: 0
+		lastAppliedAt: 0,
+		baselines: schedulerState.emptyBaselines()
 	}, overrides || {});
 }
 
 describe('Common scheduler persistent state', function() {
-	it('atomically round-trips version 2 state with private permissions', function() {
+	it('atomically round-trips version 3 state with private permissions', function() {
 		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-scheduler-state-'));
 		const file = path.join(directory, 'state.json');
 		try {
@@ -111,6 +112,30 @@ describe('Common scheduler persistent state', function() {
 			}));
 			assert.strictEqual(store.load().lastAppliedParentId, 'legacy-parent');
 			assert.strictEqual(store.load().lastSchedulerSuccessAt, 2000);
+		} finally {
+			fs.rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it('migrates version 2 state without losing scheduler or EPG fields', function() {
+		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-scheduler-state-'));
+		const file = path.join(directory, 'scheduler-state.json');
+		try {
+			fs.writeFileSync(file, JSON.stringify({
+				version: 2,
+				lastSchedulerStartedAt: 1000,
+				lastSchedulerSuccessAt: 2000,
+				lastAppliedParentId: 'v2-parent',
+				lastAppliedAt: 2100
+			}));
+			const store = new schedulerState.SchedulerStateStore(file);
+			assert.deepStrictEqual(store.load(), state({
+				lastSchedulerStartedAt: 1000,
+				lastSchedulerSuccessAt: 2000,
+				lastAppliedParentId: 'v2-parent',
+				lastAppliedAt: 2100
+			}));
+			assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).version, 3);
 		} finally {
 			fs.rmSync(directory, { recursive: true, force: true });
 		}

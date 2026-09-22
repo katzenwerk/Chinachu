@@ -9,6 +9,8 @@
 process.env.PATH = `${__dirname}/usr/bin:${process.env.PATH}`;
 
 const CONFIG_FILE = __dirname + '/config.json';
+const RULES_FILE = __dirname + '/rules.json';
+const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
 const RESERVES_DATA_FILE  = __dirname + '/data/reserves.json';
 const RESERVES2_DATA_FILE = __dirname + '/data/reserves2.json';
 const RECORDING_DATA_FILE = __dirname + '/data/recording.json';
@@ -70,6 +72,7 @@ const mirakurunDropWatch = require('./lib/mirakurun-drop-watch');
 const mirakurunEpgJobWatch = require('./lib/mirakurun-epg-job-watch');
 const mirakurunEpgReconcile = require('./lib/mirakurun-epg-reconcile');
 const operatorSchedulerRequest = require('./lib/operator-scheduler-request');
+const operatorSchedulerPreflight = require('./lib/operator-scheduler-preflight');
 const schedulerState = require('./lib/scheduler-state');
 const chinachu = require('chinachu-common');
 const mirakurun = new (require("mirakurun").default)();
@@ -259,27 +262,51 @@ let mirakurunDropChecking = false;
 let mirakurunDropSnapshots = {};
 let reserveCheckTimer = null;
 let operatorInterval = null;
+let periodicPreflightPending = false;
 let shutdownStarted = false;
 const activeRecordingOutputs = new Set();
 const activeDurationProbes = new Set();
 
 // EPG由来のscheduler要求だけをsingle pendingへ集約する。
-// periodic schedulerは従来どおりstartScheduler()を直接使用する。
+// periodic schedulerはshadow preflight後も従来どおりstartScheduler()を要求する。
+const schedulerStateStore = new schedulerState.SchedulerStateStore(SCHEDULER_STATE_FILE, {
+	legacyFilePath: LEGACY_SCHEDULER_STATE_FILE
+});
 const schedulerRequest = operatorSchedulerRequest.createSchedulerRequest({
 	isSchedulerRunning: () => scheduler !== null,
 	getSchedulerStartedAt: () => schedulerStartedAt,
 	startScheduler: startScheduler,
 	isShuttingDown: () => shutdownStarted,
 	log: operatorLog,
-	stateStore: new schedulerState.SchedulerStateStore(SCHEDULER_STATE_FILE, {
-		legacyFilePath: LEGACY_SCHEDULER_STATE_FILE
-	})
+	stateStore: schedulerStateStore
 });
 
 async function fetchMirakurunJobs() {
 	const response = await mirakurun.call('getJobs');
 	return response && Object.prototype.hasOwnProperty.call(response, 'body') ? response.body : response;
 }
+
+const schedulerPreflight = new operatorSchedulerPreflight.OperatorSchedulerPreflight({
+	stateStore: schedulerStateStore,
+	fetchJobs: fetchMirakurunJobs,
+	fetchServices: () => mirakurun.getServices(),
+	fetchTuners: () => mirakurun.getTuners(),
+	paths: {
+		state: SCHEDULER_STATE_FILE,
+		rules: RULES_FILE,
+		config: CONFIG_FILE,
+		schedule: SCHEDULE_DATA_FILE,
+		reserves: RESERVES_DATA_FILE,
+		reserves2: RESERVES2_DATA_FILE,
+		recorded: RECORDED_DATA_FILE
+	}
+});
+const shadowPeriodicScheduler = new operatorSchedulerPreflight.ShadowPeriodicScheduler({
+	preflight: schedulerPreflight,
+	startScheduler: startScheduler,
+	isShuttingDown: () => shutdownStarted,
+	log: operatorLog
+});
 
 const epgJobWatcher = mirakurunEpgJobWatch.createWatcher({
 	client: mirakurun,
@@ -372,8 +399,13 @@ reserveCheckLoop();
 operatorInterval = setInterval(() => {
 
 	if ((scheduler === null) && (clock - scheduled > schedulerIntervalTime)) {
-		startScheduler();
-		scheduled = clock;
+		if (scheduled === 0) {
+			if (startScheduler()) {
+				scheduled = clock;
+			}
+		} else {
+			startPeriodicSchedulerWithPreflight();
+		}
 	}
 
 	if (clock - stChecked > 1000 * 20) {
@@ -391,6 +423,20 @@ operatorInterval = setInterval(() => {
 		mirakurunDropChecked = clock;
 	}
 }, 1000 * 6);
+
+function startPeriodicSchedulerWithPreflight() {
+	if (periodicPreflightPending || shutdownStarted) {
+		return;
+	}
+	periodicPreflightPending = true;
+	shadowPeriodicScheduler.request().then(outcome => {
+		if (outcome && outcome.started) {
+			scheduled = clock;
+		}
+	}).finally(() => {
+		periodicPreflightPending = false;
+	});
+}
 
 // 予約時間チェック
 function reservesChecker(program) {
@@ -648,6 +694,8 @@ function shutdownOperator(signal) {
 
 	epgJobReconciler.stop();
 	epgJobWatcher.stop();
+	shadowPeriodicScheduler.stop();
+	schedulerPreflight.stop();
 	stopScheduler();
 	stopActiveDurationProbes();
 	recording.slice().forEach(program => {
