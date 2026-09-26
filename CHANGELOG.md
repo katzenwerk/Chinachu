@@ -208,3 +208,15 @@ and reduces unnecessary periodic scheduler runs.
 - Added recovery for missed EPG cycle notifications.
 - Added scheduler state and lightweight periodic preflight checks.
 - Reduced unnecessary full scheduler runs while retaining the periodic path as a fallback.
+
+# Chinachu 0.10.7-thorn.26
+
+This release improves episode and subtitle parsing in the scheduler.
+
+## Highlights
+
+- Improved episode detection for single, multi-episode, and range notation.
+- Improved subtitle extraction from program titles and descriptions.
+- Reduced false episode detection from season numbers and similar title text.
+- Preserved the original `fullTitle` for compatibility.
+- Improved low-storage handling and related notification/history processing.
