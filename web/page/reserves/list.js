@@ -88,12 +88,15 @@ P = Class.create(P, {
 	,
 	getMaxPagePosition: function() {
 
-				var filterRuleId = this.self.query.rule;
+		var filterRuleUid = this.self.query.ruleUid;
+		var filterRuleId = this.self.query.rule;
 		var count = 0;
 
 		for (var i = 0, l = global.chinachu.reserves.length; i < l; i++) {
-			if (typeof filterRuleId !== 'undefined'
-				&& (typeof global.chinachu.reserves[i].ruleId === 'undefined' || String(global.chinachu.reserves[i].ruleId) !== String(filterRuleId))) {
+			if (typeof filterRuleUid !== 'undefined'
+				? (typeof global.chinachu.reserves[i].ruleUid === 'undefined' || String(global.chinachu.reserves[i].ruleUid) !== String(filterRuleUid))
+				: (typeof filterRuleId !== 'undefined'
+					&& (typeof global.chinachu.reserves[i].ruleId === 'undefined' || String(global.chinachu.reserves[i].ruleId) !== String(filterRuleId)))) {
 				continue;
 			}
 
@@ -117,7 +120,9 @@ P = Class.create(P, {
 
 		queryParams.push('page=' + page);
 
-		if (this.self.query.rule) {
+		if (typeof this.self.query.ruleUid !== 'undefined') {
+			queryParams.push('ruleUid=' + encodeURIComponent(this.self.query.ruleUid));
+		} else if (typeof this.self.query.rule !== 'undefined') {
 			queryParams.push('rule=' + encodeURIComponent(this.self.query.rule));
 		}
 
@@ -257,7 +262,8 @@ P = Class.create(P, {
 	}
 	,
 	drawMain: function() {
-        var filterRuleId = this.self.query.rule;
+		var filterRuleUid = this.self.query.ruleUid;
+		var filterRuleId = this.self.query.rule;
 		var rows = [];
 
 		var programs = [];
@@ -271,7 +277,9 @@ P = Class.create(P, {
 		});
 
 		programs.each(function(program, i) {
-	        if (typeof filterRuleId !== 'undefined' && ( typeof program.ruleId === 'undefined' || String(program.ruleId) !== String(filterRuleId))) {
+			if (typeof filterRuleUid !== 'undefined'
+				? (typeof program.ruleUid === 'undefined' || String(program.ruleUid) !== String(filterRuleUid))
+				: (typeof filterRuleId !== 'undefined' && (typeof program.ruleId === 'undefined' || String(program.ruleId) !== String(filterRuleId)))) {
 		        return;
 	        }
 			var row = {

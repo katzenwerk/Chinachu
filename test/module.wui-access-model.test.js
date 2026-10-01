@@ -253,6 +253,10 @@ describe('WUI access model', function() {
 				path.join(repositoryRoot, 'lib/mirakurun-connection.js'),
 				path.join(libDir, 'mirakurun-connection.js')
 			);
+			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/rule-uid.js'),
+				path.join(libDir, 'rule-uid.js')
+			);
 
 			fs.writeFileSync(
 				path.join(libDir, 'wui-open-host.js'),

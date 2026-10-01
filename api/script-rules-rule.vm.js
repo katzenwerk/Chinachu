@@ -22,9 +22,22 @@
 					newRule.isDisabled = true;
 				}
 				delete newRule.isEnabled;
-				
-				data.rules.splice(data.rules.indexOf(rule), 1, newRule);
-				fs.writeFileSync(define.RULES_FILE, JSON.stringify(data.rules, null, '  '));
+
+				var index = data.rules.indexOf(rule);
+				var updatedRules = data.rules.slice();
+				if (typeof rule.ruleUid === 'undefined') {
+					delete newRule.ruleUid;
+				} else {
+					newRule.ruleUid = rule.ruleUid;
+				}
+				updatedRules.splice(index, 1, newRule);
+				try {
+					ruleUid.ensureRuleUids(updatedRules);
+					data.rules.splice(index, 1, newRule);
+					fs.writeFileSync(define.RULES_FILE, JSON.stringify(data.rules, null, '  '));
+				} catch (error) {
+					return response.error(error.code === 'RULE_UID_DUPLICATE' ? 409 : error.code === 'RULE_UID_INVALID' ? 400 : 500);
+				}
 				
 				response.head(200);
 				response.end(JSON.stringify(newRule));

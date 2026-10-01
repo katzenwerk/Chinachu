@@ -22,9 +22,15 @@
 					newRule.isDisabled = true;
 				}
 				delete newRule.isEnabled;
-				
-				data.rules.push(newRule);
-				fs.writeFileSync(define.RULES_FILE, JSON.stringify(data.rules, null, '  '));
+
+				try {
+					var updatedRules = data.rules.concat([ newRule ]);
+					ruleUid.ensureRuleUids(updatedRules);
+					data.rules.push(newRule);
+					fs.writeFileSync(define.RULES_FILE, JSON.stringify(data.rules, null, '  '));
+				} catch (error) {
+					return response.error(error.code === 'RULE_UID_DUPLICATE' ? 409 : error.code === 'RULE_UID_INVALID' ? 400 : 500);
+				}
 				
 				response.head(201);
 				response.end(JSON.stringify(newRule));

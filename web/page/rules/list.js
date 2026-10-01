@@ -456,27 +456,42 @@ P = Class.create(P, {
 	        onSuccess: function(res) {
 		        var reserves = res.responseJSON;
 
-		        // ruleIdごとに予約数を集計
+		        // Stable ruleUidを優先し、UID未導入の旧形式ルールだけindexで集計する。
 		        var reserveCounts = {};
+		        var reserveUidCounts = [];
 		        var skipCounts = {};
-                reserves.forEach(function(r) {
-                    if (typeof r.ruleId === 'number' && !r.isSkip) {
-                        reserveCounts[r.ruleId] = (reserveCounts[r.ruleId] || 0) + 1;
-                    }
-                    if (typeof r.ruleId === 'number' && r.iskip ==false) {
-                        skipCounts[r.ruleId] = (skipCounts[r.ruleId] || 0) + 1;
-                    }
+		        reserves.forEach(function(r) {
+		            if (typeof r.ruleId === 'number') {
+		                if (!r.isSkip) reserveCounts[r.ruleId] = (reserveCounts[r.ruleId] || 0) + 1;
+		                if (r.iskip == false) skipCounts[r.ruleId] = (skipCounts[r.ruleId] || 0) + 1;
+		            }
+
+		            if (typeof r.ruleUid !== 'undefined') {
+		                var uidCount = null;
+		                for (var j = 0; j < reserveUidCounts.length; j++) {
+		                    if (reserveUidCounts[j].ruleUid === r.ruleUid) {
+		                        uidCount = reserveUidCounts[j];
+		                        break;
+		                    }
+		                }
+		                if (!uidCount) {
+		                    uidCount = { ruleUid: r.ruleUid, count: 0 };
+		                    reserveUidCounts.push(uidCount);
+		                }
+		                if (!r.isSkip) uidCount.count++;
+		            }
 
                 });
 
 		        // メイン描画処理を別関数に切り出して呼ぶ
-		        this._drawMainWithCounts(reserveCounts);
+		        this._drawMainWithCounts(reserveCounts, reserveUidCounts);
 	        }.bind(this)
         });
     }
     ,
-	_drawMainWithCounts: function(reserveCounts) {
+	_drawMainWithCounts: function(reserveCounts, reserveUidCounts) {
 		var rows = [];
+		reserveUidCounts = reserveUidCounts || [];
 
 		global.chinachu.rules.each(function(rule, i) {
 
@@ -520,9 +535,22 @@ P = Class.create(P, {
 					text     : 'any'
 				};
 			}
-            row.cell.reserve_count = {
-	            html: '<a href="#!/reserves/list/page=0&rule=' + i + '" title="このルールの予約一覧を見る" target=_blank onclick="event.stopPropagation();">'
-	                + (reserveCounts[i] || 0).toString(10)
+			var reserveCount = reserveCounts[i] || 0;
+			if (typeof rule.ruleUid !== 'undefined') {
+				reserveCount = 0;
+				for (var j = 0; j < reserveUidCounts.length; j++) {
+					if (reserveUidCounts[j].ruleUid === rule.ruleUid) {
+						reserveCount = reserveUidCounts[j].count;
+						break;
+					}
+				}
+			}
+			var reserveFilter = typeof rule.ruleUid !== 'undefined'
+				? 'ruleUid=' + encodeURIComponent(rule.ruleUid)
+				: 'rule=' + i;
+			row.cell.reserve_count = {
+	            html: '<a href="#!/reserves/list/page=0&' + reserveFilter + '" title="このルールの予約一覧を見る" target=_blank onclick="event.stopPropagation();">'
+	                + reserveCount.toString(10)
 	                + '</a>'
             };
 

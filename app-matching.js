@@ -425,6 +425,18 @@ function getRecordingPath(entry) {
 }
 
 function mergeOldNew(oldEntry, newEntry, logger, config) {
+	// No reservation in this input does not invalidate a previously saved snapshot.
+	// Keep current-input flags/sources/status; never fill gaps in an actual new reserve.
+	if (oldEntry.reservationMeta && newEntry.reservationMeta && !newEntry.reservationMeta.hasReserve) {
+		var reservationMeta = Object.assign({}, newEntry.reservationMeta);
+		["ruleId", "ruleIdSource", "ruleUid", "recordedDirId", "recordedDir", "reserveSnapshotAt", "reserveUpdatedAt"].forEach(function (field) {
+			if (typeof oldEntry.reservationMeta[field] !== "undefined") {
+				reservationMeta[field] = oldEntry.reservationMeta[field];
+			}
+		});
+		newEntry = Object.assign({}, newEntry, { reservationMeta: reservationMeta });
+	}
+
 	if (oldEntry.status === "RECORDED" && newEntry.status === "RECORDED") {
 		var oldPath = getRecordingPath(oldEntry);
 		var newPath = getRecordingPath(newEntry);
@@ -578,6 +590,10 @@ function buildReservationMeta(reserve, hasReserve) {
 		return {
 			hasReserve: !!hasReserve,
 			ruleId: null,
+			ruleIdSource: null,
+			ruleUid: null,
+			recordedDirId: null,
+			recordedDir: null,
 			recordedFormat: "",
 			isSkip: false,
 			isConflict: false,
@@ -590,6 +606,10 @@ function buildReservationMeta(reserve, hasReserve) {
 	return {
 		hasReserve: true,
 		ruleId: typeof reserve.ruleId === "undefined" ? null : reserve.ruleId,
+		ruleIdSource: typeof reserve.ruleIdSource === "undefined" ? null : reserve.ruleIdSource,
+		ruleUid: typeof reserve.ruleUid === "undefined" ? null : reserve.ruleUid,
+		recordedDirId: typeof reserve.recordedDirId === "undefined" ? null : reserve.recordedDirId,
+		recordedDir: typeof reserve.recordedDir === "undefined" ? null : reserve.recordedDir,
 		recordedFormat: reserve.recordedFormat || "",
 		isSkip: safeBool(reserve.isSkip),
 		isConflict: safeBool(reserve.isConflict),

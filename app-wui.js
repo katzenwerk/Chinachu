@@ -58,6 +58,7 @@ const mirakurun = new (require("mirakurun").default)();
 const openHost = require('./lib/wui-open-host');
 const runtimePrivileges = require('./lib/runtime-privileges');
 const mirakurunConnection = require('./lib/mirakurun-connection');
+const ruleUid = require('./lib/rule-uid');
 
 // Directory Checking
 if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./web/')) {
@@ -150,6 +151,23 @@ var schedule  = [];
 var reserves  = [];
 var recording = [];
 var recorded  = [];
+
+if (fs.existsSync(RULES_FILE)) {
+	try {
+		const loadedRules = JSON.parse(fs.readFileSync(RULES_FILE, 'utf8'));
+		if (!Array.isArray(loadedRules)) {
+			throw new TypeError('rules.json must contain an array');
+		}
+		rules = loadedRules;
+		const result = ruleUid.ensureRuleUids(loadedRules);
+		if (result.assigned > 0) {
+			fs.writeFileSync(RULES_FILE, JSON.stringify(loadedRules, null, '  '));
+			util.log('RULE UID BACKFILL: assigned=' + result.assigned + ' existing=' + result.existing);
+		}
+	} catch (error) {
+		console.error('ERROR: rules.json could not be loaded or has invalid ruleUid values: ' + error.message);
+	}
+}
 
 // MATCH CACHE BEGIN
 // match.json は正本のまま維持し、parse 済み配列だけを WUI プロセスの RAM に保持する。
@@ -753,6 +771,7 @@ function httpServerMain(req, res, query) {
 				Buffer       : Buffer,
 				zlib         : zlib,
 				chinachu     : chinachu,
+				ruleUid      : ruleUid,
 				mirakurun    : mirakurun,
 				config       : config,
 				matchCache   : matchCache,
@@ -949,7 +968,17 @@ chinachu.jsonWatcher(
 			return;
 		}
 
-		rules = data;
+		try {
+			const result = ruleUid.ensureRuleUids(data);
+			if (result.assigned > 0) {
+				fs.writeFileSync(RULES_FILE, JSON.stringify(data, null, '  '));
+				util.log('RULE UID BACKFILL: assigned=' + result.assigned + ' existing=' + result.existing);
+			}
+			rules = data;
+		} catch (error) {
+			console.error('ERROR: rules.json update rejected: ' + error.message);
+			return;
+		}
 		ios.emit('notify-rules');
 		util.log(mes);
 	},

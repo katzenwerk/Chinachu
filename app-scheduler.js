@@ -294,6 +294,10 @@ function applyRuleReserveOptions(reserve, rule, fallbackRuleId) {
 	}
 
 	reserve.ruleId = rule.id !== undefined ? rule.id : fallbackRuleId;
+	reserve.ruleIdSource = rule.id !== undefined ? 'id' : 'index';
+	if (typeof rule.ruleUid !== 'undefined') {
+		reserve.ruleUid = rule.ruleUid;
+	}
 	reserve.allowEndLack = normalizeAllowEndLack(rule.allowEndLack);
 
 	if (typeof rule.recorded_format !== 'undefined') {

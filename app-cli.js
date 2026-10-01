@@ -41,6 +41,7 @@ var chinachu   = require('chinachu-common');
 var opts       = require('opts');
 var dateFormat = require('dateformat').default;
 var Table      = require('easy-table');
+var ruleUid    = require('./lib/rule-uid');
 
 // 引数
 opts.parse([
@@ -666,6 +667,12 @@ function chinachuRule() {
 	}
 
 	if (opts.get('simulation')) {
+		try {
+			ruleUid.ensureRuleUids(rules);
+		} catch (error) {
+			util.error('ルールUIDが不正です: ' + error.message);
+			process.exit(1);
+		}
 		if (opts.get('remove')) {
 			console.log('[simulation] ルールを削除します');
 		} else {
@@ -673,6 +680,15 @@ function chinachuRule() {
 			console.log(JSON.stringify(r, null, '  '));
 		}
 	} else {
+		try {
+			var uidResult = ruleUid.ensureRuleUids(rules);
+			if (uidResult.assigned > 0) {
+				console.log('RULE UID BACKFILL: assigned=' + uidResult.assigned + ' existing=' + uidResult.existing);
+			}
+		} catch (error) {
+			util.error('ルールUIDが不正です: ' + error.message);
+			process.exit(1);
+		}
 		if (opts.get('remove')) {
 			console.log('ルールを削除します');
 		} else {

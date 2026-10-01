@@ -225,7 +225,9 @@ describe('Operator scheduler preflight', function() {
 				start: 5000,
 				end: 6000,
 				isConflict: true,
-				ruleId: 10
+				ruleId: 10,
+				ruleIdSource: 'index',
+				ruleUid: 'stable-rule'
 			} ]);
 			assert.strictEqual((await fixture.preflight.check()).reasons.includes('reserves'), false);
 
