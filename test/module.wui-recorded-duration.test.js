@@ -32,7 +32,7 @@ function loadPage(pagePath, alerts) {
 }
 
 describe('WUI recorded duration display', function() {
-	it('shows precise file duration and estimates the head only for uninterrupted recordings', function() {
+	it('uses precise file duration and estimates recording timing only when uninterrupted', function() {
 		const alerts = [];
 		const page = loadPage('web/page/program/view.js', alerts);
 		const uninterrupted = {
@@ -49,11 +49,7 @@ describe('WUI recorded duration display', function() {
 		assert.match(body, /推定先頭:/);
 		assert.match(resumedBody, /実ファイル 1分01\.235秒/);
 		assert.doesNotMatch(resumedBody, /推定先頭:/);
-	});
 
-	it('uses measured head estimation only when uninterrupted and preserves the old one-second fallback', function() {
-		const alerts = [];
-		const page = loadPage('web/page/program/view.js', alerts);
 		const target = {};
 
 		page.renderOperatorTimingWarning(target, {}, {

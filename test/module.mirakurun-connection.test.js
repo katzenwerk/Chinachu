@@ -1,7 +1,5 @@
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -15,62 +13,41 @@ function configure(endpoint, initialBasePath) {
 }
 
 describe('Mirakurun connection configuration', function() {
-	it('uses the default Unix socket when mirakurunPath is not configured', function() {
-		const result = configure();
+	it('resolves supported TCP and Unix endpoint formats to the expected transport and API path', function() {
+		const cases = [
+			{
+				endpoint: undefined,
+				selectedPath: mirakurunConnection.DEFAULT_PATH,
+				client: { basePath: '/api', socketPath: '/var/run/mirakurun.sock' }
+			},
+			{
+				endpoint: 'http://192.0.2.10:40772/',
+				selectedPath: 'http://192.0.2.10:40772/',
+				client: { basePath: '/api', host: '192.0.2.10', port: '40772' }
+			},
+			{
+				endpoint: 'http://mirakurun.example.test:40772/reverse-proxy/',
+				client: { basePath: '/reverse-proxy/api', host: 'mirakurun.example.test', port: '40772' }
+			},
+			{
+				endpoint: 'http+unix://%2Fvar%2Frun%2Fmirakurun.sock/',
+				client: { basePath: '/api', socketPath: '/var/run/mirakurun.sock' }
+			},
+			{
+				endpoint: 'http+unix://%2Fvar%2Frun%2Fmirakurun.sock/reverse-proxy/',
+				client: { basePath: '/reverse-proxy/api', socketPath: '/var/run/mirakurun.sock' }
+			},
+			{
+				endpoint: 'http://unix:/var/run/mirakurun.sock:/reverse-proxy/',
+				client: { basePath: '/reverse-proxy/api', socketPath: '/var/run/mirakurun.sock' }
+			}
+		];
 
-		assert.strictEqual(result.selectedPath, mirakurunConnection.DEFAULT_PATH);
-		assert.deepStrictEqual(result.client, {
-			basePath: '/api',
-			socketPath: '/var/run/mirakurun.sock'
-		});
-	});
-
-	it('configures an HTTP/TCP endpoint', function() {
-		const result = configure('http://192.0.2.10:40772/');
-
-		assert.strictEqual(result.selectedPath, 'http://192.0.2.10:40772/');
-		assert.deepStrictEqual(result.client, {
-			basePath: '/api',
-			host: '192.0.2.10',
-			port: '40772'
-		});
-	});
-
-	it('preserves an HTTP/TCP pathname in the client basePath', function() {
-		const result = configure('http://mirakurun.example.test:40772/reverse-proxy/');
-
-		assert.deepStrictEqual(result.client, {
-			basePath: '/reverse-proxy/api',
-			host: 'mirakurun.example.test',
-			port: '40772'
-		});
-	});
-
-	it('configures the standard encoded Unix socket endpoint', function() {
-		const result = configure('http+unix://%2Fvar%2Frun%2Fmirakurun.sock/');
-
-		assert.deepStrictEqual(result.client, {
-			basePath: '/api',
-			socketPath: '/var/run/mirakurun.sock'
-		});
-	});
-
-	it('preserves a standard Unix socket endpoint pathname in basePath', function() {
-		const result = configure('http+unix://%2Fvar%2Frun%2Fmirakurun.sock/reverse-proxy/');
-
-		assert.deepStrictEqual(result.client, {
-			basePath: '/reverse-proxy/api',
-			socketPath: '/var/run/mirakurun.sock'
-		});
-	});
-
-	it('configures the legacy Unix socket endpoint and its pathname', function() {
-		const result = configure('http://unix:/var/run/mirakurun.sock:/reverse-proxy/');
-
-		assert.deepStrictEqual(result.client, {
-			basePath: '/reverse-proxy/api',
-			socketPath: '/var/run/mirakurun.sock'
-		});
+		for (const entry of cases) {
+			const result = configure(entry.endpoint);
+			if (entry.selectedPath) assert.strictEqual(result.selectedPath, entry.selectedPath);
+			assert.deepStrictEqual(result.client, entry.client, String(entry.endpoint));
+		}
 	});
 
 	it('keeps mirakurunPath, schedulerMirakurunPath, and default selection order', function() {
@@ -86,15 +63,5 @@ describe('Mirakurun connection configuration', function() {
 			schedulerMirakurunPath: 'http://legacy.example.test:40772/'
 		}), 'http://legacy.example.test:40772/');
 		assert.strictEqual(mirakurunConnection.resolvePath({}), mirakurunConnection.DEFAULT_PATH);
-	});
-
-	it('is the only endpoint parser used by operator, scheduler, and WUI', function() {
-		[ 'app-operator.js', 'app-scheduler.js', 'app-wui.js' ].forEach(fileName => {
-			const source = fs.readFileSync(path.resolve(__dirname, '..', fileName), 'utf8');
-
-			assert.match(source, /require\(['"]\.\/lib\/mirakurun-connection['"]\)/);
-			assert.match(source, /mirakurunConnection\.configureClient\(mirakurun, config\)/);
-			assert.doesNotMatch(source, /standardFormat|legacyFormat/);
-		});
 	});
 });

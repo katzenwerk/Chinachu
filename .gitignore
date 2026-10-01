@@ -18,3 +18,4 @@
 /usr/*
 /node
 /node_modules/*
+/test-local/temporary.test.js

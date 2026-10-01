@@ -75,22 +75,27 @@ function assertSelectsFirstVideoStream(command, routeName) {
 }
 
 describe('preview FFmpeg stream selection', function() {
-	it('selects the first video stream for an in-progress recording even when stream 0 is non-video', function() {
-		const command = capturePreviewCommand('script-recording-program-preview.vm.js', 'recording', {
-			id: 'program-id',
-			pid: 1234,
-			recorded: '/recordings/in-progress.m2ts'
-		});
+	it('selects the first video stream for live and recorded previews when stream 0 is non-video', function() {
+		const cases = [
+			{
+				script: 'script-recording-program-preview.vm.js',
+				collection: 'recording',
+				program: { id: 'program-id', pid: 1234, recorded: '/recordings/in-progress.m2ts' },
+				label: 'recording preview'
+			},
+			{
+				script: 'script-recorded-program-preview.vm.js',
+				collection: 'recorded',
+				program: { id: 'program-id', recorded: '/recordings/completed.m2ts' },
+				label: 'recorded preview'
+			}
+		];
 
-		assertSelectsFirstVideoStream(command, 'recording preview');
-	});
-
-	it('selects the first video stream for a recorded program even when stream 0 is non-video', function() {
-		const command = capturePreviewCommand('script-recorded-program-preview.vm.js', 'recorded', {
-			id: 'program-id',
-			recorded: '/recordings/completed.m2ts'
-		});
-
-		assertSelectsFirstVideoStream(command, 'recorded preview');
+		for (const entry of cases) {
+			assertSelectsFirstVideoStream(
+				capturePreviewCommand(entry.script, entry.collection, entry.program),
+				entry.label
+			);
+		}
 	});
 });

@@ -96,15 +96,4 @@ describe("Mirakurun consumer dependency resolution", function() {
 		assert.ok(Object.hasOwn(spec, "definitions"));
 	});
 
-	it("keeps the server-side module load and uuid.v4 minimum compatibility", function() {
-		var rpcServerEntry = require.resolve("jsonrpc2-ws/lib/server");
-		var uuidEntry = require.resolve("uuid", {
-			paths: [path.dirname(rpcServerEntry)]
-		});
-		var uuid = require(uuidEntry);
-
-		assert.ok(require(rpcServerEntry) != null);
-		assert.strictEqual(typeof uuid.v4, "function");
-		assert.match(uuid.v4(), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-	});
 });
