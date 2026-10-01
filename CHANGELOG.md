@@ -220,3 +220,23 @@ This release improves episode and subtitle parsing in the scheduler.
 - Reduced false episode detection from season numbers and similar title text.
 - Preserved the original `fullTitle` for compatibility.
 - Improved low-storage handling and related notification/history processing.
+
+# Chinachu 0.10.7-thorn.27
+
+This release adds stable rule identity and preserves reservation-time rule and
+recording destination metadata.
+
+## Highlights
+
+- Added stable `ruleUid` values that remain associated with rules across edits,
+  deletion of other rules, and rule index changes, while retaining compatibility
+  with legacy `ruleId` and index references.
+- Reservations now carry rule identity and recording destination metadata through
+  `reserves`, `reserves2`, and match history. Historical values are preserved
+  instead of being inferred from current rules or recording destination mappings.
+- Updated WUI rule and reservation associations to use stable rule identity,
+  preventing legacy index-based reservations from being counted for an unrelated
+  current rule. Index fallback remains available for legacy rules without a UID.
+- Consolidated permanent tests by behavior and moved temporary rule UID migration
+  tests out of the regular suite. The regular suite passed 137 tests across 30
+  suites; the temporary migration tests passed 3/3.
