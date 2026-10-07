@@ -15,6 +15,7 @@ const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
 const RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 const RECORDED_DATA_FILE = __dirname + '/data/recorded.json';
 const MATCH_DATA_FILE = __dirname + '/data/match.json';
+const SCHEDULER_STATE_FILE = __dirname + '/data/scheduler-state.json';
 const SCHEDULER_LOG_FILE = __dirname + '/log/scheduler';
 
 // Load Config
@@ -59,6 +60,7 @@ const openHost = require('./lib/wui-open-host');
 const runtimePrivileges = require('./lib/runtime-privileges');
 const mirakurunConnection = require('./lib/mirakurun-connection');
 const ruleUid = require('./lib/rule-uid');
+const healthDiagnosticsModule = require('./lib/health-diagnostics');
 
 // Directory Checking
 if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./web/')) {
@@ -115,6 +117,21 @@ mirakurun.userAgent = `Chinachu/${pkg.version} (wui)`;
 mirakurun.priority = 0;
 
 console.info(mirakurun);
+
+const healthDiagnostics = healthDiagnosticsModule.createHealthDiagnostics({
+	rootDir: __dirname,
+	packageVersion: pkg.version,
+	nodeVersion: process.version,
+	paths: {
+		config: CONFIG_FILE,
+		rules: RULES_FILE,
+		schedulerState: SCHEDULER_STATE_FILE,
+		recording: RECORDING_DATA_FILE
+	},
+	validateRules: ruleUid.validateRuleUids,
+	// Direct status request avoids loading the dynamic API document for every unavailable endpoint.
+	fetchMirakurunStatus: signal => mirakurun.request('GET', '/status', { signal: signal }).then(result => result.body)
+});
 
 // etc.
 const timer = {};
@@ -775,6 +792,7 @@ function httpServerMain(req, res, query) {
 				mirakurun    : mirakurun,
 				config       : config,
 				matchCache   : matchCache,
+				healthDiagnostics: healthDiagnostics,
 				define: {
 					CONFIG_FILE        : CONFIG_FILE,
 					RULES_FILE         : RULES_FILE,

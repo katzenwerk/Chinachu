@@ -257,6 +257,14 @@ describe('WUI access model', function() {
 				path.join(repositoryRoot, 'lib/rule-uid.js'),
 				path.join(libDir, 'rule-uid.js')
 			);
+			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/scheduler-state.js'),
+				path.join(libDir, 'scheduler-state.js')
+			);
+			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/health-diagnostics.js'),
+				path.join(libDir, 'health-diagnostics.js')
+			);
 
 			fs.writeFileSync(
 				path.join(libDir, 'wui-open-host.js'),
@@ -437,6 +445,13 @@ describe('WUI access model', function() {
 			const api = await request(openPort, '/api/status.json');
 			assert.strictEqual(api.statusCode, 200);
 			assert.ok(Object.hasOwn(JSON.parse(api.body.toString()), 'wui'));
+
+			const diagnosticsApi = await request(openPort, '/api/diagnostics.json');
+			assert.strictEqual(diagnosticsApi.statusCode, 200);
+			const diagnostics = JSON.parse(diagnosticsApi.body.toString());
+			assert.strictEqual(diagnostics.schemaVersion, 1);
+			assert.strictEqual(diagnostics.recording.data.count, 0);
+			assert.ok(Object.hasOwn(diagnostics.notMeasured, 'matchingSuccess'));
 
 			const stream = await request(openPort, '/api/recorded/smoke/file.m2ts');
 			assert.strictEqual(stream.statusCode, 200);
