@@ -6,13 +6,24 @@ P = Class.create(P, {
 		this.diagnostics = null;
 		this.diagnosticsLoading = true;
 		this.diagnosticsRequest = null;
-		this.diagnosticsDetailsOpen = false;
+		this.diagnosticsDetailsOpen = false;
+		this.serviceControl = null;
+		this.serviceControlLoading = true;
+		this.serviceControlRequest = null;
+		this.serviceRestartRequest = null;
+		this.servicePollRequest = null;
+		this.servicePollTimer = null;
+		this.servicePollDeadline = 0;
+		this.servicePollTarget = null;
+		this.servicePollOperation = null;
+		this.serviceOperation = { operator: null, wui: null };
 
 		this.onNotify = this.refresh.bindAsEventListener(this);
 		document.observe('chinachu:status', this.onNotify);
 
 		this.draw();
-		this.loadDiagnostics(false);
+		this.loadDiagnostics(false);
+		this.loadServiceControl();
 
 		return this;
 	}
@@ -30,13 +41,52 @@ P = Class.create(P, {
 		if (this.diagnosticsRequest && this.diagnosticsRequest.transport) {
 			this.diagnosticsRequest.transport.abort();
 		}
-		this.diagnosticsRequest = null;
+		this.diagnosticsRequest = null;
+		if (this.serviceControlRequest && this.serviceControlRequest.transport) {
+			this.serviceControlRequest.transport.abort();
+		}
+		if (this.serviceRestartRequest && this.serviceRestartRequest.transport) {
+			this.serviceRestartRequest.transport.abort();
+		}
+		if (this.servicePollRequest && this.servicePollRequest.transport) {
+			this.servicePollRequest.transport.abort();
+		}
+		if (this.servicePollTimer) clearTimeout(this.servicePollTimer);
+		this.serviceControlRequest = null;
+		this.serviceRestartRequest = null;
+		this.servicePollRequest = null;
+		this.servicePollTimer = null;
 
 		return this;
 	}
 	,
+	loadServiceControl: function _loadServiceControl() {
+		if (this.serviceControlRequest || this.servicePollRequest) return this;
+		this.serviceControlLoading = true;
+		this.serviceControlRequest = new Ajax.Request('./api/service-control.json', {
+			method: 'get',
+			onSuccess: function(t) {
+				try {
+					this.serviceControl = t.responseText.evalJSON();
+				} catch (_) {
+					this.serviceControl = null;
+				}
+			}.bind(this),
+			onFailure: function() {
+				this.serviceControl = null;
+			}.bind(this),
+			onComplete: function() {
+				this.serviceControlRequest = null;
+				this.serviceControlLoading = false;
+				this.draw();
+			}.bind(this)
+		});
+		return this;
+	}
+	,
 	refreshAll: function _refreshAll() {
-		this.loadDiagnostics(true);
+		this.loadDiagnostics(true);
+		this.loadServiceControl();
 		return this;
 	}
 	,
@@ -47,7 +97,8 @@ P = Class.create(P, {
 		this.view.content.update();
 
 		this.drawToolbar();
-		this.drawRuntimePanel();
+		this.drawRuntimePanel();
+		this.drawServicePanel();
 		this.drawEnvironmentPanel();
 		this.drawDiagnosticsDetails();
 
@@ -235,6 +286,202 @@ P = Class.create(P, {
 			status: mirakurunDiagnostic.status,
 			showStatus: true
 		});
+	}
+	,
+	drawServicePanel: function _drawServicePanel() {
+		var panel = this.createPanel('サービス操作', 'glyphicon-off');
+		panel.addClassName('health-service-panel');
+		var grid = panel.down('.health-panel-grid');
+		var report = this.serviceControl && this.serviceControl.schemaVersion === 1 ? this.serviceControl : {};
+		var targets = report.targets || {};
+		[
+			{ target: 'operator', label: 'Operator', button: 'Operatorを再起動' },
+			{ target: 'wui', label: 'WUI', button: 'WUIを再起動' }
+		].each(function(action) {
+			var target = targets[action.target] || {
+				manager: 'unknown', operable: false,
+				summary: this.serviceControlLoading ? '管理先を確認しています' : 'PM2の管理先を確認できません'
+			};
+			var operation = this.serviceOperation[action.target];
+			var busy = this.serviceRestartRequest !== null || this.servicePollTarget !== null;
+			var item = new Element('div', { 'class': 'health-service-action' });
+			var copy = new Element('div', { 'class': 'health-service-action-copy' });
+			copy.insert(new Element('div', { 'class': 'health-metric-label' }).update(action.label.escapeHTML()));
+			copy.insert(new Element('div', { 'class': 'health-service-manager' }).update(
+				this.serviceManagerLabel(target.manager, target.operable).escapeHTML()
+			));
+			copy.insert(new Element('div', { 'class': 'health-metric-note' }).update(
+				String(operation && operation.message || target.summary || '管理先を確認できません').escapeHTML()
+			));
+			item.insert(copy);
+			flagrate.createButton({
+				label: action.button,
+				className: 'health-service-button',
+				isDisabled: !target.operable || busy,
+				title: target.summary || '',
+				onSelect: function() { this.confirmServiceRestart(action.target); }.bind(this)
+			}).insertTo(item);
+			grid.insert(item);
+		}.bind(this));
+	}
+	,
+	serviceManagerLabel: function _serviceManagerLabel(manager, operable) {
+		if (manager === 'pm2-user') return operable ? 'PM2管理' : 'PM2管理・操作不可';
+		if (manager === 'pm2-sudo') return 'sudo PM2管理';
+		if (manager === 'unavailable') return 'PM2接続不可';
+		if (manager === 'unsupported') return '未対応の管理方式';
+		return '管理先未確認';
+	}
+	,
+	confirmServiceRestart: function _confirmServiceRestart(target) {
+		if (target !== 'operator' && target !== 'wui') return this;
+		var label = target === 'operator' ? 'Operator' : 'WUI';
+		var impact = target === 'operator'
+			? '録画中・開始準備中はサーバー側で拒否されます。'
+			: '一時的に画面との接続が切れます。復旧を確認するまで再送しません。';
+		flagrate.createModal({
+			title: label + 'の再起動',
+			text: label + 'だけを再起動します。' + impact,
+			buttons: [
+				{
+					label: '再起動', color: '@orange',
+					onSelect: function(e, modal) {
+						modal.buttons.each(function(button) { button.button.disable(); });
+						modal.close();
+						this.requestServiceRestart(target);
+					}.bind(this)
+				},
+				{ label: 'キャンセル', onSelect: function(e, modal) { modal.close(); } }
+			]
+		}).open();
+		return this;
+	}
+	,
+	requestServiceRestart: function _requestServiceRestart(target) {
+		if ((target !== 'operator' && target !== 'wui') || this.serviceRestartRequest || this.servicePollTarget) return this;
+		var current = this.serviceControl && this.serviceControl.targets && this.serviceControl.targets[target];
+		if (!current || current.operable !== true) return this;
+		this.serviceOperation[target] = { state: 'requesting', message: '再起動を受け付けています' };
+		this.draw();
+		this.serviceRestartRequest = new Ajax.Request('./api/service-control/' + target + '.json', {
+			method: 'post',
+			onSuccess: function(t) {
+				var result = null;
+				try { result = t.responseText.evalJSON(); } catch (_) {}
+				if (!result || result.accepted !== true || !result.operation) {
+					return this.finishServiceRestart(target, false, '再起動要求を受け付けられません');
+				}
+				this.serviceOperation[target] = { state: 'accepted', message: '受付済み・再起動中です' };
+				this.startServiceReconnectCheck(target, result.operation);
+			}.bind(this),
+			onFailure: function(t) {
+				if (t && t.status === 0) {
+					this.serviceOperation[target] = { state: 'reconnecting', message: '接続断を確認中です' };
+					return this.startServiceReconnectCheck(target, {
+						id: null,
+						before: this.serviceGeneration(current)
+					});
+				}
+				this.finishServiceRestart(target, false, this.serviceResponseMessage(t));
+			}.bind(this),
+			onComplete: function() {
+				this.serviceRestartRequest = null;
+				this.draw();
+			}.bind(this)
+		});
+		return this;
+	}
+	,
+	serviceResponseMessage: function _serviceResponseMessage(response) {
+		try {
+			var result = response.responseText.evalJSON();
+			if (result && result.message) return String(result.message);
+		} catch (_) {}
+		return '再起動要求を受け付けられません';
+	}
+	,
+	serviceGeneration: function _serviceGeneration(target) {
+		return {
+			pid: target && target.pid || null,
+			restartCount: target && target.restartCount,
+			startedAt: target && target.startedAt
+		};
+	}
+	,
+	serviceGenerationChanged: function _serviceGenerationChanged(before, after) {
+		if (!before || !after) return false;
+		return (before.pid !== null && after.pid !== null && before.pid !== after.pid) ||
+			(typeof before.restartCount === 'number' && typeof after.restartCount === 'number' && after.restartCount > before.restartCount) ||
+			(typeof before.startedAt === 'number' && typeof after.startedAt === 'number' && after.startedAt > before.startedAt);
+	}
+	,
+	startServiceReconnectCheck: function _startServiceReconnectCheck(target, operation) {
+		if (this.servicePollTarget) return this;
+		this.servicePollTarget = target;
+		this.servicePollOperation = operation;
+		this.servicePollDeadline = Date.now() + 30000;
+		this.serviceOperation[target] = { state: 'reconnecting', message: '再接続を確認しています' };
+		this.draw();
+		this.scheduleServiceReconnectCheck(1000);
+		return this;
+	}
+	,
+	scheduleServiceReconnectCheck: function _scheduleServiceReconnectCheck(delay) {
+		if (this.servicePollTimer) clearTimeout(this.servicePollTimer);
+		this.servicePollTimer = setTimeout(function() {
+			this.servicePollTimer = null;
+			this.pollServiceReconnect();
+		}.bind(this), delay);
+	}
+	,
+	pollServiceReconnect: function _pollServiceReconnect() {
+		var target = this.servicePollTarget;
+		var operation = this.servicePollOperation;
+		if (!target || this.servicePollRequest) return this;
+		if (Date.now() > this.servicePollDeadline) {
+			return this.finishServiceRestart(target, false, '復旧を確認できません');
+		}
+		this.servicePollRequest = new Ajax.Request('./api/service-control.json', {
+			method: 'get',
+			onSuccess: function(t) {
+				var report;
+				try { report = t.responseText.evalJSON(); } catch (_) { return; }
+				if (!report || report.schemaVersion !== 1) return;
+				this.serviceControl = report;
+				var current = report.targets && report.targets[target];
+				var serverOperation = report.operations && report.operations[target];
+				if (serverOperation && operation.id && serverOperation.id === operation.id && serverOperation.state === 'failed') {
+					return this.finishServiceRestart(target, false, serverOperation.message || '再起動に失敗しました');
+				}
+				if (current && current.operable === true && current.status === 'online' &&
+					this.serviceGenerationChanged(operation.before, this.serviceGeneration(current))) {
+					return this.finishServiceRestart(target, true, '再起動後の稼働を確認しました');
+				}
+			}.bind(this),
+			onComplete: function() {
+				this.servicePollRequest = null;
+				if (this.servicePollTarget) this.scheduleServiceReconnectCheck(1500);
+			}.bind(this)
+		});
+		return this;
+	}
+	,
+	finishServiceRestart: function _finishServiceRestart(target, succeeded, message) {
+		if (this.servicePollTimer) clearTimeout(this.servicePollTimer);
+		this.servicePollTimer = null;
+		this.servicePollTarget = null;
+		this.servicePollOperation = null;
+		this.servicePollDeadline = 0;
+		this.serviceOperation[target] = {
+			state: succeeded ? 'succeeded' : 'failed',
+			message: message
+		};
+		this.draw();
+		if (succeeded) {
+			this.loadDiagnostics(true);
+			this.loadServiceControl();
+		}
+		return this;
 	}
 	,
 	drawEnvironmentPanel: function _drawEnvironmentPanel() {

@@ -1,0 +1,13 @@
+{
+  "/": {
+    "script" : "service-control",
+    "methods": ["get"],
+    "types"  : ["json"]
+  },
+
+  "/:target": {
+    "script" : "service-control",
+    "methods": ["post"],
+    "types"  : ["json"]
+  }
+}

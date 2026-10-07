@@ -61,6 +61,7 @@ const runtimePrivileges = require('./lib/runtime-privileges');
 const mirakurunConnection = require('./lib/mirakurun-connection');
 const ruleUid = require('./lib/rule-uid');
 const healthDiagnosticsModule = require('./lib/health-diagnostics');
+const serviceControlModule = require('./lib/service-control');
 const mediaDeliveryModule = require('./lib/media-delivery');
 
 // Directory Checking
@@ -132,6 +133,10 @@ const healthDiagnostics = healthDiagnosticsModule.createHealthDiagnostics({
 	validateRules: ruleUid.validateRuleUids,
 	// Direct status request avoids loading the dynamic API document for every unavailable endpoint.
 	fetchMirakurunStatus: signal => mirakurun.request('GET', '/status', { signal: signal }).then(result => result.body)
+});
+const serviceControl = serviceControlModule.createServiceControl({
+	rootDir: __dirname,
+	recordingPath: RECORDING_DATA_FILE
 });
 const mediaDelivery = mediaDeliveryModule.createMediaDelivery({
 	mirakurun: mirakurun,
@@ -801,6 +806,7 @@ function httpServerMain(req, res, query) {
 				config       : config,
 				matchCache   : matchCache,
 				healthDiagnostics: healthDiagnostics,
+				serviceControl: serviceControl,
 				mediaDelivery: mediaDelivery,
 				define: {
 					CONFIG_FILE        : CONFIG_FILE,

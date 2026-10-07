@@ -2048,6 +2048,14 @@ td.match-result {
 .health-status-unknown .health-state-label::before { background: #97a1aa; }
 .health-environment-panel .health-panel-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .health-environment-panel .health-metric { min-height: 76px; }
+.health-service-panel .health-panel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.health-service-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 10px 13px; border-right: 1px solid #edf0f2; }
+.health-service-action:last-child { border-right: 0; }
+.health-service-action-copy { min-width: 0; }
+.health-service-manager { margin-top: 2px; overflow-wrap: anywhere; color: #434c55; font-size: 15px; font-weight: 500; line-height: 1.35; }
+.health-service-action .health-metric-note { margin-top: 2px; }
+.health-service-button { flex: 0 0 auto; min-height: 36px; padding: 6px 12px !important; font-size: 13px !important; }
+.health-service-reason { padding: 8px 13px; border-top: 1px solid #edf0f2; color: #858e97; font-size: 12px; line-height: 1.4; }
 .health-details { overflow: hidden; }
 .health-details-summary { border-bottom: 0; cursor: pointer; list-style: none; user-select: none; }
 .health-details-summary::-webkit-details-marker { display: none; }
@@ -2071,8 +2079,11 @@ td.match-result {
 @media (max-width: 560px) {
 	.health-toolbar { flex-wrap: wrap; gap: 7px; }
 	.health-checked-at { flex: 1 1 auto; }
-	.health-panel-grid, .health-details-grid, .health-environment-panel .health-panel-grid { grid-template-columns: minmax(0, 1fr); }
+	.health-panel-grid, .health-details-grid, .health-environment-panel .health-panel-grid, .health-service-panel .health-panel-grid { grid-template-columns: minmax(0, 1fr); }
 	.health-metric, .health-metric:nth-child(n), .health-details-grid .health-metric:nth-child(n) { min-height: 0; border-right: 0; border-bottom: 1px solid #edf0f2; }
 	.health-metric:last-child, .health-details-grid .health-metric:last-child { border-bottom: 0; }
 	.health-metric-value { font-size: 16px; }
+	.health-service-manager { font-size: 14px; }
+	.health-service-action { border-right: 0; border-bottom: 1px solid #edf0f2; }
+	.health-service-action:last-child { border-bottom: 0; }
 }

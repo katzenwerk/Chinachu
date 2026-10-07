@@ -266,6 +266,10 @@ describe('WUI access model', function() {
 				path.join(libDir, 'health-diagnostics.js')
 			);
 			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/service-control.js'),
+				path.join(libDir, 'service-control.js')
+			);
+			fs.symlinkSync(
 				path.join(repositoryRoot, 'lib/media-delivery.js'),
 				path.join(libDir, 'media-delivery.js')
 			);

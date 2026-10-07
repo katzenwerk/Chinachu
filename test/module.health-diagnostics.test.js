@@ -219,6 +219,10 @@ test('Status page keeps diagnostics on a separate API and renders compact panels
 		diagnosticsLoading: false,
 		diagnosticsRequest: null,
 		diagnosticsDetailsOpen: true,
+		serviceControl: null,
+		serviceRestartRequest: null,
+		servicePollTarget: null,
+		serviceOperation: { operator: null, wui: null },
 		draw() { draws++; }
 	});
 
@@ -248,6 +252,7 @@ test('Status page keeps diagnostics on a separate API and renders compact panels
 	assert.strictEqual(counts.warning, 1);
 	assert.strictEqual(counts.error, 1);
 	assert.match(source, /createPanel\('稼働状態'/);
+	assert.match(source, /createPanel\('サービス操作'/);
 	assert.match(source, /createPanel\('実行環境'/);
 	assert.match(source, /new Element\('details'/);
 	assert.match(source, /details\.open = this\.diagnosticsDetailsOpen === true/);
@@ -255,10 +260,76 @@ test('Status page keeps diagnostics on a separate API and renders compact panels
 	assert.match(source, /label: 'Matching成功情報'[\s\S]*value: '未計測'/);
 	assert.match(source, /label: 'Scheduler trigger source'[\s\S]*value: '未計測'/);
 	assert.doesNotMatch(source, /sakura\.ui\.Alert|Health \/ Diagnostics|Scheduler成功をMatching成功として扱いません/);
+	assert.match(source, /button: 'Operatorを再起動'/);
+	assert.match(source, /button: 'WUIを再起動'/);
+	assert.match(source, /service-control\/' \+ target \+ '\.json'/);
+	assert.match(source, /method: 'post'/);
+	assert.match(source, /title: label \+ 'の再起動'/);
+	assert.match(source, /label: 'キャンセル'/);
+	assert.match(source, /pollServiceReconnect[\s\S]*method: 'get'/);
+	assert.doesNotMatch(source.match(/pollServiceReconnect[\s\S]*?finishServiceRestart:/)[0], /method: 'post'/);
+	assert.strictEqual(page.serviceGenerationChanged(
+		{ pid: 10, restartCount: 2, startedAt: 100 },
+		{ pid: 11, restartCount: 3, startedAt: 200 }
+	), true);
+	assert.strictEqual(page.serviceGenerationChanged(
+		{ pid: 10, restartCount: 2, startedAt: 100 },
+		{ pid: 10, restartCount: 2, startedAt: 100 }
+	), false);
+	const serviceRequests = [];
+	let reconnectCheck;
+	context.Ajax.Request = function(url, options) {
+		serviceRequests.push({ url, options });
+		return { transport: { abort() {} } };
+	};
+	page.serviceControl = { targets: { wui: { operable: true, pid: 10, restartCount: 2, startedAt: 100 } } };
+	page.startServiceReconnectCheck = (target, operation) => {
+		reconnectCheck = { target, operation };
+		page.servicePollTarget = target;
+	};
+	page.requestServiceRestart('wui');
+	assert.strictEqual(serviceRequests.length, 1);
+	assert.strictEqual(serviceRequests[0].url, './api/service-control/wui.json');
+	serviceRequests[0].options.onFailure({ status: 0 });
+	serviceRequests[0].options.onComplete();
+	assert.strictEqual(reconnectCheck.target, 'wui');
+	assert.strictEqual(reconnectCheck.operation.before.pid, 10);
+	assert.strictEqual(serviceRequests.length, 1);
+	page.servicePollTarget = null;
+	page.serviceRestartRequest = null;
+	let modalOptions;
+	let modalClosed = 0;
+	let requestedTarget = null;
+	context.flagrate = {
+		createModal(options) {
+			modalOptions = options;
+			return { open() {} };
+		}
+	};
+	page.requestServiceRestart = target => { requestedTarget = target; };
+	page.confirmServiceRestart('wui');
+	assert.match(modalOptions.text, /一時的に画面との接続が切れます/);
+	modalOptions.buttons[1].onSelect(null, { close() { modalClosed++; } });
+	assert.strictEqual(modalClosed, 1);
+	assert.strictEqual(requestedTarget, null);
+	modalOptions.buttons[0].onSelect(null, {
+		buttons: { each(callback) { callback({ button: { disable() {} } }); } },
+		close() { modalClosed++; }
+	});
+	assert.strictEqual(requestedTarget, 'wui');
+
+	let timeoutResult;
+	page.servicePollTarget = 'wui';
+	page.servicePollRequest = null;
+	page.servicePollDeadline = Date.now() - 1;
+	page.finishServiceRestart = (target, succeeded, message) => { timeoutResult = { target, succeeded, message }; };
+	page.pollServiceReconnect();
+	assert.deepStrictEqual(timeoutResult, { target: 'wui', succeeded: false, message: '復旧を確認できません' });
 	assert.match(css, /\.health-status-page/);
 	assert.match(css, /\.health-panel-grid[^\n]*grid-template-columns: repeat\(4/);
 	assert.match(css, /\.health-metric-label[^\n]*font-size: 13px/);
 	assert.match(css, /\.health-metric-value[^\n]*font-size: 18px/);
 	assert.match(css, /@media \(max-width: 560px\)/);
 	assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.health-metric-value[^\n]*font-size: 16px/);
+	assert.match(css, /\.health-service-manager/);
 });
