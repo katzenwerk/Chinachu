@@ -1,0 +1,105 @@
+Chinachu MPEG-2 TS browser playback runtime
+
+mpeg2toh264 upstream:
+https://github.com/tsukumijima/mpeg2toh264
+
+mpeg2toh264 source checkout:
+69f2a47aa5bbeb8ffce57ecf5408eaa85a59d7d1
+
+Only packages/player is vendored. packages/yadif is excluded (LGPL-2.1-or-later).
+
+Packages:
+@mpeg2toh264/player: 0.0.1
+aribb24.js: 2.0.25 (MIT)
+
+The browser runtime is vendored from the locally built mpeg2toh264 player
+distribution. No Rust, Cargo, Vite development server, external Range server,
+CDN or external mpeg2toh264 checkout is required at Chinachu runtime.
+
+Unmodified runtime assets (SHA-256):
+
+index.js:
+caccf468a71e8b90de594653478c9cc2dcdad5d35e3c1543535425af31055009
+Source: packages/player/dist/index.js
+
+assets/worker-CdUcgpWr.js:
+5dc589fc9dff0e5ff5132a17004f40c578822ed4251778e5d539335c4672ccb8
+Source: packages/player/dist/assets/worker-CdUcgpWr.js
+
+aribb24.js:
+19afe5156458eaa518c314ab2892eb1d5d3904aa1ebede79334e8871b4f30bbb
+Source: node_modules/aribb24.js/dist/aribb24.mjs
+
+The main Worker embeds WASM and the picture-worker program. No separate
+.wasm or picture-worker JavaScript request is needed for this build.
+Source maps and TypeScript declarations are development artifacts and are
+not vendored.
+
+aribb24.mjs is served as aribb24.js so the existing Chinachu WUI supplies
+the expected JavaScript MIME type.
+
+LICENSE covers the mpeg2toh264 player runtime.
+LICENSE.aribb24 covers the aribb24.js caption runtime.
+
+The caption adapter follows the upstream demo's Controller,
+MPEGTSFeeder and SVGDOMRenderer arrangement.
+
+Player defaults used by the Chinachu adapters include:
+- oversample: 2
+- recoveryInterval: 24
+- splitFieldSamples: true
+- automatic MSE / ManagedMediaSource selection
+- passthrough: disabled
+- deinterlace: disabled
+
+The upstream demo diagnostics, tuning controls and optional yadif filter
+are not bundled.
+
+Recorded playback integration:
+- adapter: ../recorded-player.js
+- input: /api/recorded/:id/file.m2ts
+- recorded file API supports HTTP byte ranges
+- upstream Range seeking is used by the native seekbar
+- ArrowLeft / ArrowRight provide Chinachu 15-second seeking
+- playback starts only after the viewer explicitly opens the player
+
+Live playback integration:
+- adapter: ../live-player.js
+- input: /api/channel/:chid/watch.m2ts
+- the existing Chinachu / Mirakurun live MPEG-2 TS stream is used directly
+- no Range or timeshift behavior is required for live playback
+- the shared live overlay is used from the schedule and dashboard TOP pages
+- live programme title, detail, time and progress follow the latest schedule
+
+Caption and fullscreen behavior:
+- ARIB Caption and Superimpose are rendered with aribb24.js SVG overlays
+- the caption toggle controls Caption while Superimpose is retained
+- Chinachu fullscreen targets the containing stage so SVG captions remain visible
+- where element fullscreen is unavailable, the player expands within the browser viewport
+- browser-native video fullscreen may not contain the external SVG caption overlay
+
+Resource cleanup:
+- recorded playback releases the player and caption resources on teardown
+- live playback releases the player, Worker, stream request, caption resources,
+  timers and event listeners when closed or when the page is left
+
+Validation notes (2026-10-03):
+- Runtime assets were verified byte-for-byte against the recorded upstream checkout.
+- HTTP Range handling was verified for bounded, open-ended, suffix, full and 416 responses.
+- Synthetic MPEG-2/AAC 188-byte TS playback and seeking were verified.
+- Recorded playback, ARIB captions and fullscreen were manually exercised.
+- Live broadcast playback and ARIB captions were manually exercised.
+- Schedule and dashboard TOP live entry points use the shared live overlay.
+- Live programme metadata rollover was verified across a programme boundary.
+- PC Chrome and iPhone Safari playback were manually exercised.
+- Vite :5173 and the Python :8000 Range server were stopped and Chinachu
+  recorded/live playback continued to operate without them.
+- Initial synthetic 192-byte M2TS did not emit playable fragments with the
+  tested upstream runtime; current accepted input testing uses 188-byte TS.
+- Targeted player/API tests, npm run check, JavaScript syntax checks and
+  git diff --check have passed during integration work.
+- Full npm test results varied in sandboxed runs because loopback listen could
+  fail with EPERM and service logging tests could time out; targeted playback
+  tests remained successful.
+
+See UPSTREAM.md for provenance and update procedures.

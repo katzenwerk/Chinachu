@@ -10,6 +10,8 @@ P = Class.create(P, {
 		this.matchItem = null;
 		this.matchInfoTarget = null;
 		this.previewTarget = null;
+		this.recordedPlayerSlot = null;
+		this.programViewDisposed = false;
 		this.fallbackFromMatch = false;
 		this.programViewShowMatchDebug = false;
 		this.recordingPreviewImage = null;
@@ -55,6 +57,9 @@ P = Class.create(P, {
 
 	deinit: function() {
 
+		this.programViewDisposed = true;
+		this.destroyRecordedPlayer();
+
 		// ホットキー
 		sakura.shortcut.remove("Left");
 		sakura.shortcut.remove("Right");
@@ -92,6 +97,16 @@ P = Class.create(P, {
 			}
 
 			return this;
+		}
+
+		// Unrelated scheduler/recording notifications must not interrupt TS playback.
+		// Still refresh if this recorded file was removed or became unavailable.
+		if (this.program && this.program._isRecorded && this.recordedPlayerSlot &&
+				(this.recordedPlayerSlot.player || this.recordedPlayerSlot.pending)) {
+			program = chinachu.util.getProgramById(this.program.id);
+			var state = this.getRecordedFileState(program, null);
+			if (program && program._isRecorded && program.recorded === this.program.recorded &&
+					state !== 'deleted' && state !== 'missing') return this;
 		}
 
 		// 録画中イベントでは画面全体を再描画せず、サムネイルだけを差し替える。
@@ -846,6 +861,11 @@ P = Class.create(P, {
 
 		var state = forcedState || this.getRecordedFileState(this.program, this.matchItem);
 		var alert = this.getRecordedFileStateAlert(state, this.program);
+		if ((state === 'deleted' || state === 'missing') && this.recordedPlayerSlot) {
+			var frame = this.recordedPlayerSlot.frame;
+			this.destroyRecordedPlayer();
+			if (frame) frame.remove();
+		}
 
 		if (!this.recordedFileStateTarget) {
 			return this;
@@ -1259,26 +1279,82 @@ P = Class.create(P, {
 	getPreviewPositions: function _getPreviewPositions(program) {
 
 		var seconds = Number(program && program.seconds || 0);
-		var last;
-		var positions;
+		return [isFinite(seconds) && seconds > 0 ? Math.floor(seconds / 2) : 0];
+	},
 
-		if (!seconds || seconds < 1) {
-			return [0];
+	destroyRecordedPlayer: function() {
+
+		var slot = this.recordedPlayerSlot;
+		this.recordedPlayerSlot = null;
+		if (slot && slot.player) slot.player.destroy();
+		return this;
+	},
+
+	renderRecordedPreview: function(target, program, recordedApiId) {
+
+		var state = this.getRecordedFileState(program, this.matchItem);
+		if (this.programViewDisposed || !program._isRecorded || program._isRecording ||
+				state === 'deleted' || state === 'missing') return;
+
+		this.destroyRecordedPlayer();
+		var frame = document.createElement('div');
+		frame.className = 'program-ts-player';
+		var image = document.createElement('img');
+		image.className = 'img-responsive';
+		image.alt = '番組中央のサムネイル';
+		image.src = './api/recorded/' + encodeURIComponent(recordedApiId) +
+			'/preview.jpg?width=480&height=270&pos=' + this.getPreviewPositions(program)[0];
+		var button = document.createElement('button');
+		button.type = 'button';
+		button.className = 'program-ts-play';
+		button.textContent = '';
+		button.setAttribute('aria-label', '録画TSを再生');
+		var poster = document.createElement('div');
+		poster.className = 'program-ts-poster';
+		poster.appendChild(image);
+		poster.appendChild(button);
+		var message = document.createElement('div');
+		message.className = 'program-ts-message';
+		message.setAttribute('role', 'status');
+		var slot = { frame: frame, player: null, pending: false, attempt: 0 };
+		this.recordedPlayerSlot = slot;
+		var current = function() {
+			return !this.programViewDisposed && this.recordedPlayerSlot === slot;
+		}.bind(this);
+		var restore = function(text) {
+			if (!current()) return;
+			slot.attempt++;
+			if (slot.player) slot.player.destroy();
+			slot.player = null;
+			slot.pending = false;
+			button.disabled = false;
+			message.textContent = text || '';
+			frame.replaceChildren(poster, message);
+		};
+		restore();
+		target.appendChild(frame);
+		if (!global.chinachu.status.feature.filer || (program.tuner && program.tuner.isScrambling)) {
+			button.remove();
+			return;
 		}
-
-		last = Math.max(0, seconds - 1);
-		positions = [
-			30,
-			Math.floor(seconds / 2),
-			Math.max(30, seconds - 30)
-		].map(function(pos) {
-			pos = Number(pos) || 0;
-			pos = Math.max(0, pos);
-			pos = Math.min(last, pos);
-			return Math.floor(pos);
-		}).uniq();
-
-		return positions;
+		button.addEventListener('click', function() {
+			if (!current() || slot.pending || slot.player) return;
+			slot.pending = true;
+			button.disabled = true;
+			message.textContent = 'プレイヤーを読み込み中…';
+			var attempt = ++slot.attempt;
+			import(new URL('./lib/recorded-player.js', document.baseURI).href).then(function(module) {
+				if (!current() || attempt !== slot.attempt) return;
+				frame.replaceChildren();
+				slot.player = module.createRecordedPlayer(frame, {
+					onEnded: function() { restore('再生が終了しました'); },
+					onError: function(error) { restore('再生できません: ' + error.message); }
+				});
+				return slot.player.load(new URL('./api/recorded/' + encodeURIComponent(recordedApiId) + '/file.m2ts', document.baseURI).href);
+			}).catch(function(error) {
+				if (current() && attempt === slot.attempt) restore('再生できません: ' + error.message);
+			});
+		});
 	},
 
 
@@ -1370,6 +1446,7 @@ P = Class.create(P, {
 		console.log(this.program);
 
 		var program = this.program;
+		this.destroyRecordedPlayer();
 
 		this.clearRecordingPreviewTimer();
 		this.recordingPreviewImage = null;
@@ -1442,10 +1519,20 @@ P = Class.create(P, {
 
 		// create layout grid
 		var container = flagrate.createElement("div", { "class": "container-fluid" }).insertTo(this.view.content);
+		var recordedLayout = !!program._isRecorded;
+		if (recordedLayout) {
+			var recordedPreviewRow = flagrate.createElement("div", { "class": "row program-recorded-player-row" }).insertTo(container);
+			var recordedPreviewColumn = flagrate.createElement("div", { "class": "col-md-12" }).insertTo(recordedPreviewRow);
+			this.previewTarget = flagrate.createElement("div", { "class": "program-preview program-recorded-preview" }).insertTo(recordedPreviewColumn);
+		} else {
+			this.previewTarget = null;
+		}
 		var r1 = flagrate.createElement("div", { "class": "row" }).insertTo(container);
 		var r1L = flagrate.createElement("div", { "class": "col-md-8" }).insertTo(r1);
 		var r1R = flagrate.createElement("div", { "class": "col-md-4" }).insertTo(r1);
-		this.previewTarget = flagrate.createElement("div", { "class": "program-preview" }).insertTo(r1R);
+		if (!recordedLayout) {
+			this.previewTarget = flagrate.createElement("div", { "class": "program-preview" }).insertTo(r1R);
+		}
 		this.matchInfoTarget = flagrate.createElement("div", { "class": "program-match-info" }).insertTo(r1R);
 		var r2 = flagrate.createElement("div", { "class": "row" }).insertTo(container);
 		var r2F = flagrate.createElement("div", { "class": "col-md-12" }).insertTo(r2);
@@ -1511,7 +1598,7 @@ P = Class.create(P, {
 					method: 'get',
 					onSuccess: function(t) {
 
-						if (this.app.pm.p.id !== this.id) return;
+						if (this.programViewDisposed || this.app.pm.p.id !== this.id) return;
 
 						var fileJson = t.responseJSON || {};
 
@@ -1526,16 +1613,7 @@ P = Class.create(P, {
 						this.renderOperatorTimingWarning(r1L, fileJson, program, this.matchItem);
 						this.renderMirakurunDropAlert(r1L, fileJson, program, this.matchItem);
 
-						// 録画済みサムネイル
-						var imgurl = "./api/recorded/" + encodeURIComponent(recordedApiId) + "/preview.jpg?width=480&height=270";
-						var previewTarget = this.previewTarget || r1R;
-
-						this.getPreviewPositions(program).each(function(pos) {
-							flagrate.createElement("img", {
-								"class": "img-thumbnail img-responsive",
-								src: imgurl + "&pos=" + pos
-							}).insertTo(previewTarget);
-						});
+						this.renderRecordedPreview(this.previewTarget || r1R, program, recordedApiId);
 					}.bind(this),
 					onFailure: function(t) {
 

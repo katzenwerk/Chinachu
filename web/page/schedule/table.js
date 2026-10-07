@@ -6,6 +6,7 @@
 		init: function () {
 
 			this.view.content.className = 'loading';
+			this.livePlayerDisposed = false;
 
 			this.time = new Date().getTime();
 
@@ -20,6 +21,13 @@
 		},
 
 		deinit: function () {
+
+			this.livePlayerDisposed = true;
+			this.livePlayerRequest = null;
+			if (this.liveOverlay) {
+				this.liveOverlay.close();
+				this.liveOverlay = null;
+			}
 
 			document.stopObserving('chinachu:schedule', this.onNotify);
 			document.stopObserving('chinachu:reserves', this.onNotify);
@@ -351,12 +359,38 @@
 				}).insert(channel.name).render(this.view.head);
 
 				// ライブ視聴用コンテキストメニュー
+				var schedulePage = this;
 				var contextMenuItems = [
 					{
 						label   : 'ライブ視聴',
 						icon    : './icons/film.png',
 						onSelect: function () {
-							window.location.hash = '!/channel/watch/id=' + channel.id;
+							var page = schedulePage;
+							if (page.liveOverlay) {
+								page.liveOverlay.close();
+								page.liveOverlay = null;
+							}
+							var request = {};
+							page.livePlayerRequest = request;
+							import(new URL('./lib/live-player.js', document.baseURI).href).then(function (module) {
+								if (page.livePlayerDisposed || page.livePlayerRequest !== request) return;
+								var overlay = null;
+								overlay = module.openChannelLiveOverlay(channel, {
+									getSchedule: function () {
+										return global.chinachu && global.chinachu.schedule;
+									},
+									onClose: function () {
+										if (page.liveOverlay === overlay) page.liveOverlay = null;
+									}
+								});
+								page.liveOverlay = overlay;
+							}).catch(function (error) {
+								if (page.livePlayerDisposed || page.livePlayerRequest !== request) return;
+								new flagrate.Modal({
+									title: 'ライブプレイヤーを読み込めません',
+									text: error.message || String(error)
+								}).show();
+							});
 						}
 					}
 				];

@@ -3,6 +3,7 @@ P = Class.create(P, {
 	init: function () {
 
 		this.view.content.className = 'loading';
+		this.livePlayerDisposed = false;
 
 		this.draw();
 
@@ -24,6 +25,13 @@ P = Class.create(P, {
 	},
 
 	deinit: function () {
+
+		this.livePlayerDisposed = true;
+		this.livePlayerRequest = null;
+		if (this.liveOverlay) {
+			this.liveOverlay.close();
+			this.liveOverlay = null;
+		}
 
 		document.stopObserving('chinachu:schedule', this.onSchedule);
 		document.stopObserving('chinachu:reserves', this.onReserves);
@@ -92,6 +100,7 @@ P = Class.create(P, {
 		}
 
 		var r2 = this.r2;
+		var page = this;
 		var hideChannels = this.hideChannels;
 		var now = Date.now();
 
@@ -183,7 +192,31 @@ P = Class.create(P, {
 			}).insertText("視聴").insertTo(ch);
 
 			liveButton.observe("click", function () {
-				location.hash = "!/channel/watch/id=" + channel.id;
+				if (page.liveOverlay) {
+					page.liveOverlay.close();
+					page.liveOverlay = null;
+				}
+				var request = {};
+				page.livePlayerRequest = request;
+				import(new URL('./lib/live-player.js', document.baseURI).href).then(function (module) {
+					if (page.livePlayerDisposed || page.livePlayerRequest !== request) return;
+					var overlay = null;
+					overlay = module.openChannelLiveOverlay(channel, {
+						getSchedule: function () {
+							return global.chinachu && global.chinachu.schedule;
+						},
+						onClose: function () {
+							if (page.liveOverlay === overlay) page.liveOverlay = null;
+						}
+					});
+					page.liveOverlay = overlay;
+				}).catch(function (error) {
+					if (page.livePlayerDisposed || page.livePlayerRequest !== request) return;
+					new flagrate.Modal({
+						title: 'ライブプレイヤーを読み込めません',
+						text: error.message || String(error)
+					}).show();
+				});
 			});
 
 			flagrate.createProgress({

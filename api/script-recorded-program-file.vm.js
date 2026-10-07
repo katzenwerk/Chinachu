@@ -211,11 +211,39 @@ function updateMatchRecordingDeleted(id, recordedPath) {
 			var fstat = fs.statSync(program.recorded);
 			
 			if (request.type === 'm2ts') {
-				response.setHeader('content-length', fstat.size);
+				var start = 0;
+				var end = fstat.size - 1;
+				var status = 200;
+				var range = request.headers.range;
+				// Ignore malformed/multiple ranges and If-Range without a validator.
+				// Unlike watch.m2ts, these offsets refer to the unmodified file bytes.
+				var match = typeof range === 'string' && /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
+				response.setHeader('accept-ranges', 'bytes');
+				if (match && (match[1] || match[2]) && !request.headers['if-range']) {
+					if (match[1]) {
+						start = Number(match[1]);
+						end = match[2] ? Math.min(Number(match[2]), end) : end;
+					} else {
+						start = Math.max(0, fstat.size - Number(match[2]));
+					}
+					if (start >= fstat.size || start > end) {
+						response.setHeader('content-range', 'bytes */' + fstat.size);
+						response.setHeader('content-length', 0);
+						response.head(416);
+						return response.end();
+					}
+					status = 206;
+					response.setHeader('content-range', 'bytes ' + start + '-' + end + '/' + fstat.size);
+				}
+				response.setHeader('content-length', end - start + 1);
 				response.setHeader('content-disposition', 'attachment; filename="' + program.id + '.m2ts"');
-				response.head(200);
+				response.head(status);
+				if (fstat.size === 0) return response.end();
 
-				fs.createReadStream(program.recorded).pipe(response);
+				var stream = fs.createReadStream(program.recorded, { start: start, end: end });
+				response.once('close', function() { stream.destroy(); });
+				stream.once('error', function() { response.destroy(); });
+				stream.pipe(response);
 			}
 			
 			if (request.type === 'json') {
