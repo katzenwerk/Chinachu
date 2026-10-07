@@ -17,6 +17,7 @@ P = Class.create(P, {
 		this.recordingPreviewImage = null;
 		this.recordedFileStateTarget = null;
 		this.recordedFileStateAlert = null;
+		this.ruleButton = null;
 		// match履歴詳細（key指定、または通常データに存在せずmatch fallbackになる画面）は、
 		// WUI接続直後の schedule/reserves/recording/recorded 通知で再描画しない。
 		// 履歴自体は基本的に静的で、初期通知による連続refreshは表示のちらつきだけを生むため。
@@ -24,10 +25,12 @@ P = Class.create(P, {
 		this.awaitingRecordedRefresh = false;
 
 		this.onNotify = this.handleNotify.bindAsEventListener(this);
+		this.onRulesNotify = this.handleRulesNotify.bindAsEventListener(this);
 		document.observe('chinachu:schedule', this.onNotify);
 		document.observe('chinachu:reserves', this.onNotify);
 		document.observe('chinachu:recording', this.onNotify);
 		document.observe('chinachu:recorded', this.onNotify);
+		document.observe('chinachu:rules', this.onRulesNotify);
 
 		this.loadWuiConfig();
 
@@ -68,6 +71,7 @@ P = Class.create(P, {
 		document.stopObserving('chinachu:reserves', this.onNotify);
 		document.stopObserving('chinachu:recording', this.onNotify);
 		document.stopObserving('chinachu:recorded', this.onNotify);
+		document.stopObserving('chinachu:rules', this.onRulesNotify);
 
 		this.clearRecordingPreviewTimer();
 		this.recordingPreviewImage = null;
@@ -116,12 +120,20 @@ P = Class.create(P, {
 
 			if (program && program._isRecording) {
 				this.program = program;
+				this.updateRuleToolbarButton();
 				this.updateRecordingPreview();
 				return this;
 			}
 		}
 
 		return this.refresh();
+	},
+
+	handleRulesNotify: function _handleRulesNotify() {
+
+		this.updateRuleToolbarButton();
+
+		return this;
 	},
 
 
@@ -343,6 +355,7 @@ P = Class.create(P, {
 				this.matchItems = item ? [item] : [];
 				this.matchItem = item;
 				this.decorateProgramWithMatch(this.matchItem);
+				this.updateRuleToolbarButton();
 				this.renderRecordedFileStateAlert();
 				this.renderMatchInfo();
 			}.bind(this),
@@ -351,6 +364,7 @@ P = Class.create(P, {
 
 				this.matchItems = [];
 				this.matchItem = null;
+				this.updateRuleToolbarButton();
 				this.renderMatchInfo();
 			}.bind(this)
 		});
@@ -630,21 +644,119 @@ P = Class.create(P, {
 		return this;
 	},
 
+	getReservationRuleUid: function _getReservationRuleUid() {
+
+		var item = this.matchItem || {};
+		var reservationMeta = item.reservationMeta || {};
+		var matchProgram = item.program || {};
+		var program = this.program || {};
+		var candidates = [
+			reservationMeta.ruleUid,
+			program.ruleUid,
+			matchProgram.ruleUid
+		];
+		var i;
+
+		for (i = 0; i < candidates.length; i++) {
+			if (typeof candidates[i] === 'string' && candidates[i].trim() !== '') {
+				return candidates[i];
+			}
+		}
+
+		return null;
+	},
+
+	findReservationRuleIndex: function _findReservationRuleIndex(ruleUid) {
+
+		var rules = global.chinachu.rules;
+		var i;
+
+		if (!Object.isArray(rules)) {
+			return null;
+		}
+
+		for (i = 0; i < rules.length; i++) {
+			if (!rules[i] || typeof rules[i].ruleUid !== 'string') {
+				continue;
+			}
+
+			if (rules[i].ruleUid === ruleUid) {
+				return i;
+			}
+		}
+
+		return -1;
+	},
+
+	updateRuleToolbarButton: function _updateRuleToolbarButton() {
+
+		var ruleUid;
+		var ruleIndex;
+		var label;
+
+		if (!this.ruleButton || !this.ruleButton.entity) {
+			return this;
+		}
+
+		ruleUid = this.getReservationRuleUid();
+
+		if (!ruleUid) {
+			label = 'ルールを作成';
+			this.ruleButton.onClick = function() {
+				if (this.program && this.program.id) {
+					new chinachu.ui.CreateRuleByProgram(this.program.id);
+				}
+			}.bind(this);
+			this.ruleButton.enable();
+		} else {
+			ruleIndex = this.findReservationRuleIndex(ruleUid);
+
+			if (ruleIndex === null) {
+				label = '予約ルール';
+				this.ruleButton.onClick = Prototype.emptyFunction;
+				this.ruleButton.disable();
+			} else if (ruleIndex >= 0) {
+				label = '予約ルール';
+				this.ruleButton.onClick = function() {
+					var currentIndex = this.findReservationRuleIndex(ruleUid);
+
+					if (currentIndex === null || currentIndex < 0) {
+						this.updateRuleToolbarButton();
+						return;
+					}
+
+					new chinachu.ui.EditRule(currentIndex);
+				}.bind(this);
+				this.ruleButton.enable();
+			} else {
+				label = '予約ルール（削除済み）';
+				this.ruleButton.onClick = Prototype.emptyFunction;
+				this.ruleButton.disable();
+			}
+		}
+
+		this.ruleButton.label = label;
+		this.ruleButton.entity.update(label);
+
+		return this;
+	},
+
 	initToolbar: function _initToolbar() {
 
 		var program = this.program;
 		var recordedFileState = this.getRecordedFileState(program, this.matchItem);
 
-		this.view.toolbar.add({
-			key: null,
-			ui : new sakura.ui.Button({
-				label  : 'ルールを作成',
-				icon   : './icons/regular-expression.png',
-				onClick: function() {
-					new chinachu.ui.CreateRuleByProgram(program.id);
-				}
-			})
+		this.ruleButton = new sakura.ui.Button({
+			label  : 'ルールを作成',
+			icon   : './icons/regular-expression.png',
+			onClick: Prototype.emptyFunction
 		});
+
+		this.view.toolbar.add({
+			key: 'reservation-rule',
+			ui : this.ruleButton
+		});
+		this.updateRuleToolbarButton();
 
 		if (program._isReserves) {
 			if (program.isManualReserved) {
