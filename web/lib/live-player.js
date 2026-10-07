@@ -1,6 +1,24 @@
 import { Mpeg2TsPlayer } from './mpeg2toh264/index.js';
 import { Controller, MPEGTSFeeder, SVGDOMRenderer } from './mpeg2toh264/aribb24.js';
 
+function isDesktopNonSafariEnvironment(nav) {
+	if (!nav) return false;
+	const userAgent = String(nav.userAgent || '');
+	const vendor = String(nav.vendor || '');
+	const userAgentData = nav.userAgentData || null;
+	const platform = String(userAgentData && userAgentData.platform || nav.platform || '');
+	const mobileOrTv = userAgentData && userAgentData.mobile === true ||
+		/(?:Android|Mobile|Silk|Kindle|KF[A-Z0-9]+|AFT[A-Z0-9]*|Smart-?TV|SMART-TV|HbbTV|Tizen|Web0S|WebOS|NetCast)/i.test(userAgent);
+	if (mobileOrTv) return false;
+
+	const safari = /Safari\//.test(userAgent) && /Apple Computer/i.test(vendor) &&
+		!/(?:Chrome|Chromium|CriOS|Edg|EdgiOS|OPR|FxiOS|Firefox)/i.test(userAgent);
+	if (safari) return false;
+
+	return /(?:Windows|Win32|Win64|MacIntel|macOS|Linux|Chrome OS)/i.test(platform) ||
+		/(?:Windows NT|Macintosh|X11|CrOS)/i.test(userAgent);
+}
+
 /** Open the shared live overlay for a schedule channel and resolve its programme from the latest schedule. */
 export function openChannelLiveOverlay(channel, { onClose, getSchedule } = {}) {
 	return openLiveOverlay(channel.id, {
@@ -100,6 +118,13 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	const fullscreenButton = document.createElement('button');
 	fullscreenButton.type = 'button';
 	fullscreenButton.textContent = '全画面';
+	const compatButton = document.createElement('button');
+	compatButton.type = 'button';
+	compatButton.textContent = 'FFmpeg互換再生';
+	const desktopNonSafari = isDesktopNonSafariEnvironment(
+		typeof navigator === 'undefined' ? null : navigator
+	);
+	compatButton.hidden = desktopNonSafari;
 	const closeButton = document.createElement('button');
 	closeButton.type = 'button';
 	closeButton.textContent = '閉じる';
@@ -115,7 +140,7 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	status.setAttribute('role', 'status');
 	const buttonGroup = document.createElement('div');
 	buttonGroup.className = 'program-live-button-group';
-	buttonGroup.append(captionsButton, fullscreenButton, closeButton);
+	buttonGroup.append(captionsButton, fullscreenButton, compatButton, closeButton);
 	controls.append(buttonGroup);
 	controls.append(timeColumn);
 	controls.append(status);
@@ -129,6 +154,8 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	});
 	let destroyed = false;
 	let playerDestroyed = false;
+	let playbackMode = 'mpeg2toh264';
+	let hlsCloseUrl = null;
 	let captionsEnabled = true;
 	const entries = [];
 	const feed = event => {
@@ -137,6 +164,30 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	};
 	const failed = event => {
 		if (!destroyed) status.textContent = 'ライブ映像を読み込めませんでした: ' + event.detail.error.message;
+	};
+	const nativeMediaFailed = () => {
+		if (!destroyed && playbackMode === 'ffmpeg') {
+			closeHlsSession();
+			status.textContent = 'FFmpeg互換映像を再生できませんでした';
+		}
+	};
+	const fullscreenChanged = () => {
+		fullscreenButton.textContent = document.fullscreenElement === stage ||
+			stage.classList.contains('program-live-expanded') ? '全画面を終了' : '全画面';
+	};
+	const keydown = event => {
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			event.stopPropagation();
+			close();
+			return;
+		}
+		if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'Space'].includes(event.key)) {
+			// Let native video controls handle the key first, but keep it from
+			// reaching schedule/table.js on the window.
+			if (event.currentTarget === document || event.target === overlay) event.preventDefault();
+			event.stopPropagation();
+		}
 	};
 	const setCaptionEnabled = enabled => {
 		captionsEnabled = enabled;
@@ -153,9 +204,18 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 		captionsButton.textContent = enabled ? '字幕を隠す' : '字幕を表示';
 		captionsButton.setAttribute('aria-pressed', String(enabled));
 	};
+	const closeHlsSession = () => {
+		if (!hlsCloseUrl) return;
+		const target = hlsCloseUrl;
+		hlsCloseUrl = null;
+		if (typeof window.fetch === 'function') {
+			window.fetch(target, { method: 'DELETE', keepalive: true }).catch(() => {});
+		}
+	};
 	function close() {
 		if (destroyed) return;
 		destroyed = true;
+		closeHlsSession();
 		if (progressTimer !== null) {
 			window.clearInterval(progressTimer);
 			progressTimer = null;
@@ -163,12 +223,14 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 		player.removeEventListener('private_stream_1', feed);
 		player.removeEventListener('private_stream_2', feed);
 		player.removeEventListener('error', failed);
+		video.removeEventListener('error', nativeMediaFailed);
 		document.removeEventListener('fullscreenchange', fullscreenChanged);
 		document.removeEventListener('keydown', keydown);
 		overlay.removeEventListener('keydown', keydown);
 		window.removeEventListener('pagehide', close);
 		captionsButton.removeEventListener('click', toggleCaptions);
 		fullscreenButton.removeEventListener('click', toggleFullscreen);
+		compatButton.removeEventListener('click', startCompatPlayback);
 		closeButton.removeEventListener('click', close);
 		overlayCloseButton.removeEventListener('click', close);
 		for (const { controller, feeder, renderer } of entries) {
@@ -187,6 +249,56 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 		stage.classList.remove('program-live-expanded');
 		overlay.remove();
 		if (onClose) onClose();
+	}
+	async function startCompatPlayback() {
+		if (destroyed || playbackMode === 'ffmpeg' || desktopNonSafari) return;
+		playbackMode = 'ffmpeg';
+		player.removeEventListener('private_stream_1', feed);
+		player.removeEventListener('private_stream_2', feed);
+		player.removeEventListener('error', failed);
+		video.addEventListener('error', nativeMediaFailed);
+		for (const { controller, feeder, renderer } of entries.splice(0)) {
+			controller.hide();
+			controller.detachMedia();
+			controller.detachFeeder();
+			controller.detachRenderer(renderer);
+			feeder.destroy();
+			renderer.destroy();
+		}
+		playerDestroyed = true;
+		player.destroy();
+		compatButton.disabled = true;
+		compatButton.textContent = 'FFmpeg互換再生中';
+		const supportsNativeHls = typeof video.canPlayType === 'function' &&
+			video.canPlayType('application/vnd.apple.mpegurl') !== '';
+		status.textContent = supportsNativeHls ?
+			'FFmpeg互換HLSを準備中…（ARIB字幕・文字スーパーなし）' :
+			'FFmpeg互換再生中（ARIB字幕・文字スーパーなし）';
+		if (supportsNativeHls && typeof window.fetch === 'function') {
+			try {
+				const createUrl = new URL('./api/channel/' + encodeURIComponent(channelId) + '/watch-hls.json?profile=compat', document.baseURI);
+				const result = await window.fetch(createUrl.href, { credentials: 'same-origin' });
+				if (!result.ok) throw new Error('HTTP ' + result.status);
+				const session = await result.json();
+				const playlistUrl = new URL(session.playlist, createUrl);
+				const closeUrl = new URL(session.close, createUrl);
+				if (destroyed || playbackMode !== 'ffmpeg') {
+					window.fetch(closeUrl.href, { method: 'DELETE', keepalive: true }).catch(() => {});
+					return;
+				}
+				hlsCloseUrl = closeUrl.href;
+				video.src = playlistUrl.href;
+				status.textContent = 'FFmpeg互換HLS再生中（ARIB字幕・文字スーパーなし）';
+			} catch (error) {
+				if (!destroyed) status.textContent = 'FFmpeg互換HLSを開始できませんでした: ' + error.message;
+				return;
+			}
+		} else {
+			video.src = new URL('./api/channel/' + encodeURIComponent(channelId) + '/watch.mp4?profile=compat', document.baseURI).href;
+		}
+		video.play().catch(() => {
+			if (!destroyed) status.textContent = 'FFmpeg互換映像の再生ボタンを押してください';
+		});
 	}
 	function toggleCaptions() {
 		setCaptionEnabled(!captionsEnabled);
@@ -213,6 +325,7 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	document.addEventListener('fullscreenchange', fullscreenChanged);
 	captionsButton.addEventListener('click', toggleCaptions);
 	fullscreenButton.addEventListener('click', toggleFullscreen);
+	compatButton.addEventListener('click', startCompatPlayback);
 	closeButton.addEventListener('click', close);
 	overlayCloseButton.addEventListener('click', close);
 	const hasValidTiming = program => Number.isFinite(program && program.start) &&
@@ -297,13 +410,13 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 		throw error;
 	}
 	Promise.resolve(loading).then(() => {
-		if (destroyed) return;
+		if (destroyed || playbackMode !== 'mpeg2toh264') return;
 		status.textContent = '';
 		return video.play().catch(() => {
-			if (!destroyed) status.textContent = '再生ボタンを押してください';
+			if (!destroyed && playbackMode === 'mpeg2toh264') status.textContent = '再生ボタンを押してください';
 		});
 	}).catch(error => {
-		if (!destroyed) status.textContent = 'ライブ映像を読み込めませんでした: ' + error.message;
+		if (!destroyed && playbackMode === 'mpeg2toh264') status.textContent = 'ライブ映像を読み込めませんでした: ' + error.message;
 	});
 
 	return { close, player, overlay, stage, video, setCaptionEnabled };

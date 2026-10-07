@@ -113,6 +113,61 @@ function findByClass(node, className) {
 	return null;
 }
 
+it('desktop non-Safari detection excludes desktop browsers without classifying mobile and TV Linux as desktop', () => {
+	let source = fs.readFileSync(path.join(root, 'web/lib/live-player.js'), 'utf8')
+		.replace(/^import .*;\n/gm, '').replace(/export function /g, 'function ');
+	const context = {};
+	vm.runInNewContext(source, context);
+	const detected = context.isDesktopNonSafariEnvironment;
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153.0 Safari/537.36',
+		vendor: 'Google Inc.', platform: 'Win32'
+	}), true);
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153.0 Safari/537.36 Edg/153.0',
+		vendor: 'Google Inc.', platform: 'Win32'
+	}), true);
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (X11; Linux x86_64; rv:145.0) Gecko/20100101 Firefox/145.0',
+		vendor: '', platform: 'Linux x86_64'
+	}), true);
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/26.0 Safari/605.1.15',
+		vendor: 'Apple Computer, Inc.', platform: 'MacIntel'
+	}), false);
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Version/26.0 Mobile/15E148 Safari/604.1',
+		vendor: 'Apple Computer, Inc.', platform: 'iPhone'
+	}), false);
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel Tablet) AppleWebKit/537.36 Chrome/153.0 Safari/537.36',
+		vendor: 'Google Inc.', platform: 'Linux armv8l'
+	}), false);
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (Linux; Android 9; AFTMM) AppleWebKit/537.36 Silk/130.5 Safari/537.36',
+		vendor: 'Amazon.com', platform: 'Linux armv8l'
+	}), false);
+});
+
+it('desktop non-Safari keeps LIVE on mpeg2toh264 and hides FFmpeg compatibility playback', async () => {
+	const env = loadLivePlayer({
+		nativeHls: true,
+		navigator: {
+			userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153.0 Safari/537.36',
+			vendor: 'Google Inc.', platform: 'Win32'
+		}
+	});
+	const live = env.open('gr011');
+	const compatButton = findByText(live.overlay, 'FFmpeg互換再生');
+	assert.equal(compatButton.hidden, true);
+	compatButton.dispatchEvent(new Event('click'));
+	await Promise.resolve();
+	assert.deepEqual(env.calls.loads, ['https://chinachu.invalid/app/api/channel/gr011/watch.m2ts']);
+	assert.equal(env.calls.fetches.length, 0);
+	assert.equal(env.calls.destroys, 0);
+	live.close();
+});
+
 it('opens a native-controls overlay on the same page and loads the selected channel endpoint', async () => {
 	const env = loadLivePlayer();
 	const program = { fullTitle: '番組タイトル #13', title: '短いタイトル', start: 0, end: 3600000, detail: '番組詳細文が表示される' };
@@ -136,7 +191,7 @@ it('opens a native-controls overlay on the same page and loads the selected chan
 	assert.equal(findByClass(meta, 'program-live-progress'), null, 'progress is no longer in the upper header');
 	const controls = findByClass(live.overlay, 'program-live-controls');
 	assert.deepEqual(findByClass(controls, 'program-live-button-group').children.map(button => button.textContent), [
-		'字幕を隠す', '全画面', '閉じる'
+		'字幕を隠す', '全画面', 'FFmpeg互換再生', '閉じる'
 	]);
 	const time = findByClass(controls, 'program-live-time');
 	assert.equal(time.parent, controls, 'the time and progress unit is inside the bottom controls');
@@ -206,6 +261,54 @@ it('keeps channel identity and omits programme fields when no current programme 
 	assert.equal(findByClass(live.overlay, 'program-live-description').style.display, 'none');
 	assert.equal(env.calls.intervals.size, 1, 'one refresh timer remains available to observe a later schedule update');
 	live.close();
+});
+
+it('keeps mpeg2toh264 as the default and switches live playback only on explicit FFmpeg selection', async () => {
+	const env = loadLivePlayer();
+	const live = env.open('gr011');
+	assert.equal(env.calls.player.options.splitFieldSamples, true);
+	findByText(live.overlay, 'FFmpeg互換再生').dispatchEvent(new Event('click'));
+	await Promise.resolve();
+	assert.equal(live.video.src, 'https://chinachu.invalid/app/api/channel/gr011/watch.mp4?profile=compat');
+	assert.equal(env.calls.destroys, 1, 'the standard MSE player is stopped before the native MP4 source is assigned');
+	assert.match(findByClass(live.overlay, 'program-live-status').textContent, /FFmpeg互換再生中/);
+	live.close();
+	assert.equal(env.calls.destroys, 1, 'closing after switching does not destroy the MSE player twice');
+	assert.equal(env.document.body.children.length, 0);
+});
+
+it('uses a per-view HLS session on native-HLS browsers and closes it with the player', async () => {
+	let calls;
+	const env = loadLivePlayer({
+		nativeHls: true,
+		navigator: {
+			userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Version/26.0 Mobile/15E148 Safari/604.1',
+			vendor: 'Apple Computer, Inc.', platform: 'iPhone'
+		},
+		fetch: async (url, init = {}) => {
+			calls.push({ url: String(url), init });
+			return {
+				ok: true,
+				status: 200,
+				json: async () => ({
+					playlist: './watch-hls/0123456789abcdef0123456789abcdef0123456789abcdef/index.m3u8',
+					close: './watch-hls/0123456789abcdef0123456789abcdef0123456789abcdef.json'
+				})
+			};
+		}
+	});
+	calls = [];
+	const live = env.open('gr011');
+	findByText(live.overlay, 'FFmpeg互換再生').dispatchEvent(new Event('click'));
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(calls[0].url, 'https://chinachu.invalid/app/api/channel/gr011/watch-hls.json?profile=compat');
+	assert.match(live.video.src, /watch-hls\/[a-f0-9]{48}\/index\.m3u8$/);
+	assert.match(findByClass(live.overlay, 'program-live-status').textContent, /HLS再生中/);
+	live.close();
+	await Promise.resolve();
+	assert.equal(calls[1].init.method, 'DELETE');
+	assert.equal(calls[1].init.keepalive, true);
+	assert.match(calls[1].url, /watch-hls\/[a-f0-9]{48}\.json$/);
 });
 
 it('falls back to title and omits progress for invalid programme timing', () => {

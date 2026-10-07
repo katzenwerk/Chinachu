@@ -220,9 +220,38 @@ function init() {
 	if (program.tuner && program.tuner.isScrambling) return response.error(409);
 
 	if (!hasRecordedFile(program)) return response.error(410);
+	if (request.method === 'HEAD' && !(request.type === 'mp4' && request.query.profile === 'compat')) {
+		return response.error(405);
+	}
 
 	if (request.type === 'xspf') {
 		renderXspf();
+		return;
+	}
+
+	if (request.type === 'mp4' && request.query.profile === 'compat') {
+		var cache;
+		var closed = false;
+		try {
+			cache = mediaDelivery.acquireRecorded(program.recorded);
+		} catch (error) {
+			util.log('[media-delivery] recorded cache startup failed: ' + error.message);
+			return response.error(500);
+		}
+		var release = function() {
+			if (closed) return;
+			closed = true;
+			cache.release();
+		};
+		response.once('close', release);
+		response.once('finish', release);
+		cache.promise.then(function(filename) {
+			if (closed) return;
+			mediaDelivery.sendFile(request, response, filename);
+		}).catch(function(error) {
+			util.log('[media-delivery] recorded cache failed: ' + error.message);
+			if (!closed && !response.headersSent) response.error(500);
+		});
 		return;
 	}
 
@@ -256,6 +285,7 @@ function main(avinfo) {
 
 		case 'm2ts':
 		case 'mp4':
+			var isCompatProfile = request.type === 'mp4' && request.query.profile === 'compat';
 			util.log('STREAMING: ' + request.url);
 
 			var d = {
@@ -376,19 +406,20 @@ function main(avinfo) {
 
 			if (!request.query.debug) args.push('-v', '0');
 
-			if (config.vaapiEnabled === true) {
+			if (!isCompatProfile && config.vaapiEnabled === true) {
 				args.push("-vaapi_device", config.vaapiDevice || '/dev/dri/renderD128');
 				args.push("-hwaccel", "vaapi");
 				args.push("-hwaccel_output_format", "yuv420p");
 			}
 
 			args.push('-i', 'pipe:0');
+			if (isCompatProfile) args.push('-map', '0:v:0', '-map', '0:a:0?');
 
 			if (d.t) { args.push('-t', d.t); }
 
 			args.push('-threads', '0');
 
-			if (config.vaapiEnabled === true) {
+			if (!isCompatProfile && config.vaapiEnabled === true) {
 				let scale = "";
 				if (d.s) {
 					let [width, height] = d.s.split("x");
@@ -396,12 +427,14 @@ function main(avinfo) {
 				}
 				args.push("-vf", `format=nv12|vaapi,hwupload,deinterlace_vaapi${scale}`);
 				args.push("-aspect", "16:9")
+			} else if (isCompatProfile) {
+				args.push('-filter:v', 'yadif=mode=send_frame:parity=auto:deint=interlaced');
 			} else {
 				args.push('-filter:v', 'yadif');
 			}
 
 			if (d['c:v']) {
-				if (config.vaapiEnabled === true) {
+				if (!isCompatProfile && config.vaapiEnabled === true) {
 					if (d['c:v'] === "mpeg2video") {
 						d['c:v'] = "mpeg2_vaapi";
 					}
@@ -429,12 +462,21 @@ function main(avinfo) {
 			if (d['b:a']) {
 				args.push('-b:a', d['b:a'], '-minrate:a', d['b:a'], '-maxrate:a', d['b:a']);
 				args.push('-bufsize:a', audioBitrate * 8);
+			} else if (isCompatProfile && d['c:a'] === 'aac') {
+				args.push('-b:a', '128k');
 			}
 
 			if (d['c:v'] === 'h264') {
-				args.push('-profile:v', 'baseline');
-				args.push('-preset', 'ultrafast');
-				args.push('-tune', 'fastdecode,zerolatency');
+				if (isCompatProfile) {
+					args.push('-profile:v', 'high', '-level:v', '4.0', '-pix_fmt', 'yuv420p');
+					args.push('-preset', 'superfast', '-tune', 'zerolatency', '-threads:v', '2');
+					args.push('-crf', '21', '-maxrate:v', '8M', '-bufsize:v', '16M');
+					args.push('-g', '60', '-keyint_min', '60', '-sc_threshold', '0');
+				} else {
+					args.push('-profile:v', 'baseline');
+					args.push('-preset', 'ultrafast');
+					args.push('-tune', 'fastdecode,zerolatency');
+				}
 			}
 			if (d['c:v'] === 'h264_vaapi') {
 				args.push('-profile', '77');
@@ -449,7 +491,7 @@ function main(avinfo) {
 
 			var readStream = fs.createReadStream(program.recorded, range || {});
 
-			request.on('close', function() {
+			response.once('close', function() {
 				readStream.destroy();
 			});
 
@@ -472,7 +514,8 @@ function main(avinfo) {
 					response.end();
 				});
 
-				request.on('close', function() {
+				response.once('close', function() {
+					if (response.writableFinished) return;
 					ffmpeg.stdout.removeAllListeners('data');
 					ffmpeg.stderr.removeAllListeners('data');
 					ffmpeg.kill('SIGKILL');

@@ -1347,6 +1347,8 @@ P = Class.create(P, {
 				if (!current() || attempt !== slot.attempt) return;
 				frame.replaceChildren();
 				slot.player = module.createRecordedPlayer(frame, {
+					compatUrl: new URL('./api/recorded/' + encodeURIComponent(recordedApiId) + '/watch.mp4?profile=compat', document.baseURI).href,
+					compatHlsUrl: new URL('./api/recorded/' + encodeURIComponent(recordedApiId) + '/watch-hls.json?profile=compat', document.baseURI).href,
 					onEnded: function() { restore('再生が終了しました'); },
 					onError: function(error) { restore('再生できません: ' + error.message); }
 				});

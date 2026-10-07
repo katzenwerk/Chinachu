@@ -25,7 +25,25 @@
 
   "/:id/watch": {
     "script" : "recorded-program-watch",
-    "methods": ["get"],
+    "methods": ["get", "head"],
     "types"  : ["mp4", "xspf", "m2ts"]
+  },
+
+  "/:id/watch-hls": {
+    "script" : "recorded-program-watch-hls",
+    "methods": ["get"],
+    "types"  : ["json"]
+  },
+
+  "/:id/watch-hls/:session": {
+    "script" : "recorded-program-watch-hls-session",
+    "methods": ["delete"],
+    "types"  : ["json"]
+  },
+
+  "/:id/watch-hls/:session/:asset": {
+    "script" : "recorded-program-watch-hls-asset",
+    "methods": ["get", "head"],
+    "types"  : ["m3u8", "mp4", "m4s"]
   }
 }

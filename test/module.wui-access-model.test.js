@@ -265,6 +265,10 @@ describe('WUI access model', function() {
 				path.join(repositoryRoot, 'lib/health-diagnostics.js'),
 				path.join(libDir, 'health-diagnostics.js')
 			);
+			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/media-delivery.js'),
+				path.join(libDir, 'media-delivery.js')
+			);
 
 			fs.writeFileSync(
 				path.join(libDir, 'wui-open-host.js'),

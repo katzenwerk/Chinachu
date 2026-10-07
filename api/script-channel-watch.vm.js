@@ -70,6 +70,8 @@ Usushio では使わない
 		case 'm2ts':
 		case 'mp4':
 
+			var isCompatProfile = request.type === 'mp4' && request.query.profile === 'compat';
+
 			var d = {
 				s    : request.query.s      || null, //size(WxH)
 				f    : request.query.f      || null, //format
@@ -98,7 +100,7 @@ Usushio では使わない
 
 			if (!request.query.debug) args.push('-v', '0');
 
-			if (config.vaapiEnabled === true) {
+			if (!isCompatProfile && config.vaapiEnabled === true) {
 				args.push("-vaapi_device", config.vaapiDevice || '/dev/dri/renderD128');
 				args.push("-hwaccel", "vaapi");
 				args.push("-hwaccel_output_format", "yuv420p");
@@ -106,9 +108,10 @@ Usushio では使わない
 
 			args.push('-re');
 			args.push('-i', 'pipe:0');
+			if (isCompatProfile) args.push('-map', '0:v:0', '-map', '0:a:0?');
 			args.push('-threads', '0');
 
-			if (config.vaapiEnabled === true) {
+			if (!isCompatProfile && config.vaapiEnabled === true) {
 				let scale = "";
 				if (d.s) {
 					let [width, height] = d.s.split("x");
@@ -116,12 +119,14 @@ Usushio では使わない
 				}
 				args.push("-vf", `format=nv12|vaapi,hwupload,deinterlace_vaapi${scale}`);
 				args.push("-aspect", "16:9")
+			} else if (isCompatProfile) {
+				args.push('-filter:v', 'yadif=mode=send_frame:parity=auto:deint=interlaced');
 			} else {
 				args.push('-filter:v', 'yadif');
 			}
 
 			if (d['c:v']) {
-				if (config.vaapiEnabled === true) {
+				if (!isCompatProfile && config.vaapiEnabled === true) {
 					if (d['c:v'] === "mpeg2video") {
 						d['c:v'] = "mpeg2_vaapi";
 					}
@@ -147,12 +152,21 @@ Usushio では使わない
 			}
 			if (d['b:a']) {
 				args.push('-b:a', d['b:a'], '-minrate:a', d['b:a'], '-maxrate:a', d['b:a']);
+			} else if (isCompatProfile && d['c:a'] === 'aac') {
+				args.push('-b:a', '128k');
 			}
 
 			if (d['c:v'] === 'h264') {
-				args.push('-profile:v', 'baseline');
-				args.push('-preset', 'ultrafast');
-				args.push('-tune', 'fastdecode,zerolatency');
+				if (isCompatProfile) {
+					args.push('-profile:v', 'high', '-level:v', '4.0', '-pix_fmt', 'yuv420p');
+					args.push('-preset', 'superfast', '-tune', 'zerolatency', '-threads:v', '2');
+					args.push('-crf', '21', '-maxrate:v', '8M', '-bufsize:v', '16M');
+					args.push('-g', '60', '-keyint_min', '60', '-sc_threshold', '0');
+				} else {
+					args.push('-profile:v', 'baseline');
+					args.push('-preset', 'ultrafast');
+					args.push('-tune', 'fastdecode,zerolatency');
+				}
 			}
 			if (d['c:v'] === 'h264_vaapi') {
 				args.push('-profile', '77');
@@ -166,8 +180,10 @@ Usushio では使わない
 			args.push('-y', '-f', d.f, 'pipe:1');
 
 			let stream = null;;
+			let clientClosed = false;
 
-			request.once('close', () => {
+			response.once('close', () => {
+				clientClosed = true;
 
 				if (stream) {
 					stream.unpipe();
@@ -179,6 +195,11 @@ Usushio では使わない
 			mirakurun.getServiceStream(parseInt(channel.id, 36), true)
 				.then(_stream => {
 					stream = _stream;
+					if (clientClosed) {
+						stream.unpipe();
+						if (stream.req) stream.req.abort();
+						return;
+					}
 
 					response.head(200);
 
@@ -191,7 +212,8 @@ Usushio では使わない
 						children.push(ffmpeg.pid);
 						util.log('SPAWN: ffmpeg ' + args.join(' ') + ' (pid=' + ffmpeg.pid + ')');
 
-						request.on('close', function() {
+						response.once('close', function() {
+							if (response.writableFinished) return;
 							ffmpeg.stdout.removeAllListeners('data');
 							ffmpeg.stderr.removeAllListeners('data');
 							ffmpeg.kill('SIGKILL');

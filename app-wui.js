@@ -61,6 +61,7 @@ const runtimePrivileges = require('./lib/runtime-privileges');
 const mirakurunConnection = require('./lib/mirakurun-connection');
 const ruleUid = require('./lib/rule-uid');
 const healthDiagnosticsModule = require('./lib/health-diagnostics');
+const mediaDeliveryModule = require('./lib/media-delivery');
 
 // Directory Checking
 if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./web/')) {
@@ -131,6 +132,10 @@ const healthDiagnostics = healthDiagnosticsModule.createHealthDiagnostics({
 	validateRules: ruleUid.validateRuleUids,
 	// Direct status request avoids loading the dynamic API document for every unavailable endpoint.
 	fetchMirakurunStatus: signal => mirakurun.request('GET', '/status', { signal: signal }).then(result => result.body)
+});
+const mediaDelivery = mediaDeliveryModule.createMediaDelivery({
+	mirakurun: mirakurun,
+	log: util.log
 });
 
 // etc.
@@ -332,6 +337,7 @@ function shutdownWui(signal) {
 	}
 	shutdownStarted = true;
 	util.log('SHUTDOWN: ' + signal);
+	mediaDelivery.close();
 
 	if (openServerStartRetryTimer) {
 		clearTimeout(openServerStartRetryTimer);
@@ -633,6 +639,8 @@ function httpServerMain(req, res, query) {
 		if (ext === 'asf') { type = 'video/x-ms-asf'; }
 		if (ext === 'json') { type = 'application/json; charset=utf-8'; }
 		if (ext === 'xspf') { type = 'application/xspf+xml'; }
+		if (ext === 'm3u8') { type = 'application/vnd.apple.mpegurl'; }
+		if (ext === 'm4s') { type = 'video/iso.segment'; }
 
 		var head = {
 			'Content-Type'             : type,
@@ -793,6 +801,7 @@ function httpServerMain(req, res, query) {
 				config       : config,
 				matchCache   : matchCache,
 				healthDiagnostics: healthDiagnostics,
+				mediaDelivery: mediaDelivery,
 				define: {
 					CONFIG_FILE        : CONFIG_FILE,
 					RULES_FILE         : RULES_FILE,

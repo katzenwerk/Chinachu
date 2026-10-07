@@ -44,6 +44,97 @@ function loadPage(env, importPlayer) {
  return context.P;
 }
 
+it('desktop non-Safari detection excludes desktop browsers without classifying mobile and TV Linux as desktop', () => {
+	const context = {};
+	let source = fs.readFileSync(path.join(root, 'web/lib/recorded-player.js'), 'utf8');
+	source = source.replace(/^import .*;\n/gm, '').replace('export function', 'function');
+	vm.runInNewContext(source, context);
+	const detected = context.isDesktopNonSafariEnvironment;
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153.0 Safari/537.36',
+		vendor: 'Google Inc.', platform: 'Win32'
+	}), true, 'Windows desktop Chrome is excluded');
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153.0 Safari/537.36 Edg/153.0',
+		vendor: 'Google Inc.', platform: 'Win32'
+	}), true, 'Windows desktop Edge is excluded');
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (X11; Linux x86_64; rv:145.0) Gecko/20100101 Firefox/145.0',
+		vendor: '', platform: 'Linux x86_64'
+	}), true, 'Linux desktop Firefox is excluded');
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/153.0 Safari/537.36',
+		vendor: 'Google Inc.', platform: 'Linux x86_64'
+	}), true, 'Linux desktop Chrome is excluded');
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/26.0 Safari/605.1.15',
+		vendor: 'Apple Computer, Inc.', platform: 'MacIntel'
+	}), false, 'macOS Safari keeps recorded HLS');
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Version/26.0 Mobile/15E148 Safari/604.1',
+		vendor: 'Apple Computer, Inc.', platform: 'iPhone'
+	}), false, 'iPhone Safari keeps recorded HLS');
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (iPad; CPU OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Version/26.0 Mobile/15E148 Safari/604.1',
+		vendor: 'Apple Computer, Inc.', platform: 'iPad'
+	}), false, 'iPad Safari keeps recorded HLS');
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel Tablet) AppleWebKit/537.36 Chrome/153.0 Safari/537.36',
+		vendor: 'Google Inc.', platform: 'Linux armv8l'
+	}), false, 'Android is not excluded by its Linux platform');
+	assert.equal(detected({
+		userAgent: 'Mozilla/5.0 (Linux; Android 9; AFTMM) AppleWebKit/537.36 Silk/130.5 Safari/537.36',
+		vendor: 'Amazon.com', platform: 'Linux armv8l'
+	}), false, 'Fire TV is not excluded by its Linux platform');
+});
+
+it('desktop non-Safari keeps the recorded player on the mpeg2toh264 path and hides FFmpeg compatibility playback', async () => {
+	const env = environment();
+	env.navigator = {
+		userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153.0 Safari/537.36',
+		vendor: 'Google Inc.', platform: 'Win32'
+	};
+	let loadedUrl = null;
+	class Player extends EventTarget {
+		constructor(video) {
+			super();
+			video.play = async () => {};
+			video.load = () => {};
+		}
+		async load(url) { loadedUrl = url; }
+		destroy() {}
+	}
+	class Feeder { destroy() {} }
+	class Renderer { destroy() {} }
+	class CaptionController {
+		attachFeeder() {} attachRenderer() {}
+		attachMedia(_video, picture) { picture.append(new Element('svg')); }
+		detachMedia() {} detachFeeder() {} detachRenderer() {} show() {} hide() {}
+	}
+	const context = {
+		...env,
+		Mpeg2TsPlayer: Player,
+		MPEGTSFeeder: Feeder,
+		SVGDOMRenderer: Renderer,
+		Controller: CaptionController
+	};
+	const source = fs.readFileSync(path.join(root, 'web/lib/recorded-player.js'), 'utf8')
+		.replace(/^import .*;\n/gm, '').replace('export function', 'function');
+	vm.runInNewContext(source, context);
+	const frame = new Element();
+	const adapter = context.createRecordedPlayer(frame, {
+		compatUrl: 'http://fixture/watch.mp4?profile=compat',
+		compatHlsUrl: 'http://fixture/watch-hls.json?profile=compat',
+		onEnded() {}, onError(error) { throw error; }
+	});
+	const compatButton = frame.children[0].children[1].children.find(child => child.textContent === 'FFmpeg互換再生');
+	assert.equal(compatButton.hidden, true);
+	compatButton.dispatchEvent(new Event('click'));
+	await adapter.load('http://fixture/file.m2ts');
+	assert.equal(loadedUrl, 'http://fixture/file.m2ts');
+	adapter.destroy();
+});
+
 it('recorded preview uses one central poster, starts no player before click, and excludes unavailable/non-recorded files', () => {
  const env = environment(); const page = loadPage(env); const target = new Element();
  const program = { _isRecorded: true, seconds: 1801 };
@@ -103,6 +194,23 @@ it('navigation during lazy import cancels startup and recorded notifications onl
 	program = { ...program, fileExists: false };
 	notified.handleNotify({ type: 'chinachu:recorded' });
 	assert.equal(refreshes, 1);
+});
+
+it('passes the recorded HLS session URL from the programme page to the player', async () => {
+	const env = environment();
+	let options;
+	const page = loadPage(env, async () => ({
+		createRecordedPlayer(_frame, playerOptions) {
+			options = playerOptions;
+			return { async load() {}, destroy() {} };
+		}
+	}));
+	const target = new Element();
+	page.renderRecordedPreview(target, { _isRecorded: true, seconds: 60 }, 'idx1ar7');
+	target.children[0].children[0].children[1].dispatchEvent(new Event('click'));
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(options.compatHlsUrl, 'http://fixture/api/recorded/idx1ar7/watch-hls.json?profile=compat');
+	assert.equal(options.compatUrl, 'http://fixture/api/recorded/idx1ar7/watch.mp4?profile=compat');
 });
 
 it('adapter wires official caption events and destroys player and both caption overlays exactly once', async () => {
@@ -223,4 +331,50 @@ it('adapter wires official caption events and destroys player and both caption o
 	pictureAfterDestroy.dispatchEvent(key('ArrowRight'));
 	assert.equal(videoAfterDestroy.currentTime, 30, 'destroy removes the video key listener');
  assert.equal(frame.children.length, 0);
+	adapter = context.createRecordedPlayer(frame, { compatUrl: 'http://fixture/watch.mp4?profile=compat', onEnded() {}, onError(error) { throw error; } });
+	const compatButton = frame.children[0].children[1].children.find(child => child.textContent === 'FFmpeg互換再生');
+	assert.equal(compatButton.hidden, false, 'manual FFmpeg compatibility playback is available');
+	const pendingStandardLoad = adapter.load('http://fixture/file.m2ts');
+	compatButton.dispatchEvent(new Event('click'));
+	await pendingStandardLoad;
+	assert.equal(player.video.src, 'http://fixture/watch.mp4?profile=compat');
+	assert.equal(player.video.nativeLoadCount, 1);
+	assert.equal(destroyed, 3, 'switching modes tears down the MSE player exactly once');
+	adapter.destroy();
+	assert.equal(destroyed, 3, 'closing after switching modes does not destroy MSE twice');
+	assert.equal(frame.children.length, 0);
+
+	const fetches = [];
+	env.window.fetch = async (url, options = {}) => {
+		fetches.push({ url, options });
+		if (options.method === 'DELETE') return { ok: true, json: async () => ({ stopped: true }) };
+		return {
+			ok: true,
+			json: async () => ({
+				playlist: './watch-hls/0123456789abcdef0123456789abcdef0123456789abcdef/index.m3u8',
+				close: './watch-hls/0123456789abcdef0123456789abcdef0123456789abcdef.json'
+			})
+		};
+	};
+	context.navigator = {
+		userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Version/26.0 Mobile/15E148 Safari/604.1',
+		vendor: 'Apple Computer, Inc.', platform: 'iPhone'
+	};
+	adapter = context.createRecordedPlayer(frame, {
+		compatUrl: 'http://fixture/api/recorded/fixture/watch.mp4?profile=compat',
+		compatHlsUrl: 'http://fixture/api/recorded/fixture/watch-hls.json?profile=compat',
+		onEnded() {},
+		onError(error) { throw error; }
+	});
+	player.video.canPlayType = type => type === 'application/vnd.apple.mpegurl' ? 'probably' : '';
+	const hlsButton = frame.children[0].children[1].children.find(child => child.textContent === 'FFmpeg互換再生');
+	hlsButton.dispatchEvent(new Event('click'));
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(fetches[0].url, 'http://fixture/api/recorded/fixture/watch-hls.json?profile=compat');
+	assert.equal(player.video.src, 'http://fixture/api/recorded/fixture/watch-hls/0123456789abcdef0123456789abcdef0123456789abcdef/index.m3u8');
+	adapter.destroy();
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(fetches[1].options.method, 'DELETE');
+	assert.equal(fetches[1].options.keepalive, true);
+	assert.equal(frame.children.length, 0);
 });

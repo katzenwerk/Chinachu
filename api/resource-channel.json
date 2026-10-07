@@ -5,6 +5,24 @@
     "types"  : ["xspf", "m2ts", "mp4"]
   },
 
+  "/:chid/watch-hls": {
+    "script" : "channel-watch-hls",
+    "methods": ["get"],
+    "types"  : ["json"]
+  },
+
+  "/:chid/watch-hls/:session": {
+    "script" : "channel-watch-hls-session",
+    "methods": ["delete"],
+    "types"  : ["json"]
+  },
+
+  "/:chid/watch-hls/:session/:asset": {
+    "script" : "channel-watch-hls-asset",
+    "methods": ["get", "head"],
+    "types"  : ["m3u8", "mp4", "m4s"]
+  },
+
   "/:chid/logo": {
     "script" : "channel-logo",
     "methods": ["get"],

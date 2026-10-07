@@ -4,7 +4,25 @@ import { Controller, MPEGTSFeeder, SVGDOMRenderer } from './mpeg2toh264/aribb24.
 
 const SEEK_SECONDS = 15;
 
-export function createRecordedPlayer(frame, { onEnded, onError }) {
+function isDesktopNonSafariEnvironment(nav) {
+	if (!nav) return false;
+	const userAgent = String(nav.userAgent || '');
+	const vendor = String(nav.vendor || '');
+	const userAgentData = nav.userAgentData || null;
+	const platform = String(userAgentData && userAgentData.platform || nav.platform || '');
+	const mobileOrTv = userAgentData && userAgentData.mobile === true ||
+		/(?:Android|Mobile|Silk|Kindle|KF[A-Z0-9]+|AFT[A-Z0-9]*|Smart-?TV|SMART-TV|HbbTV|Tizen|Web0S|WebOS|NetCast)/i.test(userAgent);
+	if (mobileOrTv) return false;
+
+	const safari = /Safari\//.test(userAgent) && /Apple Computer/i.test(vendor) &&
+		!/(?:Chrome|Chromium|CriOS|Edg|EdgiOS|OPR|FxiOS|Firefox)/i.test(userAgent);
+	if (safari) return false;
+
+	return /(?:Windows|Win32|Win64|MacIntel|macOS|Linux|Chrome OS)/i.test(platform) ||
+		/(?:Windows NT|Macintosh|X11|CrOS)/i.test(userAgent);
+}
+
+export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compatHlsUrl }) {
 	const stage = document.createElement('div');
 	stage.className = 'program-ts-stage';
 	const picture = document.createElement('div');
@@ -42,9 +60,16 @@ export function createRecordedPlayer(frame, { onEnded, onError }) {
 	const fullscreenButton = document.createElement('button');
 	fullscreenButton.type = 'button';
 	fullscreenButton.textContent = '全画面';
+	const compatButton = document.createElement('button');
+	compatButton.type = 'button';
+	compatButton.textContent = 'FFmpeg互換再生';
+	const desktopNonSafari = isDesktopNonSafariEnvironment(
+		typeof navigator === 'undefined' ? null : navigator
+	);
+	compatButton.hidden = desktopNonSafari || (!compatUrl && !compatHlsUrl);
 	const status = document.createElement('span');
 	status.setAttribute('role', 'status');
-	controls.append(captionsButton, fullscreenButton, status);
+	controls.append(captionsButton, fullscreenButton, compatButton, status);
 	stage.append(controls);
 	frame.append(stage);
 
@@ -56,6 +81,7 @@ export function createRecordedPlayer(frame, { onEnded, onError }) {
 	let playerDestroyed = false;
 	let captionsEnabled = true;
 	let seekFeedbackTimer = null;
+	let hlsCloseUrl = null;
 	const entries = [];
 	// Same feeder/controller/renderer wiring as packages/demo/src/demo.ts.
 	const feed = event => {
@@ -72,7 +98,16 @@ export function createRecordedPlayer(frame, { onEnded, onError }) {
 			fullscreenChanged();
 		}
 	};
+	function closeHlsSession() {
+		if (!hlsCloseUrl) return;
+		const target = hlsCloseUrl;
+		hlsCloseUrl = null;
+		if (typeof window.fetch === 'function') {
+			window.fetch(target, { method: 'DELETE', keepalive: true }).catch(() => {});
+		}
+	}
 	const ended = () => {
+		closeHlsSession();
 		onEnded();
 	};
 	const failed = event => onError(event.detail.error);
@@ -102,6 +137,48 @@ export function createRecordedPlayer(frame, { onEnded, onError }) {
 			renderer.destroy();
 		}
 		player.destroy();
+	};
+	const startCompatPlayback = async () => {
+		if (destroyed || playerDestroyed || desktopNonSafari || (!compatUrl && !compatHlsUrl)) return;
+		disposeMpegPlayer();
+		compatButton.disabled = true;
+		compatButton.textContent = 'FFmpeg互換再生中';
+		const supportsNativeHls = typeof video.canPlayType === 'function' &&
+			video.canPlayType('application/vnd.apple.mpegurl') !== '';
+		status.textContent = supportsNativeHls && compatHlsUrl ?
+			'FFmpeg互換HLSを準備中…（ARIB字幕・文字スーパーなし）' :
+			'FFmpeg互換映像を読み込み中…（ARIB字幕・文字スーパーなし）';
+		if (supportsNativeHls && compatHlsUrl && typeof window.fetch === 'function') {
+			try {
+				const createUrl = new URL(compatHlsUrl, document.baseURI);
+				const result = await window.fetch(createUrl.href, { credentials: 'same-origin' });
+				if (!result.ok) throw new Error('HTTP ' + result.status);
+				const session = await result.json();
+				const playlistUrl = new URL(session.playlist, createUrl);
+				const closeUrl = new URL(session.close, createUrl);
+				if (destroyed) {
+					window.fetch(closeUrl.href, { method: 'DELETE', keepalive: true }).catch(() => {});
+					return;
+				}
+				hlsCloseUrl = closeUrl.href;
+				video.src = playlistUrl.href;
+				status.textContent = 'FFmpeg互換HLS再生中（ARIB字幕・文字スーパーなし）';
+			} catch (error) {
+				if (!destroyed) onError(new Error('FFmpeg互換HLSを開始できませんでした: ' + error.message));
+				return;
+			}
+		} else if (compatUrl) {
+			video.src = compatUrl;
+		} else {
+			onError(new Error('このブラウザではFFmpeg互換再生を利用できません'));
+			return;
+		}
+		video.load();
+		Promise.resolve(video.play()).then(() => {
+			if (!destroyed) status.textContent = 'FFmpeg互換再生中（ARIB字幕・文字スーパーなし）';
+		}).catch(() => {
+			if (!destroyed) status.textContent = '動画の再生ボタンを押してください';
+		});
 	};
 	const focusPicture = () => {
 		try {
@@ -187,6 +264,7 @@ export function createRecordedPlayer(frame, { onEnded, onError }) {
 		video.removeEventListener('play', updatePlayOverlay);
 		video.removeEventListener('playing', updatePlayOverlay);
 		playOverlay.removeEventListener('click', playFromOverlay);
+		compatButton.removeEventListener('click', startCompatPlayback);
 		if (seekFeedbackTimer !== null) window.clearTimeout(seekFeedbackTimer);
 		document.removeEventListener('fullscreenchange', fullscreenChanged);
 		document.removeEventListener('keydown', escape);
@@ -223,6 +301,7 @@ export function createRecordedPlayer(frame, { onEnded, onError }) {
 	video.addEventListener('play', updatePlayOverlay);
 	video.addEventListener('playing', updatePlayOverlay);
 	playOverlay.addEventListener('click', playFromOverlay);
+	compatButton.addEventListener('click', startCompatPlayback);
 	document.addEventListener('fullscreenchange', fullscreenChanged);
 	document.addEventListener('keydown', escape);
 	window.addEventListener('pagehide', destroy);
