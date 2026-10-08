@@ -120,4 +120,58 @@ describe('WUI stable rule UID reserve association', function() {
 		const legacyList = renderReserves(legacyReserves, { page: '1', rule: '1' });
 		assert.deepEqual(legacyList.rows.map(row => row.data.id), ['legacy-1', 'legacy-2']);
 	});
+
+	it('shows a display-only rule number and summary while resolving edits by ruleUid after reorder', function() {
+		const classSource = fs.readFileSync(path.join(root, 'web/class.js'), 'utf8');
+		assert.match(classSource, /title: util\.formatRuleDisplayLabel\(rule, num\) \+ ' を編集'/);
+		const formatterStart = classSource.indexOf('\tutil.formatRuleDisplayLabel = function');
+		const formatterEnd = classSource.indexOf('\n\n\t/**\n\t *  util.scotify', formatterStart);
+		const formatterContext = { util: {} };
+		vm.runInNewContext(classSource.slice(formatterStart, formatterEnd), formatterContext);
+		assert.equal(
+			formatterContext.util.formatRuleDisplayLabel({ reserve_titles: ['ピーちゃん'] }, 2),
+			'ルール #3 — 「ピーちゃん」を含む'
+		);
+
+		const rules = [
+			{ ruleUid: 'UID-A', reserve_titles: ['ピーちゃん'] },
+			{ ruleUid: 'UID-B', reserve_descriptions: ['特別番組'] }
+		];
+		const edits = [];
+		const context = {
+			P: {},
+			Class: { create: function(_parent, definition) { return definition; } },
+			Prototype: { emptyFunction: function() {} },
+			global: { chinachu: { rules: rules } },
+			chinachu: {
+				util: {
+					formatRuleDisplayLabel: function(rule, index) {
+						return 'ルール #' + (index + 1) + ' — 「' + rule.reserve_titles[0] + '」を含む';
+					}
+				},
+				ui: { EditRule: function(index) { edits.push(index); } }
+			}
+		};
+		vm.createContext(context);
+		vm.runInContext("String.prototype.escapeHTML = function() { return String(this); }; Object.isArray = Array.isArray;", context);
+		vm.runInContext(fs.readFileSync(path.join(root, 'web/page/program/view.js'), 'utf8'), context, {
+			filename: 'web/page/program/view.js'
+		});
+		let rendered = null;
+		const page = context.P;
+		page.matchItem = { reservationMeta: { ruleUid: 'UID-A' } };
+		page.program = { id: 'program-a' };
+		page.ruleButton = {
+			entity: { update: function(value) { rendered = value; } },
+			enable: function() {},
+			disable: function() {}
+		};
+
+		page.updateRuleToolbarButton();
+		assert.equal(rendered, 'ルール #1 — 「ピーちゃん」を含む');
+
+		context.global.chinachu.rules = [rules[1], rules[0]];
+		page.ruleButton.onClick();
+		assert.deepEqual(edits, [1], 'the click resolves the current index from the stable UID');
+	});
 });

@@ -893,6 +893,38 @@
 	**/
 
 	/**
+	 *  util.formatRuleDisplayLabel(rule, ruleIndex) -> String
+	 *
+	 *  ruleIndexは表示番号にだけ使用し、ルールの識別には使用しません。
+	**/
+	util.formatRuleDisplayLabel = function (rule, ruleIndex) {
+		var label = 'ルール #' + (ruleIndex + 1);
+		var condition = null;
+		var first = function (values) {
+			if (Object.prototype.toString.call(values) !== '[object Array]' || values.length === 0) {
+				return null;
+			}
+			var value = String(values[0]);
+			return value.length > 32 ? value.slice(0, 31) + '…' : value;
+		};
+		var value;
+
+		rule = rule || {};
+		value = first(rule.reserve_titles);
+		if (value !== null) {
+			condition = '「' + value + '」を含む';
+		} else if ((value = first(rule.reserve_descriptions)) !== null) {
+			condition = '説明に「' + value + '」を含む';
+		} else if ((value = first(rule.channels)) !== null) {
+			condition = 'CH: ' + value;
+		} else if ((value = first(rule.categories)) !== null) {
+			condition = 'ジャンル: ' + value;
+		}
+
+		return condition === null ? label : label + ' — ' + condition;
+	};
+
+	/**
 	 *  util.scotify(program) -> String
 	 *  - program (Program Object): Program Data.
 	 *
@@ -1998,7 +2030,7 @@
 						});
 
 						var modal = new flagrate.Modal({
-							title: 'ルール編集',
+							title: util.formatRuleDisplayLabel(rule, num) + ' を編集',
 							element: form.element,
 							buttons: [
 								{

@@ -716,7 +716,9 @@ P = Class.create(P, {
 				this.ruleButton.onClick = Prototype.emptyFunction;
 				this.ruleButton.disable();
 			} else if (ruleIndex >= 0) {
-				label = '予約ルール';
+				label = chinachu.util && typeof chinachu.util.formatRuleDisplayLabel === 'function'
+					? chinachu.util.formatRuleDisplayLabel(global.chinachu.rules[ruleIndex], ruleIndex)
+					: 'ルール #' + (ruleIndex + 1);
 				this.ruleButton.onClick = function() {
 					var currentIndex = this.findReservationRuleIndex(ruleUid);
 
@@ -736,7 +738,7 @@ P = Class.create(P, {
 		}
 
 		this.ruleButton.label = label;
-		this.ruleButton.entity.update(label);
+		this.ruleButton.entity.update(String(label).escapeHTML());
 
 		return this;
 	},
