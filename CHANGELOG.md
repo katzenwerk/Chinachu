@@ -240,3 +240,70 @@ recording destination metadata.
 - Consolidated permanent tests by behavior and moved temporary rule UID migration
   tests out of the regular suite. The regular suite passed 137 tests across 30
   suites; the temporary migration tests passed 3/3.
+
+# Chinachu 0.10.7-thorn.28
+
+This release adds browser playback for live and recorded MPEG-2 transport
+streams, Safari-compatible FFmpeg HLS delivery, operational diagnostics, and
+stable reservation-rule navigation.
+
+## Highlights
+
+- Added read-only Health diagnostics and a Status dashboard for Chinachu,
+  runtime, PM2, Mirakurun, scheduler, recording, and data-file state.
+- Added guarded PM2 service controls for the Chinachu Operator and WUI.
+- Added `mpeg2toh264` browser playback for live and recorded MPEG-2 TS content.
+- Added FFmpeg fMP4 HLS compatibility playback for Safari while retaining
+  `mpeg2toh264` as the standard path on desktop non-Safari browsers.
+- Added HTTP byte Range support for recorded files.
+- Linked programmes and reservations to their source rules through stable
+  `ruleUid` values and improved rule labels in programme views.
+
+## Health / Service Control
+
+- Added a read-only diagnostics API with a short process-local cache and manual
+  refresh support in the Status dashboard.
+- Reports observable runtime, PM2, Mirakurun, scheduler, recording, ffprobe,
+  configuration, rule, and scheduler-state information without treating
+  unavailable observations as healthy.
+- Added guarded restart controls limited to `chinachu-operator` and
+  `chinachu-wui`, with process-identity and active-recording safeguards.
+- Service controls do not operate on Mirakurun or unrelated PM2 applications.
+
+## Browser Playback
+
+- Added vendored `mpeg2toh264` playback adapters for live and recorded MPEG-2
+  TS streams, including ARIB caption rendering and recorded-file seeking.
+- Added recorded-file HEAD and single byte Range handling with 206 and 416
+  responses for browser playback.
+- Added isolated FFmpeg fMP4 HLS sessions for live and recorded compatibility
+  playback, including playlist, initialization segment, media segment, process,
+  and cleanup lifecycle management.
+- Safari can use FFmpeg HLS compatibility playback. Desktop non-Safari browsers
+  keep `mpeg2toh264` as the standard path and do not normally offer FFmpeg HLS.
+- Android, Fire TV, and TV-class browsers are not excluded solely because their
+  platform is Linux-based.
+- The completed MP4, faststart, and Range delivery path remains available as a
+  compatibility and verification fallback rather than the primary initial
+  playback path.
+
+## Reservation Rules / WUI
+
+- Programme and reservation views now resolve source rules by stable `ruleUid`
+  instead of using a mutable rule-array index as identity.
+- Added source-rule navigation and editing from programme views.
+- Rule labels now show a one-based display number and a concise primary
+  condition, while continuing to use `ruleUid` for identity after reordering.
+
+## Maintenance
+
+- Added a maintenance background document describing the thorn branch and its
+  modernization context.
+
+## Known Limitations
+
+- Recorded FFmpeg HLS playback currently starts from the beginning and does not
+  yet support seeking or restart from an arbitrary position.
+- Android, Fire TV, and TV-class browser playback still requires device testing.
+- Long recordings and multiple concurrent playback sessions still require
+  performance and resource-usage evaluation.
