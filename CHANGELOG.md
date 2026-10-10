@@ -307,3 +307,18 @@ stable reservation-rule navigation.
 - Android, Fire TV, and TV-class browser playback still requires device testing.
 - Long recordings and multiple concurrent playback sessions still require
   performance and resource-usage evaluation.
+
+# Chinachu 0.10.7-thorn.29
+
+This release improves reservation reliability, filesystem-aware storage management, and WUI usability while updating runtime dependencies.
+
+## Highlights
+
+- Added atomic reservation persistence and ownership-aware locking to prevent concurrent update conflicts.
+- Improved scheduler conflict detection and retry handling for reservation updates.
+- Added filesystem-aware storage monitoring with per-filesystem Warning and Low protection.
+- Reduced unnecessary HDD access during idle operation and WUI browsing.
+- Added persistent storage snapshots, last-checked timestamps, and manual capacity refresh controls.
+- Improved Storage WUI layout, status indicators, and mobile responsiveness.
+- Updated Mirakurun client to 4.1.5 and Socket.IO to 4.8.4.
+- Consolidated permanent regression tests and removed redundant test cases.
