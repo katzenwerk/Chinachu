@@ -11,8 +11,6 @@ var fs         = require('fs');
 var path       = require('path');
 var crypto     = require('crypto');
 var dateFormat = require('dateformat').default;
-var child_process = require('child_process');
-var string = require('@chezearth/string');
 
 var DATEFORMAT_TOKEN = /d{1,4}|D{3,4}|m{1,4}|yy(?:yy)?|([HhMsTt])\1?|W{1,2}|[LlopSZN]|"[^"]*"|'[^']*'/g;
 var LEGACY_MILLISECOND_MARKER = '\u0000chinachu-dateformat-L\u0000';
@@ -30,13 +28,6 @@ var formatRecordedDate = function (date, mask) {
 	}
 
 	return dateFormat(date, legacyMask).split(LEGACY_MILLISECOND_MARKER).join(milliseconds);
-};
-
-var execSync   = function (command) {
-	try {
-		return child_process.execSync(command, { encoding: 'utf8' });
-	} catch (e) {
-	}
 };
 
 exports.jsonWatcher = function (filepath, callback, option) {
@@ -309,7 +300,7 @@ exports.formatRecordedName = function (program, name, options) {
 			if (isNaN(digit)) {
 				digit = 1;
 			}
-			return program.episode === null ? 'n' : string(program.episode.toString(10)).padLeft(digit, '0').s;
+			return program.episode === null ? 'n' : program.episode.toString(10).padStart(digit, '0');
 		}
 
 		// episode

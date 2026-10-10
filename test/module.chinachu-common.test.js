@@ -11,6 +11,35 @@ var it = test.it;
 
 var chinachu = require("chinachu-common");
 
+describe("formatRecordedName", function() {
+	it("preserves episode padding in recording names and subdirectories", function() {
+		var baseProgram = {
+			start: 0,
+			channel: {}
+		};
+		var cases = [
+			{ episode: null, expected: "n" },
+			{ episode: 0, expected: "000" },
+			{ episode: 7, expected: "007" },
+			{ episode: -7, expected: "0-7" },
+			{ episode: 1234, expected: "1234" }
+		];
+
+		cases.forEach(function(entry) {
+			var program = Object.assign({}, baseProgram, { episode: entry.episode });
+
+			assert.strictEqual(
+				chinachu.formatRecordedName(program, "<episode:3>.m2ts"),
+				entry.expected + ".m2ts"
+			);
+			assert.strictEqual(
+				chinachu.formatRecordedName(program, "series/<episode:3>/program.m2ts"),
+				path.join("series", entry.expected, "program.m2ts")
+			);
+		});
+	});
+});
+
 describe("jsonWatcher", function() {
 	it("reads initial JSON data and keeps reporting atomic replacements", { timeout: 5000 }, async function() {
 		var temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "chinachu-json-watcher-"));
