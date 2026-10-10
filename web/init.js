@@ -51,6 +51,9 @@
 		
 		/* date.format */
 		'./lib/date.format.js',
+
+		/* Storage Health view aggregation */
+		'./lib/storage-health-view.js',
 		
 		/* chinachu */
 		'./chinachu.css',

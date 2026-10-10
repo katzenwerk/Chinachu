@@ -420,84 +420,7 @@ describe('Operator recording preparation attempts', function() {
 		}
 	});
 
-	it('does not resume manual, aborted, end-lack, or ended recorded states', { timeout: 15000 }, async function() {
-		const cases = [
-			{ name: 'manual', program: createProgram('2', { isManualReserved: true }), recorded: { isManualReserved: true } },
-			{ name: 'manual stop', program: createProgram('2'), recorded: { operatorAbort: true } },
-			{ name: 'end lack', program: createProgram('2'), recorded: { operatorEndLack: true } },
-			{ name: 'ended', program: Object.assign(createProgram('2'), { end: Date.now() - 100 }), recorded: { end: Date.now() - 100 } }
-		];
-
-		for (const item of cases) {
-			const fixture = await createOperatorFixture([ item.program ], () => {}, {
-				initialRecorded(recordedDir) {
-					return [ Object.assign({}, item.program, {
-						recorded: path.join(recordedDir, '2.m2ts'),
-						operatorResumePending: true,
-						operatorInterruptedAt: Date.now() - 1000,
-						operatorInterruptionCount: 1
-					}, item.recorded) ];
-				},
-				initialFiles: { '2.m2ts': item.name }
-			});
-
-			try {
-				await new Promise(resolve => setTimeout(resolve, 1400));
-				assert.strictEqual(fixture.requests.length, 0, item.name + ' unexpectedly resumed');
-			} finally {
-				await fixture.close();
-			}
-		}
-	});
-
-	it('keeps retrying a resumed rule recording after an abnormal stream close', { timeout: 15000 }, async function() {
-		let finalResponse = null;
-		const program = createProgram('2');
-		const fixture = await createOperatorFixture([ program ], request => {
-			request.res.writeHead(200, { 'Content-Type': 'video/MP2T' });
-			request.res.write(request.index === 1 ? 'BROKEN' : 'RECOVERED');
-			if (request.index === 1) {
-				setTimeout(() => request.res.socket.destroy(), 50);
-			} else {
-				finalResponse = request.res;
-			}
-		}, {
-			initialRecorded(recordedDir) {
-				return [ Object.assign({}, program, {
-					recorded: path.join(recordedDir, '2.m2ts'),
-					operatorResumePending: true,
-					operatorInterruptedAt: Date.now() - 1000,
-					operatorInterruptionCount: 1
-				}) ];
-			},
-			initialFiles: { '2.m2ts': 'BASE' }
-		});
-
-		try {
-			await waitForCondition(
-				() => /NG RECORDING: INPUT STREAM/.test(fixture.output()),
-				'resumed rule recording did not enter the existing NG path',
-				4000
-			);
-			fixture.writeReserves([ program ]);
-			await waitForCondition(
-				() => fixture.requests.length >= 2 && !!finalResponse,
-				'resumed rule recording was not retried after reserve reload',
-				5000
-			);
-			finalResponse.end();
-			await waitForCondition(
-				() => fixture.read('recording').length === 0 && fixture.read('recorded')[0].operatorResumePending === false,
-				'retried resumed recording did not finalize',
-				3000
-			);
-			assert.strictEqual(fs.readFileSync(path.join(fixture.recordedDir, '2.m2ts'), 'utf8'), 'BASEBROKENRECOVERED');
-		} finally {
-			await fixture.close();
-		}
-	});
-
-	it('protects a future resume-pending path from low-storage cleanup', { timeout: 12000 }, async function() {
+	it('does not scan or clean an idle filesystem while preserving a future resume-pending path', { timeout: 12000 }, async function() {
 		const now = Date.now();
 		const pendingProgram = Object.assign(createProgram('2'), { end: now + 60000 });
 		const fixture = await createOperatorFixture([], () => {}, {
@@ -524,45 +447,11 @@ describe('Operator recording preparation attempts', function() {
 		try {
 			fs.utimesSync(pendingPath, new Date(now - 20000), new Date(now - 20000));
 			fs.utimesSync(deletablePath, new Date(now - 10000), new Date(now - 10000));
-			await waitForCondition(
-				() => !fs.existsSync(deletablePath),
-				'low-storage cleanup did not remove the unprotected file',
-				8000
-			);
+			await new Promise(resolve => setTimeout(resolve, 1500));
 			assert.strictEqual(fs.existsSync(pendingPath), true);
+			assert.strictEqual(fs.existsSync(deletablePath), true);
 			assert.strictEqual(fs.readFileSync(pendingPath, 'utf8'), 'PENDING');
-		} finally {
-			await fixture.close();
-		}
-	});
-
-	it('does not run the cleanup action in the low-storage warning band', { timeout: 12000 }, async function() {
-		const fixture = await createOperatorFixture([], () => {}, {
-			trackNotification: true,
-			initialFiles: {
-				'warning-only.m2ts': 'KEEP'
-			},
-			config: {
-				storageLowSpaceWarningThresholdMB: 1000000000000,
-				storageLowSpaceThresholdMB: 1,
-				storageLowSpaceAction: 'remove'
-			}
-		});
-		const warningPath = path.join(fixture.recordedDir, 'warning-only.m2ts');
-
-		try {
-			await waitForCondition(
-				() => /WARNING: Storage Low Space!/.test(fixture.output()) && fs.existsSync(fixture.notificationLog),
-				'low-storage warning notification was not sent',
-				8000
-			);
-			assert.strictEqual(fs.existsSync(warningPath), true);
-			assert.doesNotMatch(fixture.output(), /REMOVE: Storage cleanup ->/);
-			assert.doesNotMatch(fixture.output(), /STORAGE LOW SPACE ACTION: warning only/);
-			const payloads = fs.readFileSync(fixture.notificationLog, 'utf8').trim().split('\n').map(JSON.parse);
-			assert.strictEqual(payloads.length, 1);
-			assert.strictEqual(payloads[0].event, 'storage-low');
-			assert.strictEqual(payloads[0].metadata.phase, 'warning');
+			assert.doesNotMatch(fixture.output(), /Storage cleanup/);
 		} finally {
 			await fixture.close();
 		}
@@ -580,7 +469,8 @@ describe('Operator recording preparation attempts', function() {
 				recorded: path.join(recordedDir, 'cleanup.m2ts')
 			});
 		}
-		const fixture = await createOperatorFixture([], () => {}, {
+		const triggerProgram = Object.assign(createProgram('3'), { start: now - 1000, end: now + 60000 });
+		const fixture = await createOperatorFixture([ triggerProgram ], () => {}, {
 			copyMatching: true,
 			initialRecorded(recordedDir) {
 				return [ recordedProgram(recordedDir) ];

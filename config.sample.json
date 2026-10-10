@@ -3,6 +3,19 @@
   "gid": "video",
   "mirakurunPath": "http+unix://%2Fvar%2Frun%2Fmirakurun.sock/",
   "recordedDir": "./recorded/",
+  "recordedStorage": {
+    "expectedMount": null
+  },
+  "recordedDirs": [
+    {
+      "id": "hdd1",
+      "name": "HDD 1",
+      "path": "/mnt/hdd1/recorded",
+      "storage": {
+        "expectedMount": "/mnt/hdd1"
+      }
+    }
+  ],
   "temporaryDir": null,
   "recordedFormat": "[<date:yymmdd-HHMM>][<type><channel>][<channel-name>]<title>.m2ts",
   "recordedCommand": "",
@@ -16,9 +29,11 @@
   "recordingPriority": 2,
   "conflictedPriority": 1,
   "handoffPrepSeconds": 20,
-  "storageLowSpaceWarningThresholdMB": 3000,
+  "storageLowSpaceWarningThresholdMB": 50000,
+  "storageLowSpaceWarningIntervalMinutes": 1440,
   "storageLowSpaceThresholdMB": 3000,
-  "storageLowSpaceAction": "remove",
+  "storageLowSpaceAction": "stop",
+  "storageLowSpaceCriticalNotifyIntervalMinutes": 60,
   "notificationCommand": null,
   "matchRetentionDays": 90,
   "reserves2RetentionDays": 90,

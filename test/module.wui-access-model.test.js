@@ -273,6 +273,22 @@ describe('WUI access model', function() {
 				path.join(repositoryRoot, 'lib/media-delivery.js'),
 				path.join(libDir, 'media-delivery.js')
 			);
+			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/storage-health.js'),
+				path.join(libDir, 'storage-health.js')
+			);
+			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/storage-low.js'),
+				path.join(libDir, 'storage-low.js')
+			);
+			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/storage-runtime-state.js'),
+				path.join(libDir, 'storage-runtime-state.js')
+			);
+			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/storage-refresh-ipc.js'),
+				path.join(libDir, 'storage-refresh-ipc.js')
+			);
 
 			fs.writeFileSync(
 				path.join(libDir, 'wui-open-host.js'),

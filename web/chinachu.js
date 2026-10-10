@@ -15,6 +15,39 @@
 		apiRoot: app.def.apiRoot
 	});
 
+	app.chinachu.storageHealth = null;
+	app.chinachu.storageHealthSummary = null;
+
+	app.f.updateStorageNavigation = function _updateStorageNavigation(summary) {
+		if (!app.view.sideBody) return;
+		var button = app.view.sideBody.one('page-index-storage');
+		if (!button || !button.entity) return;
+		var element = button.entity;
+		element.removeClassName('storage-navigation-warning');
+		element.removeClassName('storage-navigation-critical');
+		element.removeClassName('storage-navigation-unknown');
+		if (!summary) {
+			element.writeAttribute('title', 'Storage');
+			element.writeAttribute('aria-label', 'Storage');
+			if (button._storageHealthTooltip) button._storageHealthTooltip.html = 'Storage';
+			return;
+		}
+		element.addClassName('storage-navigation-' + summary.level);
+		element.writeAttribute('title', summary.title);
+		element.writeAttribute('aria-label', 'Storage、' + summary.title);
+		if (button._storageHealthTooltip) button._storageHealthTooltip.html = summary.title;
+	};
+
+	app.f.refreshStorageHealth = function _refreshStorageHealth() {
+		chinachu.util.loadStorageHealth();
+	};
+
+	document.observe('chinachu:storage-health', function (event) {
+		app.chinachu.storageHealth = event.memo.data;
+		app.chinachu.storageHealthSummary = event.memo.summary;
+		app.f.updateStorageNavigation(event.memo.summary);
+	});
+
 	app.socket = io(window.location.protocol + '//' + window.location.host, {
 		path: window.location.pathname.replace(/[^\/]*$/g, '') + 'socket.io',
 		// Keep the Socket.IO 2.x transport order: polling first, then WebSocket upgrade.
@@ -93,27 +126,31 @@
 							}
 						})
 					});//<--app.view.sideBody.add
+					var pageButton = app.view.sideBody.one('page-index-' + pageName);
 
 					if (pageName === app.pm.page) {
-						app.view.sideBody.one('page-index-' + pageName).select();
+						pageButton.select();
 
 						if (app.pm.pageData.background) {
-							app.view.sideBody.one('page-index-' + pageName).entity.style.boxShadow = 'inset -2px 0 0 ' + app.pm.pageData.background;
+							pageButton.entity.style.boxShadow = 'inset -2px 0 0 ' + app.pm.pageData.background;
 						}
 					}
 
-					new sakura.ui.Tooltip({
-						target: app.view.sideBody.one('page-index-' + pageName).entity,
+					var pageTooltip = new sakura.ui.Tooltip({
+						target: pageButton.entity,
 						html  : page.label.__()
 					}).render();
+					if (pageName === 'storage') pageButton._storageHealthTooltip = pageTooltip;
 				});//<--each category
 			} else {
 				app.view.middle.entity.addClassName('noside');
 			}
+			app.f.updateStorageNavigation(app.chinachu.storageHealthSummary);
 		});//<--observe sakurapanel:pm:load
 
 		document.observe('sakurapanel:pm:complete', function() {
 			app.pm.enableHashControl();
+			app.f.refreshStorageHealth();
 		});
 
 		// location.hashによるロケーション制御を有効にする
@@ -334,6 +371,7 @@
 		app.view.loadingMask.hide();
 
 		document.fire('chinachu:connect');
+		app.f.refreshStorageHealth();
 	};
 
 	var socketOnDisconnect = function _socketOnDisconnect() {
@@ -455,6 +493,7 @@
 	var socketOnRecording = function _socketOnRecording(data) {
 		app.chinachu.recording = data;
 		document.fire('chinachu:recording', app.chinachu.recording);
+		app.f.refreshStorageHealth();
 	};
 
 	var socketOnNotifyRecording = function () {
@@ -497,6 +536,7 @@
 
 		app.chinachu.recorded = data;
 		document.fire('chinachu:recorded', app.chinachu.recorded);
+		app.f.refreshStorageHealth();
 	};
 
 	var socketOnNotifyRecorded = function () {

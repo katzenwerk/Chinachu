@@ -387,7 +387,7 @@ P = Class.create(P, {
 			color: '#666',
 			lineHeight: '1.5',
 			marginBottom: '6px'
-		}).update('recordedDir とは別に、ルール側で選択できる追加録画先候補を登録します。IDは英数字・ハイフン・アンダースコア推奨です。未使用の場合は空欄のままで保存できます。');
+		}).update('recordedDir とは別に、ルール側で選択できる追加録画先候補を登録します。専用HDDだけ expectedMount を指定すると、マウントを確認できない場合の録画を防止します。通常ディレクトリは空欄のままにします。');
 		var table = new Element('table', { className: 'config2-recorded-dirs-table' }).setStyle({
 			width: '100%',
 			borderCollapse: 'separate',
@@ -406,6 +406,7 @@ P = Class.create(P, {
 			.insert(new Element('th').setStyle({ width: '120px', textAlign: 'left', fontWeight: 'normal', color: '#666' }).update('ID'))
 			.insert(new Element('th').setStyle({ width: '180px', textAlign: 'left', fontWeight: 'normal', color: '#666' }).update('表示名'))
 			.insert(new Element('th').setStyle({ textAlign: 'left', fontWeight: 'normal', color: '#666' }).update('パス'))
+			.insert(new Element('th').setStyle({ textAlign: 'left', fontWeight: 'normal', color: '#666' }).update('expectedMount（任意）'))
 			.insert(new Element('th').setStyle({ width: '54px', textAlign: 'left', fontWeight: 'normal', color: '#666' }).update('操作')));
 
 		table.insert(thead);
@@ -439,6 +440,7 @@ P = Class.create(P, {
 		var idInput = new Element('input', { type: 'text', placeholder: 'recorded1' }).setStyle({ width: '100%', boxSizing: 'border-box' });
 		var nameInput = new Element('input', { type: 'text', placeholder: '録画先1' }).setStyle({ width: '100%', boxSizing: 'border-box' });
 		var pathInput = new Element('input', { type: 'text', placeholder: '/mnt/hdd1/recorded1' }).setStyle({ width: '100%', boxSizing: 'border-box' });
+		var expectedMountInput = new Element('input', { type: 'text', placeholder: '/mnt/hdd1' }).setStyle({ width: '100%', boxSizing: 'border-box' });
 		var removeButton = new Element('button', { type: 'button' }).update('削除');
 		var updatePreview = function () {
 			this.updateRawPreview();
@@ -447,12 +449,15 @@ P = Class.create(P, {
 		idInput.addClassName('config2-recorded-dir-id');
 		nameInput.addClassName('config2-recorded-dir-name');
 		pathInput.addClassName('config2-recorded-dir-path');
+		expectedMountInput.addClassName('config2-recorded-dir-expected-mount');
 
 		idInput.value = dir && typeof dir.id !== 'undefined' ? String(dir.id) : '';
 		nameInput.value = dir && typeof dir.name !== 'undefined' ? String(dir.name) : '';
 		pathInput.value = dir && typeof dir.path !== 'undefined' ? String(dir.path) : '';
+		expectedMountInput.value = dir && dir.storage && typeof dir.storage.expectedMount !== 'undefined' ? String(dir.storage.expectedMount) : '';
+		row._recordedDirStorage = Object.extend({}, dir && dir.storage || {});
 
-		[idInput, nameInput, pathInput].each(function (input) {
+		[idInput, nameInput, pathInput, expectedMountInput].each(function (input) {
 			input.observe('change', updatePreview);
 			input.observe('keyup', updatePreview);
 		});
@@ -467,6 +472,7 @@ P = Class.create(P, {
 		row.insert(new Element('td').insert(idInput));
 		row.insert(new Element('td').insert(nameInput));
 		row.insert(new Element('td').insert(pathInput));
+		row.insert(new Element('td').insert(expectedMountInput));
 		row.insert(new Element('td').insert(removeButton));
 		tbody.insert(row);
 		this.updateRecordedDirRowNumbers(tbody);
@@ -493,11 +499,13 @@ P = Class.create(P, {
 			var idInput = row.down('.config2-recorded-dir-id');
 			var nameInput = row.down('.config2-recorded-dir-name');
 			var pathInput = row.down('.config2-recorded-dir-path');
+			var expectedMountInput = row.down('.config2-recorded-dir-expected-mount');
 			var id = idInput ? String(idInput.value || '').strip() : '';
 			var name = nameInput ? String(nameInput.value || '').strip() : '';
 			var path = pathInput ? String(pathInput.value || '').strip() : '';
+			var expectedMount = expectedMountInput ? String(expectedMountInput.value || '').strip() : '';
 
-			if (!id && !name && !path) {
+			if (!id && !name && !path && !expectedMount) {
 				return;
 			}
 
@@ -516,11 +524,21 @@ P = Class.create(P, {
 				idMap[id] = true;
 			}
 
-			result.push({
+			var item = {
 				id: id,
 				name: name,
 				path: path
-			});
+			};
+			var storage = Object.extend({}, row._recordedDirStorage || {});
+			if (expectedMount) {
+				storage.expectedMount = expectedMount;
+			} else {
+				delete storage.expectedMount;
+			}
+			if (Object.keys(storage).length > 0) {
+				item.storage = storage;
+			}
+			result.push(item);
 		});
 
 		return result;
@@ -538,7 +556,49 @@ P = Class.create(P, {
 
 	createRecordingSection: function _createRecordingSection() {
 		var panel = this.createPanel('録画設定', '保存先、録画ファイル名、囲み文字置換、Unicode正規化、空き容量処理。');
+		var warningThresholdInput = this.numberInput('storageLowSpaceWarningThresholdMB');
+		var lowThresholdInput = this.numberInput('storageLowSpaceThresholdMB');
+		var warningThresholdNote = new Element('div').setStyle({
+			marginTop: '4px',
+			color: '#a45a31',
+			fontSize: '12px'
+		}).update('警告閾値が容量不足閾値以下の場合、容量警告は無効になります。').hide();
+		var warningThresholdWrap = new Element('div');
+		var updateWarningThresholdNote = function () {
+			var warning = Number(warningThresholdInput.value);
+			var low = String(lowThresholdInput.value || '') === '' ? 3000 : Number(lowThresholdInput.value);
+			if (String(warningThresholdInput.value || '') !== '' && isFinite(warning) && warning > 0 &&
+				isFinite(low) && low > 0 && warning <= low) {
+				warningThresholdNote.show();
+			} else {
+				warningThresholdNote.hide();
+			}
+		}.bind(this);
+
+		// The removed legacy checkbox must not silently turn an old explicit OFF into ON.
+		// Present it as an empty threshold; saving migrates it to the threshold-only form.
+		if (this.data.config.storageLowSpaceWarningEnabled === false) {
+			warningThresholdInput.value = '';
+		}
+		warningThresholdInput.writeAttribute('data-config-key', 'storageLowSpaceWarningThresholdMB');
+		warningThresholdInput.addClassName('config2-input');
+		warningThresholdWrap.insert(warningThresholdInput);
+		warningThresholdWrap.insert(warningThresholdNote);
+		warningThresholdInput.observe('change', updateWarningThresholdNote);
+		warningThresholdInput.observe('keyup', updateWarningThresholdNote);
+		lowThresholdInput.observe('change', updateWarningThresholdNote);
+		lowThresholdInput.observe('keyup', updateWarningThresholdNote);
+		var defaultExpectedMount = this.textInput('recordedStorageExpectedMount');
+		var storageActionInput = this.selectInput('storageLowSpaceAction', [
+			{ value: 'remove', label: 'remove - 自動削除' },
+			{ value: 'stop', label: 'stop - 録画停止' }
+		], 'stop - 録画停止（既定）');
+		defaultExpectedMount.value = this.data.config.recordedStorage && this.data.config.recordedStorage.expectedMount || '';
+		if (this.data.config.storageLowSpaceAction !== 'remove') {
+			storageActionInput.value = 'stop';
+		}
 		panel.body.insert(this.createFieldRow('recordedDir', 'recordedDir', this.textInput('recordedDir'), '既存互換のデフォルト録画保存先です。追加録画先候補を登録しても、この値は従来どおり残します。'));
+		panel.body.insert(this.createFieldRow('recordedDir expectedMount', 'recordedStorageExpectedMount', defaultExpectedMount, 'デフォルト録画先が専用mount上にある場合だけ指定します。未指定なら従来どおり通常ディレクトリとして扱い、mountを必須にしません。'));
 		panel.body.insert(this.createRecordedDirsEditor());
 		panel.body.insert(this.createFieldRow('recordedStorageWakeupBeforeSec', 'recordedStorageWakeupBeforeSec', this.numberInput('recordedStorageWakeupBeforeSec'), '録画開始前に録画保存先HDDのスリープ解除を試みる秒数です。0または空欄で無効です。300なら録画開始5分前、600なら10分前に、録画予定ファイル名の末尾へ一時ファイルを作成してすぐ削除します。HDDの起動待ちによる録画冒頭欠けを減らすための設定です。'));
 		panel.body.insert(this.createFieldRow('temporaryDir', 'temporaryDir', this.textInput('temporaryDir'), '録画中や一時処理で使う保存先。recordedDir と分ける場合に指定。recordedDirs とは別用途です。'));
@@ -554,14 +614,18 @@ P = Class.create(P, {
 			{ value: 'NFKC', label: 'NFKC - 見た目もそろえて・くっつける（既定）' },
 			{ value: 'NFKD', label: 'NFKD - 見た目もそろえて・バラバラにする' }
 		], '(未指定: NFKC)'), '予約ルールと番組情報をマッチさせるため、比較前に全角・半角などの文字の取扱いをそろえる設定です。既定はNFKCです。\nNFC: 「か」+「゛」を1文字の「が」にします。一般的なWebサイトやシステムでよく使われる形です。\nNFD: 1文字の「が」を「か」+「゛」に分けます。Macのファイルシステム内部処理などで見られる形です。\nNFKC: 全角/半角の違いや特殊記号を普通の文字に寄せてからくっつけます。検索や入力フォームの表記ゆれ対策向きです。\nNFKD: 特殊記号を普通の文字に寄せたうえで、さらにバラバラに分けます。録画ファイル名の置換とは別です。'));
-		panel.body.insert(this.createFieldRow('storageLowSpaceWarningThresholdMB', 'storageLowSpaceWarningThresholdMB', this.numberInput('storageLowSpaceWarningThresholdMB'), '空き容量の警告閾値(MB)。cleanup閾値以上かつこの値未満では通知だけを行います。未指定時はstorageLowSpaceThresholdMBと同値です。'));
-		panel.body.insert(this.createFieldRow('storageLowSpaceThresholdMB', 'storageLowSpaceThresholdMB', this.numberInput('storageLowSpaceThresholdMB'), '空き容量のcleanup閾値(MB)。この値を下回った場合にstorageLowSpaceActionが動作対象になります。'));
-		panel.body.insert(this.createFieldRow('storageLowSpaceAction', 'storageLowSpaceAction', this.selectInput('storageLowSpaceAction', [
-			{ value: 'none', label: 'none - ログのみ（削除しない）' },
-			{ value: 'stop', label: 'stop - 録画中番組を停止' },
-			{ value: 'remove', label: 'remove' }
-		], '(未指定)'), '空き容量が閾値を下回ったときの本体動作です。removeは config.recordedDir 直下の通常ファイルから、最も古い .ts / .m2ts を1件だけ削除します。サブフォルダ、シンボリックリンク、リンク先、別マウント配下は追跡しません。これらを使う構成では remove を使わず、none と外部の管理処理を使用してください。通知は notificationCommand へ独立して送ります。'));
-		panel.body.insert(this.createFieldRow('notificationCommand', 'notificationCommand', this.textareaInput('notificationCommand', 3), '通知イベントを受け取る実行ファイル。shellを介さず起動し、UTF-8 JSON Linesを標準入力で受け取ります。固定引数が必要な場合は ["/path/to/command","arg"] のJSON配列でも指定できます。同時実行は1件に制限され、60秒でtimeoutします。'));
+		panel.body.insert(new Element('h4').update('容量警告').setStyle({ marginTop: '16px' }));
+		panel.body.insert(this.createFieldRow('storageLowSpaceWarningThresholdMB', null, warningThresholdWrap, '空欄または0でOFFです。正の数値かつ容量不足閾値より大きい場合だけ、通知とWUIの容量警告が有効になります。'));
+		panel.body.insert(this.createFieldRow('storageLowSpaceWarningIntervalMinutes', 'storageLowSpaceWarningIntervalMinutes', this.numberInput('storageLowSpaceWarningIntervalMinutes'), 'Warningが継続する場合の外部通知間隔（分）。未指定時は従来互換の180分です。'));
+		panel.body.insert(this.createFieldRow('notificationCommand', 'notificationCommand', this.textareaInput('notificationCommand', 3), 'Warning・Lowおよび他イベントで共通利用する通知コマンドです。shellを介さず、UTF-8 JSON Linesを標準入力へ渡します。同時実行は1件、timeoutは60秒です。'));
+		panel.body.insert(new Element('h4').update('容量不足時の処置').setStyle({ marginTop: '16px' }));
+		panel.body.insert(this.createFieldRow('storageLowSpaceThresholdMB', 'storageLowSpaceThresholdMB', lowThresholdInput, '空き容量のLow閾値(MB)。未指定時の実効値は3000MBです。この値を下回ると選択した処置を実行します。'));
+		panel.body.insert(this.createFieldRow('storageLowSpaceAction', 'storageLowSpaceAction', storageActionInput, '自動削除: config.recordedDir直下の通常.ts/.m2tsを古い順に1件ずつ削除します。サブフォルダ、symlink、別mountは対象外です。削除不能・候補枯渇時は対象filesystemへの録画を停止します。録画停止: 対象filesystemへの録画を停止し、新規開始も抑止します。旧none・未指定・不正値はstopとして扱い、保存時にstopへ正規化します。'));
+		panel.body.insert(this.createFieldRow('storageLowSpaceCriticalNotifyIntervalMinutes', 'storageLowSpaceCriticalNotifyIntervalMinutes', this.numberInput('storageLowSpaceCriticalNotifyIntervalMinutes'), 'Lowが継続する場合の外部通知間隔（分）。Warningとは独立し、未指定時は従来互換の180分です。'));
+		panel.body.insert(new Element('div', { className: 'sakura-alert sakura-alert-info' }).setStyle({ marginTop: '10px', marginBottom: '0' }).update(
+			'保存後、設定画面の値は直ちに更新されます。Storage API・ゲージ・TOP表示にはWUIの再起動、Warning / Low判定にはOperatorの再起動が必要です。画面側のStorage情報キャッシュは15秒ですが、再起動の代わりにはなりません。'
+		));
+		updateWarningThresholdNote();
 		return panel;
 	},
 
@@ -1115,6 +1179,8 @@ P = Class.create(P, {
 			wuiOpenPort: true,
 			storageLowSpaceWarningThresholdMB: true,
 			storageLowSpaceThresholdMB: true,
+			storageLowSpaceWarningIntervalMinutes: true,
+			storageLowSpaceCriticalNotifyIntervalMinutes: true,
 			recordedStorageWakeupBeforeSec: true,
 			matchRetentionDays: true,
 			reserves2RetentionDays: true,
@@ -1170,6 +1236,32 @@ P = Class.create(P, {
 				return;
 			}
 			config[key] = value;
+		});
+
+		var defaultExpectedMount = String(config.recordedStorageExpectedMount || '').strip();
+		delete config.recordedStorageExpectedMount;
+		var defaultStorage = Object.extend({}, config.recordedStorage || {});
+		if (defaultExpectedMount) {
+			defaultStorage.expectedMount = defaultExpectedMount;
+		} else {
+			delete defaultStorage.expectedMount;
+		}
+		if (Object.keys(defaultStorage).length > 0) {
+			config.recordedStorage = defaultStorage;
+		} else {
+			delete config.recordedStorage;
+		}
+
+		config.storageLowSpaceAction = config.storageLowSpaceAction === 'remove' ? 'remove' : 'stop';
+		delete config.storageLowSpaceWarningEnabled;
+		if (typeof config.storageLowSpaceWarningThresholdMB !== 'undefined' &&
+			(!isFinite(config.storageLowSpaceWarningThresholdMB) || config.storageLowSpaceWarningThresholdMB < 0)) {
+			errors.push('storageLowSpaceWarningThresholdMB は0以上の数値で指定してください。');
+		}
+		['storageLowSpaceThresholdMB', 'storageLowSpaceWarningIntervalMinutes', 'storageLowSpaceCriticalNotifyIntervalMinutes'].each(function (key) {
+			if (typeof config[key] !== 'undefined' && (!isFinite(config[key]) || config[key] <= 0)) {
+				errors.push(key + ' は0より大きい数値で指定してください。');
+			}
 		});
 
 		['recordedStorageWakeupBeforeSec', 'matchRetentionDays', 'reserves2RetentionDays', 'recordedHistoryRetentionDays'].each(function (key) {
@@ -1236,7 +1328,7 @@ P = Class.create(P, {
 		}
 		var modal = flagrate.createModal({
 			title: '設定の保存',
-			text : 'config.json を保存します。設定を反映させるにはサービスの再起動やスケジューラー再実行が必要な場合があります。',
+			text : 'config.json を保存します。Storage表示にはWUI、容量判定にはOperatorの再起動が必要です。この画面から自動再起動は行いません。',
 			buttons: [
 				{
 					label: '保存',
@@ -1263,7 +1355,7 @@ P = Class.create(P, {
 				modal.close();
 			},
 			onSuccess: function () {
-				flagrate.createModal({ title: '完了', text: '設定を保存しました。反映には再起動またはスケジューラー再実行が必要な場合があります。' }).open();
+				flagrate.createModal({ title: '完了', text: '設定を保存しました。Storage表示にはWUI、容量判定にはOperatorの再起動が必要です。' }).open();
 				this.data.config = json.evalJSON();
 				this.render();
 			}.bind(this),

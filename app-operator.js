@@ -16,6 +16,8 @@ const RESERVES2_DATA_FILE = __dirname + '/data/reserves2.json';
 const RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 const RECORDED_DATA_FILE  = __dirname + '/data/recorded.json';
 const MATCH_DATA_FILE     = __dirname + '/data/match.json';
+const STORAGE_STATE_FILE  = __dirname + '/data/storage-state.json';
+const STORAGE_REFRESH_SOCKET = __dirname + '/data/storage-refresh.sock';
 const SCHEDULER_STATE_FILE = __dirname + '/data/scheduler-state.json';
 const LEGACY_SCHEDULER_STATE_FILE = __dirname + '/data/epg-scheduler-state.json';
 
@@ -66,6 +68,11 @@ const dateFormat = require('dateformat').default;
 const notification = require('./lib/notification');
 const recordingAttempt = require('./lib/recording-attempt');
 const storageLow = require('./lib/storage-low');
+const storageHealth = require('./lib/storage-health');
+const { StorageMonitor } = require('./lib/storage-monitor');
+const storageRuntimeState = require('./lib/storage-runtime-state');
+const storageRefreshIpc = require('./lib/storage-refresh-ipc');
+const storageManualRefresh = require('./lib/storage-manual-refresh');
 const matchOutput = require('./lib/match-output');
 const runtimePrivileges = require('./lib/runtime-privileges');
 const mirakurunConnection = require('./lib/mirakurun-connection');
@@ -90,18 +97,31 @@ const config = require(CONFIG_FILE);
 
 // settings
 const schedulerIntervalTime = 1000 * 60 * 10;// 最長10分毎
-const notifyIntervalTime = 1000 * 60 * 60 * 3;// 3時間毎
 const prepTime = getHandoffPrepMillis();// 録画開始前の準備猶予
 const endLackMaxSeconds = getEndLackMaxSeconds();// LACKで削ってよい最大秒数
 const recordingExpireGraceTime = 1000 * 60 * 5;// 終了後5分で録画中固着を掃除
 const recordingPriority = config.recordingPriority || 2;
 const conflictedPriority = config.conflictedPriority || 1;
-const storageLowSpaceThresholdMB = config.storageLowSpaceThresholdMB || 3000;// 3 GB
-const storageLowSpaceWarningThresholdMB = typeof config.storageLowSpaceWarningThresholdMB === 'number' ?
-	config.storageLowSpaceWarningThresholdMB : storageLowSpaceThresholdMB;
-const storageLowSpaceAction = config.storageLowSpaceAction || "remove"; // "none" | "stop" | "remove"
+const storageThresholds = storageLow.resolveStorageThresholds(config);
+const storageLowSpaceThresholdMB = storageThresholds.cleanupThresholdMB;
+const storageLowSpaceWarningThresholdMB = storageThresholds.warningThresholdMB;
+const storageLowSpaceWarningEnabled = storageThresholds.warningEnabled;
+const storageLowSpaceWarningIntervalMinutes = storageLow.resolvePositiveNumber(
+	config.storageLowSpaceWarningIntervalMinutes,
+	180
+);
+const storageLowSpaceWarningIntervalTime = storageLowSpaceWarningIntervalMinutes * 60 * 1000;
+const storageLowSpaceCriticalNotifyIntervalMinutes = storageLow.resolvePositiveNumber(
+	config.storageLowSpaceCriticalNotifyIntervalMinutes,
+	180
+);
+const storageLowSpaceCriticalNotifyIntervalTime = storageLowSpaceCriticalNotifyIntervalMinutes * 60 * 1000;
+const storageLowSpaceConfiguredAction = config.storageLowSpaceAction;
+const storageLowSpaceAction = storageLow.normalizeAction(storageLowSpaceConfiguredAction);
 const notificationSettings = notification.resolveNotificationCommand(config);
-const sendNotification = notification.createNotificationSender(notificationSettings.command, { log: operatorLog });
+const sendNotification = notification.createNotificationQueue(
+	notification.createNotificationSender(notificationSettings.command, { log: operatorLog })
+);
 const recordedStorageWakeupBeforeSec = getRecordedStorageWakeupBeforeSec();// 録画開始前HDD起動秒数。0/null/未指定は無効
 const recordedStorageWakeupBeforeTime = recordedStorageWakeupBeforeSec * 1000;
 const mirakurunDropCheckIntervalTime = getMirakurunDropCheckIntervalTime();// 録画中drop監視間隔。0以下で無効
@@ -229,6 +249,29 @@ mirakurun.priority = recordingPriority;
 console.info(mirakurun);
 
 notificationSettings.warnings.forEach(message => operatorLog('WARNING: ' + message));
+if (typeof config.storageLowSpaceThresholdMB !== 'undefined' && config.storageLowSpaceThresholdMB !== storageLowSpaceThresholdMB) {
+	operatorLog('WARNING: storageLowSpaceThresholdMB is invalid; using ' + storageLowSpaceThresholdMB + ' MB.');
+}
+if (typeof config.storageLowSpaceWarningThresholdMB !== 'undefined' && storageLowSpaceWarningThresholdMB === null) {
+	operatorLog('WARNING: storageLowSpaceWarningThresholdMB is not a positive number; capacity warning is disabled.');
+} else if (storageThresholds.legacyWarningDisabled) {
+	operatorLog('WARNING: capacity warning is disabled by legacy storageLowSpaceWarningEnabled=false.');
+} else if (storageLowSpaceWarningThresholdMB !== null && !storageLowSpaceWarningEnabled) {
+	operatorLog('WARNING: storageLowSpaceWarningThresholdMB is not greater than storageLowSpaceThresholdMB; capacity warning is disabled.');
+}
+if (typeof config.storageLowSpaceWarningIntervalMinutes !== 'undefined' && config.storageLowSpaceWarningIntervalMinutes !== storageLowSpaceWarningIntervalMinutes) {
+	operatorLog('WARNING: storageLowSpaceWarningIntervalMinutes is invalid; using ' + storageLowSpaceWarningIntervalMinutes + ' minutes.');
+}
+if (typeof config.storageLowSpaceCriticalNotifyIntervalMinutes !== 'undefined' && config.storageLowSpaceCriticalNotifyIntervalMinutes !== storageLowSpaceCriticalNotifyIntervalMinutes) {
+	operatorLog('WARNING: storageLowSpaceCriticalNotifyIntervalMinutes is invalid; using ' + storageLowSpaceCriticalNotifyIntervalMinutes + ' minutes.');
+}
+if (typeof storageLowSpaceConfiguredAction === 'undefined') {
+	operatorLog('WARNING: storageLowSpaceAction is not configured; using stop.');
+} else if (storageLowSpaceConfiguredAction === 'none') {
+	operatorLog('WARNING: storageLowSpaceAction none is deprecated; using stop without rewriting config.json.');
+} else if (storageLowSpaceConfiguredAction !== 'remove' && storageLowSpaceConfiguredAction !== 'stop') {
+	operatorLog('WARNING: Unknown storageLowSpaceAction `' + storageLowSpaceConfiguredAction + '`; using stop.');
+}
 
 // 初回起動や clean 環境向けに、不足している台帳JSONだけを作成する
 reservationStore.ensureArrayFile(RESERVES_DATA_FILE);
@@ -242,8 +285,19 @@ fs.writeFileSync(RECORDING_DATA_FILE, '[]');
 
 // 保存先ディレクトリが存在しない場合には作成
 if (!fs.existsSync(config.recordedDir)) {
-	operatorLog('MKDIR: ' + config.recordedDir);
-	fs.mkdirSync(config.recordedDir, { recursive: true });
+	const defaultDestination = storageHealth.findDestination(config, null);
+	const defaultHealth = defaultDestination && storageHealth.inspectDestination(defaultDestination, {
+		warningEnabled: storageLowSpaceWarningEnabled,
+		warningThresholdMB: storageLowSpaceWarningThresholdMB,
+		cleanupThresholdMB: storageLowSpaceThresholdMB,
+		checkCapacity: false
+	});
+	if (!defaultDestination || !defaultDestination.protected || (defaultHealth && defaultHealth.canCreate)) {
+		operatorLog('MKDIR: ' + config.recordedDir);
+		fs.mkdirSync(config.recordedDir, { recursive: true });
+	} else {
+		operatorLog('WARNING: MKDIR blocked by Storage Health: ' + config.recordedDir + ' (' + defaultHealth.status + ')');
+	}
 }
 
 // Tweeter (Experimental)
@@ -257,11 +311,20 @@ let clock = Date.now();
 let scheduler = null;
 let schedulerStartedAt = 0;
 let scheduled = 0;
-let stChecked = 0;
-const stNotified = {
-	warning: 0,
-	cleanup: 0
-};
+const storageMonitor = new StorageMonitor({
+	inspect: storageHealth.inspectDestination,
+	checkIntervalMs: 20000,
+	inspectOptions: {
+		warningEnabled: storageLowSpaceWarningEnabled,
+		warningThresholdMB: storageLowSpaceWarningThresholdMB,
+		cleanupThresholdMB: storageLowSpaceThresholdMB
+	}
+});
+let storageCleanupState = {};
+let storageLastPersistedRevision = -1;
+let storageDisplaySnapshots = loadStorageDisplaySnapshots();
+const runManualStorageRefresh = storageManualRefresh.createSingleFlight(handleManualStorageRefresh);
+let storageRefreshServer = null;
 let recordingChecked = 0;
 let recordedStorageWakeupHistory = {};
 let mirakurunDropChecked = 0;
@@ -415,10 +478,7 @@ operatorInterval = setInterval(() => {
 		}
 	}
 
-	if (clock - stChecked > 1000 * 20) {
-		storageChecker();
-		stChecked = clock;
-	}
+	checkActiveRecordingStorage();
 
 	if (clock - recordingChecked > 1000 * 30) {
 		recordingStaleChecker();
@@ -698,6 +758,10 @@ function shutdownOperator(signal) {
 		clearInterval(operatorInterval);
 		operatorInterval = null;
 	}
+	if (storageRefreshServer) {
+		storageRefreshServer.close();
+		storageRefreshServer = null;
+	}
 
 	epgJobReconciler.stop();
 	epgJobWatcher.stop();
@@ -735,30 +799,6 @@ function shutdownOperator(signal) {
 // 番組ログ用
 function printProgram(program) {
 	return `#${program.id} ${dateFormat(new Date(program.start), "isoDateTime")} [${program.channel.name}] ${program.title}`
-}
-
-// ストレージ容量取得
-// Node.js 18.15.0 以降の fs.statfs() を使用し、diskusage 依存を避ける
-function getDiskUsage(targetPath, callback) {
-	if (typeof fs.statfs !== 'function') {
-		callback(new Error('fs.statfs is not available. Node.js v18.15.0 or later is required.'));
-		return;
-	}
-
-	fs.statfs(targetPath, (err, stats) => {
-		if (err) {
-			callback(err);
-			return;
-		}
-
-		const blockSize = stats.bsize || stats.frsize;
-
-		callback(null, {
-			available: stats.bavail * blockSize,
-			free: stats.bfree * blockSize,
-			total: stats.blocks * blockSize
-		});
-	});
 }
 
 // 録画中リストを書き込む
@@ -1095,6 +1135,95 @@ function getRecordedPath(program) {
 	return joinRecordedPath(getRecordedDir(program), recordedName);
 }
 
+// expectedMountのmount guardと、Low対象filesystemの録画開始guardを適用する。
+// 未設定の従来録画先にはmount必須条件を適用しない。
+function ensureRecordingDestinationHealthy(program, allowCreate) {
+	if (program && typeof program.recordedDirId === 'string' && program.recordedDirId.trim() !== '' &&
+		(typeof program.recordedDir !== 'string' || program.recordedDir.trim() === '')) {
+		const now = Date.now();
+		if (!program._storageHealthRetryAt || now >= program._storageHealthRetryAt) {
+			operatorLog('WARNING: Recording destination blocked by Storage Health: unresolved recordedDirId `' +
+				program.recordedDirId + '`; default fallback is disabled.');
+			Object.defineProperty(program, '_storageHealthRetryAt', {
+				enumerable: false,
+				configurable: true,
+				writable: true,
+				value: now + 5000
+			});
+		}
+		return false;
+	}
+
+	const destination = storageHealth.findDestination(config, program);
+	if (!destination) {
+		return false;
+	}
+
+	let health = storageMonitor.check(destination, { now: Date.now() });
+
+	if (allowCreate && health.status === 'missing' && health.canCreate) {
+		try {
+			operatorLog('MKDIR: ' + destination.path);
+			fs.mkdirSync(destination.path, { recursive: true });
+			health = storageMonitor.check(destination, { now: Date.now(), force: true });
+		} catch (error) {
+			health.status = error.code === 'EROFS' ? 'read-only' : 'unknown';
+			health.detail = error.message;
+		}
+	}
+
+	if (health.filesystemKey) {
+		Object.defineProperty(program, '_storageFilesystemKey', {
+			enumerable: false,
+			configurable: true,
+			writable: true,
+			value: health.filesystemKey
+		});
+	}
+
+	if (health.filesystemKey && health.capacityCheckedAt) {
+		handleStorageGroup(health, destination);
+	} else {
+		persistStorageRuntimeState();
+	}
+
+	if (health.stopNewRecordings === true) {
+		const now = Date.now();
+		if (!program || !program._storageHealthRetryAt || now >= program._storageHealthRetryAt) {
+			operatorLog('WARNING: Recording destination blocked by Storage: ' + destination.path +
+				' (' + (health.phase || health.status || 'unknown') + ', action=' + storageLowSpaceAction + ')');
+			if (program) {
+				Object.defineProperty(program, '_storageHealthRetryAt', {
+					enumerable: false,
+					configurable: true,
+					writable: true,
+					value: now + 5000
+				});
+			}
+		}
+		return false;
+	}
+
+	if (health.status === 'ok' || health.status === 'low-space') {
+		return true;
+	}
+
+	const now = Date.now();
+	if (!program || !program._storageHealthRetryAt || now >= program._storageHealthRetryAt) {
+		operatorLog('WARNING: Recording destination blocked by Storage Health: ' + destination.path +
+			' (' + health.status + (health.detail ? ': ' + health.detail : '') + ')');
+		if (program) {
+			Object.defineProperty(program, '_storageHealthRetryAt', {
+				enumerable: false,
+				configurable: true,
+				writable: true,
+				value: now + 5000
+			});
+		}
+	}
+	return false;
+}
+
 // 録画保存先HDDを起こす対象か確認する
 function shouldWakeRecordedStorage(program) {
 	if (recordedStorageWakeupBeforeTime <= 0) {
@@ -1149,6 +1278,9 @@ function wakeRecordedStorage(program) {
 	let wakeFile = null;
 
 	try {
+		if (!ensureRecordingDestinationHealthy(program, true)) {
+			return false;
+		}
 		const recPath = getRecordedPath(program);
 		const targetDir = path.dirname(recPath);
 
@@ -1744,6 +1876,9 @@ function prepRecord(program) {
 	if (program._operatorNg || program._operatorAbort || clock > program.end) {
 		return;
 	}
+	if (!ensureRecordingDestinationHealthy(program, true)) {
+		return;
+	}
 
 	const interrupted = getResumableInterruptedRecording(program);
 	if (interrupted) {
@@ -1864,6 +1999,12 @@ function doRecord(program, stream) {
 		safeAbortStream(stream, 'drop record');
 		return;
 	}
+	if (!ensureRecordingDestinationHealthy(program, false)) {
+		operatorLog('DROP RECORD: unsafe recording destination: ' + printProgram(program));
+		safeAbortStream(stream, 'unsafe recording destination');
+		removeRecording(program.id, 'STORAGE HEALTH BLOCK');
+		return;
+	}
 
 	operatorLog('RECORD: ' + printProgram(program));
 
@@ -1956,6 +2097,9 @@ function doRecord(program, stream) {
 	recFile.once('close', () => {
 		recFile.removeListener('error', onOutputError);
 		activeRecordingOutputs.delete(recFile);
+		if (!shutdownStarted) {
+			checkStorageAfterRecordingClose(program);
+		}
 		if (probeDurationAfterClose && !shutdownStarted) {
 			probeRecordedDuration(recPath, duration => {
 				if (duration !== null) {
@@ -2140,19 +2284,19 @@ function getRecordingPathSet() {
 	return paths;
 }
 
-// config.recordedDir 直下の古い録画ファイルを1件探す
-// サブディレクトリ、シンボリックリンク、リンク先、別マウント配下は追わない
-function findOldestRecordedFileInRecordedDir() {
+// config.recordedDir 直下の古い録画ファイルを探す。
+// サブディレクトリ、シンボリックリンク、リンク先、別マウント配下は追わない。
+function findRecordedCleanupCandidates(limit) {
 	const baseDir = config.recordedDir;
 	let entries;
-	let oldest = null;
+	const candidates = [];
 	const recordingPaths = getRecordingPathSet();
 
 	try {
 		entries = fs.readdirSync(baseDir);
 	} catch (e) {
 		operatorLog('WARNING: Storage cleanup scan failed: ' + e.message);
-		return null;
+		return [];
 	}
 
 	for (let i = 0, l = entries.length; i < l; i++) {
@@ -2182,16 +2326,20 @@ function findOldestRecordedFileInRecordedDir() {
 			continue;
 		}
 
-		if (oldest === null || stats.mtimeMs < oldest.mtimeMs) {
-			oldest = {
-				path: filePath,
-				mtimeMs: stats.mtimeMs,
-				size: stats.size
-			};
-		}
+		candidates.push({
+			path: filePath,
+			name: path.basename(filePath),
+			mtimeMs: stats.mtimeMs,
+			size: stats.size
+		});
 	}
 
-	return oldest;
+	candidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
+	return candidates.slice(0, typeof limit === 'number' && limit > 0 ? limit : candidates.length);
+}
+
+function findOldestRecordedFileInRecordedDir() {
+	return findRecordedCleanupCandidates(1)[0] || null;
 }
 
 // 実ファイル削除後、recorded.json 側に同一パスの記録が残っていれば整合更新する
@@ -2265,76 +2413,361 @@ function removeOldestRecordedFileInRecordedDir() {
 	}
 }
 
-// ストレージチェック
-function storageChecker() {
+function getProgramStorageFilesystemId(program) {
+	return program && program._storageFilesystemKey || null;
+}
 
-	getDiskUsage(config.recordedDir, (err, info) => {
-		if (err) {
-			operatorLog('WARNING: Storage check failed: ' + err.message);
-			return;
+function stopRecordingsOnFilesystem(filesystemKey) {
+	storageLow.stopCurrentRecordings(
+		recording,
+		stopRecording,
+		program => {
+			const programFilesystemKey = getProgramStorageFilesystemId(program);
+			if (!programFilesystemKey) {
+				return null;
+			}
+			return programFilesystemKey === filesystemKey;
+		},
+		program => operatorLog('WARNING: Low Storage stop skipped because recording destination is unknown: ' + printProgram(program))
+	);
+}
+
+const storageNotificationPending = {};
+
+function isDefaultStorageGroup(group) {
+	return group && group.destinations.some(destination => path.resolve(destination) === path.resolve(config.recordedDir));
+}
+
+function getStorageSnapshotCompatibility() {
+	return {
+		action: storageLowSpaceAction,
+		warningEnabled: storageLowSpaceWarningEnabled,
+		warningMB: storageLowSpaceWarningThresholdMB,
+		cleanupMB: storageLowSpaceThresholdMB
+	};
+}
+
+function createUnobservedStorageState(destination) {
+	return {
+		id: destination.id || null,
+		name: destination.name,
+		path: destination.path,
+		configuredPath: destination.configuredPath,
+		expectedMount: destination.expectedMount,
+		status: 'unobserved',
+		detail: 'Capacity has not been checked by an Operator storage event.',
+		filesystemKey: null,
+		capacityReliable: false,
+		capacityCheckedAt: null,
+		total: null,
+		used: null,
+		available: null,
+		lowSpacePhase: null,
+		stopNewRecordings: false
+	};
+}
+
+function loadStorageDisplaySnapshots() {
+	const configured = storageHealth.getDestinations(config);
+	const state = storageRuntimeState.readCompatibleSnapshot(
+		fs,
+		STORAGE_STATE_FILE,
+		getStorageSnapshotCompatibility()
+	);
+	const snapshots = new Map();
+	if (!state) return snapshots;
+	configured.forEach(destination => {
+		const saved = state.storages.find(storage => storageRuntimeState.matchesDestination(storage, destination));
+		if (saved) snapshots.set(storageRuntimeState.destinationToken(destination), Object.assign({}, saved));
+	});
+	return snapshots;
+}
+
+function chooseStorageDisplayState(destination, observed) {
+	const token = storageRuntimeState.destinationToken(destination);
+	const cached = storageDisplaySnapshots.get(token);
+	if (!observed) return cached || createUnobservedStorageState(destination);
+	if (!cached || !storageRuntimeState.matchesDestination(cached, destination)) return observed;
+	if (Number(cached.capacityCheckedAt) > Number(observed.capacityCheckedAt)) return cached;
+	if (!observed.filesystemKey || !cached.filesystemKey ||
+		observed.filesystemKey !== cached.filesystemKey ||
+		observed.mountFingerprint !== cached.mountFingerprint) return observed;
+	return observed;
+}
+
+function persistStorageRuntimeState(force) {
+	const revision = storageMonitor.getRevision();
+	if (force !== true && revision === storageLastPersistedRevision) return;
+	const configured = storageHealth.getDestinations(config);
+	const observed = storageMonitor.getDestinationStates();
+	const observedByToken = new Map();
+	observed.forEach(storage => {
+		observedByToken.set(storage.id ? 'id:' + storage.id : 'path:' + path.resolve(storage.path), storage);
+	});
+	const storages = configured.map(destination => {
+		const token = destination.id ? 'id:' + destination.id : 'path:' + path.resolve(destination.path);
+		const selected = chooseStorageDisplayState(destination, observedByToken.get(token));
+		const result = Object.assign({}, selected, {
+			id: destination.id || null,
+			name: destination.name,
+			path: destination.path,
+			configuredPath: destination.configuredPath,
+			expectedMount: destination.expectedMount
+		});
+		storageDisplaySnapshots.set(storageRuntimeState.destinationToken(destination), result);
+		return result;
+	});
+	const state = {
+		schemaVersion: 3,
+		updatedAt: Date.now(),
+		action: storageLowSpaceAction,
+		thresholds: {
+			warningEnabled: storageLowSpaceWarningEnabled,
+			warningMB: storageLowSpaceWarningThresholdMB,
+			cleanupMB: storageLowSpaceThresholdMB
+		},
+		filesystems: storageMonitor.toJSON(),
+		storages: storages
+	};
+	Object.keys(storageCleanupState).forEach(filesystemKey => {
+		const cleanup = storageCleanupState[filesystemKey];
+		const group = state.filesystems.find(item => item.filesystemKey === filesystemKey);
+		if (group && cleanup && cleanup.mountFingerprint === group.mountFingerprint) Object.assign(group, cleanup);
+		state.storages.forEach(storage => {
+			if (storage.filesystemKey === filesystemKey && cleanup && cleanup.mountFingerprint === storage.mountFingerprint) Object.assign(storage, cleanup);
+		});
+	});
+
+	try {
+		storageRuntimeState.atomicWriteJson(fs, STORAGE_STATE_FILE, state);
+		storageLastPersistedRevision = revision;
+	} catch (error) {
+		operatorLog('WARNING: Storage runtime state write failed: ' + error.message);
+	}
+}
+
+function notifyStorageGroup(group) {
+	if (!group || !group.phase || !notificationSettings.command || storageNotificationPending[group.filesystemKey]) return;
+	const phase = group.phase;
+	const intervalTime = phase === 'cleanup' ? storageLowSpaceCriticalNotifyIntervalTime : storageLowSpaceWarningIntervalTime;
+	const notified = {
+		warning: group.warningNotifiedAt || 0,
+		cleanup: group.cleanupNotifiedAt || 0
+	};
+	if (!notification.shouldSendStorageLowPhaseNotification(notificationSettings.source, phase, clock, notified, intervalTime)) return;
+
+	const thresholdMB = phase === 'cleanup' ? storageLowSpaceThresholdMB : storageLowSpaceWarningThresholdMB;
+	const payload = notification.createStorageLowNotification({
+		availableBytes: group.availableBytes,
+		availableMB: group.availableBytes / 1024 / 1024,
+		thresholdMB: thresholdMB,
+		recordedDir: group.destinations[0] || config.recordedDir,
+		action: storageLowSpaceAction,
+		severity: phase === 'cleanup' ? 'critical' : 'warning',
+		phase: phase,
+		filesystemKey: group.filesystemKey,
+		recordedDirIds: group.recordedDirIds,
+		destinations: group.destinations
+	});
+	storageNotificationPending[group.filesystemKey] = true;
+	sendNotification(payload).then(result => {
+		if (result && result.ok === true) {
+			storageMonitor.setNotificationTime(group.filesystemKey, phase, Date.now());
+			persistStorageRuntimeState(true);
 		}
-
-		const freeMB = info.available / 1024 / 1024;
-		const phase = storageLow.getPhase(freeMB, storageLowSpaceThresholdMB, storageLowSpaceWarningThresholdMB);
-		if (phase) {
-			const thresholdMB = phase === 'cleanup' ? storageLowSpaceThresholdMB : storageLowSpaceWarningThresholdMB;
-			const severity = phase === 'cleanup' ? 'critical' : 'warning';
-
-			if (phase === 'cleanup') {
-				stChecked = 0;// すぐに再チェックするため
-				operatorLog(`ALERT: Storage Low Space! (${freeMB} MB < ${storageLowSpaceThresholdMB} MB)`);
-			}
-
-			// 1. 外部通知コマンド実行
-			const shouldNotify = notification.shouldSendStorageLowPhaseNotification(
-				notificationSettings.source,
-				phase,
-				clock,
-				stNotified,
-				notifyIntervalTime
-			);
-			if (notificationSettings.command && shouldNotify) {
-				const notifiedAt = clock;
-
-				if (phase === 'warning') {
-					operatorLog(`WARNING: Storage Low Space! (${freeMB} MB < ${storageLowSpaceWarningThresholdMB} MB)`);
-				}
-
-				const payload = notification.createStorageLowNotification({
-					availableBytes: info.available,
-					availableMB: freeMB,
-					thresholdMB: thresholdMB,
-					recordedDir: config.recordedDir,
-					action: storageLowSpaceAction,
-					severity: severity,
-					phase: phase
-				});
-
-				// 別段階の通知が実行中でsingle-flightによりskipされた場合は、次回checkで再試行可能にする。
-				if (notificationSettings.source === 'notificationCommand') {
-					notification.sendStorageLowPhaseNotification(sendNotification, payload, phase, notifiedAt, stNotified);
-				} else {
-					sendNotification(payload);
-				}
-			}
-
-			// 2. アクション
-			if (phase === 'warning') {
-				return;
-			} else if (storageLowSpaceAction === "stop") {
-				// 録画停止
-				storageLow.stopCurrentRecordings(recording, stopRecording);
-			} else if (storageLowSpaceAction === "remove") {
-				// config.recordedDir 直下の最古 ts/m2ts を1件削除する
-				removeOldestRecordedFileInRecordedDir();
-			} else if (storageLowSpaceAction === "none") {
-				operatorLog('STORAGE LOW SPACE ACTION: none');
-			} else {
-				operatorLog('WARNING: Unknown storageLowSpaceAction: ' + storageLowSpaceAction);
-			}
-		}
+	}).finally(() => {
+		delete storageNotificationPending[group.filesystemKey];
 	});
 }
+
+function handleStorageGroup(group) {
+	if (!group || !group.filesystemKey) return;
+	if (group._handledCapacityCheckedAt === group.capacityCheckedAt) {
+		persistStorageRuntimeState();
+		return;
+	}
+	Object.defineProperty(group, '_handledCapacityCheckedAt', {
+		enumerable: false,
+		configurable: true,
+		writable: true,
+		value: group.capacityCheckedAt
+	});
+	const freeMB = group.availableBytes / 1024 / 1024;
+	if (group.phase === 'cleanup') {
+		operatorLog(`ALERT: Storage Low Space! (${freeMB} MB < ${storageLowSpaceThresholdMB} MB) filesystem=${group.filesystemKey}`);
+	} else if (group.phase === 'warning') {
+		operatorLog(`WARNING: Storage Low Space! (${freeMB} MB < ${storageLowSpaceWarningThresholdMB} MB) filesystem=${group.filesystemKey}`);
+	}
+	notifyStorageGroup(group);
+	if (group.phase !== 'cleanup') {
+		persistStorageRuntimeState();
+		return;
+	}
+
+	let shouldStopRecordings = storageLowSpaceAction === 'stop';
+	if (storageLowSpaceAction === 'remove' && isDefaultStorageGroup(group)) {
+		const previous = storageCleanupState[group.filesystemKey];
+		if (!previous || previous.handledCapacityCheckedAt !== group.capacityCheckedAt) {
+			const candidates = findRecordedCleanupCandidates(5);
+			storageCleanupState[group.filesystemKey] = {
+				mountFingerprint: group.mountFingerprint,
+				cleanupCandidateSource: true,
+				cleanupCandidates: candidates.map(candidate => ({ name: candidate.name, size: candidate.size, mtimeMs: candidate.mtimeMs })),
+				cleanupCandidatesCheckedAt: Date.now(),
+				handledCapacityCheckedAt: group.capacityCheckedAt
+			};
+			if (candidates.length > 0 && removeOldestRecordedFileInRecordedDir()) {
+				storageCleanupState[group.filesystemKey].cleanupCandidates = findRecordedCleanupCandidates(5).map(candidate => ({
+					name: candidate.name, size: candidate.size, mtimeMs: candidate.mtimeMs
+				}));
+			} else {
+				operatorLog('WARNING: Storage cleanup cannot safely free space; stopping recordings on the low filesystem.');
+				shouldStopRecordings = true;
+			}
+		}
+	} else if (storageLowSpaceAction === 'remove') {
+		operatorLog('WARNING: Storage cleanup is limited to the default filesystem; stopping recordings on the low filesystem.');
+		shouldStopRecordings = true;
+	}
+
+	group.stopNewRecordings = true;
+	if (shouldStopRecordings) stopRecordingsOnFilesystem(group.filesystemKey);
+	persistStorageRuntimeState();
+}
+
+function checkActiveRecordingStorage() {
+	const checked = new Set();
+	recording.slice().forEach(program => {
+		const filesystemKey = getProgramStorageFilesystemId(program);
+		if (!filesystemKey || checked.has(filesystemKey)) return;
+		checked.add(filesystemKey);
+		const destination = storageHealth.findDestination(config, program);
+		if (!destination) return;
+		const group = storageMonitor.check(destination, { now: Date.now() });
+		if (group && group.capacityCheckedAt) handleStorageGroup(group, destination);
+		else persistStorageRuntimeState();
+	});
+}
+
+function checkStorageAfterRecordingClose(program) {
+	if (!program || !program._storageFilesystemKey) return;
+	const destination = storageHealth.findDestination(config, program);
+	if (!destination) return;
+	const group = storageMonitor.check(destination, { now: Date.now(), refreshAfterMs: 1000 });
+	if (group && group.capacityCheckedAt) handleStorageGroup(group, destination);
+	else persistStorageRuntimeState();
+}
+
+function storageStateFromGroup(group, destination) {
+	return Object.assign({}, group, {
+		id: destination.id || null,
+		name: destination.name,
+		path: destination.path,
+		configuredPath: destination.configuredPath || destination.path,
+		expectedMount: destination.expectedMount || null,
+		capacityReliable: Number(group.capacityCheckedAt) > 0,
+		total: typeof group.totalBytes === 'number' ? group.totalBytes : group.total,
+		used: typeof group.usedBytes === 'number' ? group.usedBytes : group.used,
+		available: typeof group.availableBytes === 'number' ? group.availableBytes : group.available,
+		lowSpacePhase: group.phase || null,
+		// Manual observations are display-only. Never persist an operational stop decision from them.
+		stopNewRecordings: false
+	});
+}
+
+function sharesKnownFilesystem(destination, source) {
+	function sameKnownIdentity(candidate) {
+		if (!candidate || candidate.filesystemKey !== source.filesystemKey) return false;
+		const sourceFingerprints = source.mountFingerprints || (source.mountFingerprint ? [ source.mountFingerprint ] : []);
+		const candidateFingerprints = candidate.mountFingerprints || (candidate.mountFingerprint ? [ candidate.mountFingerprint ] : []);
+		return sourceFingerprints.length > 0 && sourceFingerprints.some(value => candidateFingerprints.includes(value));
+	}
+	const operational = storageMonitor.getByDestination(destination);
+	if (sameKnownIdentity(operational)) return true;
+	const cached = storageDisplaySnapshots.get(storageRuntimeState.destinationToken(destination));
+	return sameKnownIdentity(cached);
+}
+
+function applyManualStorageSnapshots(states, selected, allRequested) {
+	const configured = storageHealth.getDestinations(config);
+	const selectedTokens = new Set(selected.map(storageRuntimeState.destinationToken));
+	states.forEach(state => {
+		storageDisplaySnapshots.set(storageRuntimeState.destinationToken(state), Object.assign({}, state));
+	});
+	if (allRequested || states.length !== 1) return;
+	const source = states[0];
+	configured.forEach(destination => {
+		const token = storageRuntimeState.destinationToken(destination);
+		if (selectedTokens.has(token) || !sharesKnownFilesystem(destination, source)) return;
+		storageDisplaySnapshots.set(token, storageStateFromGroup(source, destination));
+	});
+}
+
+function manualStorageRefreshError(code, statusCode, publicMessage) {
+	const error = new Error(publicMessage);
+	error.code = code;
+	error.statusCode = statusCode;
+	error.publicMessage = publicMessage;
+	return error;
+}
+
+async function handleManualStorageRefresh(request) {
+	if (!request || (request.all !== true && !Object.prototype.hasOwnProperty.call(request, 'storageId'))) {
+		throw manualStorageRefreshError('invalid_request', 400, '更新対象が不正です。');
+	}
+	const configured = storageHealth.getDestinations(config);
+	let selected;
+	if (request.all === true) {
+		selected = configured.slice();
+	} else {
+		const requestedId = request.storageId === null ? null : String(request.storageId);
+		selected = configured.filter(destination => (destination.id || null) === requestedId);
+		if (selected.length !== 1) {
+			throw manualStorageRefreshError('storage_not_found', 404, '指定された録画先は設定されていません。');
+		}
+	}
+	if (selected.length === 0) {
+		throw manualStorageRefreshError('storage_not_found', 404, '更新対象の録画先がありません。');
+	}
+
+	const refresh = storageManualRefresh.collect(selected, {
+		inspect: storageHealth.inspectDestination,
+		checkIntervalMs: 20000,
+		inspectOptions: {
+			warningEnabled: storageLowSpaceWarningEnabled,
+			warningThresholdMB: storageLowSpaceWarningThresholdMB,
+			cleanupThresholdMB: storageLowSpaceThresholdMB
+		},
+		now: Date.now
+	});
+	const failures = refresh.failures;
+	const successfulStates = refresh.states;
+	applyManualStorageSnapshots(successfulStates, selected, request.all === true);
+	if (successfulStates.length > 0) persistStorageRuntimeState(true);
+
+	return {
+		total: selected.length,
+		updated: selected.length - failures.length,
+		failed: failures.length,
+		failures: failures
+	};
+}
+
+function startStorageRefreshServer() {
+	storageRefreshServer = storageRefreshIpc.createServer({
+		socketPath: STORAGE_REFRESH_SOCKET,
+		handler: runManualStorageRefresh,
+		log: operatorLog
+	});
+	storageRefreshServer.listen().then(() => {
+		operatorLog('Storage refresh IPC listening.');
+	}).catch(error => {
+		operatorLog('WARNING: Storage refresh IPC startup failed: ' + error.message);
+		storageRefreshServer = null;
+	});
+}
+
+startStorageRefreshServer();
 
 // ファイル更新監視: ./data/reserves.json
 chinachu.jsonWatcher(

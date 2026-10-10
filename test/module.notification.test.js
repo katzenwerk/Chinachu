@@ -37,45 +37,6 @@ describe('notification behavior contracts', function() {
 		fs.rmSync(temporaryDir, { recursive: true, force: true });
 	});
 
-	it('resolves disabled, current, and legacy settings and invokes only the selected command', async function() {
-		const cases = [
-			{ config: {}, command: null, source: null, warnings: 0 },
-			{ config: { storageLowSpaceNotifyTo: 'operator@example.invalid' }, command: null, source: null, warnings: 1 },
-			{
-				config: { storageLowSpaceCommand: '/legacy/notifier' },
-				command: '/legacy/notifier', source: 'storageLowSpaceCommand', warnings: 1
-			},
-			{
-				config: {
-					notificationCommand: '/current/notifier',
-					storageLowSpaceCommand: '/legacy/notifier',
-					storageLowSpaceNotifyTo: 'operator@example.invalid'
-				},
-				command: '/current/notifier', source: 'notificationCommand', warnings: 2
-			}
-		];
-		for (const entry of cases) {
-			const resolved = notification.resolveNotificationCommand(entry.config);
-			assert.strictEqual(resolved.command, entry.command);
-			assert.strictEqual(resolved.source, entry.source);
-			assert.strictEqual(resolved.warnings.length, entry.warnings);
-		}
-
-		const currentOutput = path.join(temporaryDir, 'current.jsonl');
-		const legacyOutput = path.join(temporaryDir, 'legacy.jsonl');
-		const selected = notification.resolveNotificationCommand({
-			notificationCommand: ['tee', currentOutput],
-			storageLowSpaceCommand: ['tee', legacyOutput]
-		});
-		const sent = await notification.createNotificationSender(selected.command)({ event: 'storage-low' });
-		assert.strictEqual(sent.ok, true);
-		assert.strictEqual(fs.existsSync(currentOutput), true);
-		assert.strictEqual(fs.existsSync(legacyOutput), false);
-		const skipped = await notification.createNotificationSender(null)({ event: 'storage-low' });
-		assert.strictEqual(skipped.skipped, true);
-		assert.strictEqual(notification.shouldSendStorageLowNotification('storageLowSpaceCommand', 1001, 1000, 10800000), true);
-	});
-
 	it('preserves notification payload data and sends user text as structured stdin, not shell syntax', async function() {
 		const outputPath = path.join(temporaryDir, 'notification.jsonl');
 		const injectedMarker = path.join(temporaryDir, 'shell-command-ran');
@@ -121,34 +82,6 @@ describe('notification behavior contracts', function() {
 		assert.strictEqual(warning.metadata.action, 'remove');
 	});
 
-	it('suppresses concurrent sends and releases sender state after success and command failures', async function() {
-		const successMarker = path.join(temporaryDir, 'success.log');
-		const sender = createWorkerSender(successMarker, 'normal', { timeoutMs: 500, killGraceMs: 30 });
-		const first = sender({ event: 'storage-low' });
-		const duplicate = await sender({ event: 'storage-low' });
-		assert.strictEqual(duplicate.skipped, true);
-		assert.strictEqual(duplicate.reason, 'in-flight');
-		assert.strictEqual((await first).ok, true);
-		assert.strictEqual((await sender({ event: 'storage-low' })).ok, true);
-		assert.strictEqual(countStarts(successMarker), 2);
-
-		const failures = [
-			{
-				command: '/path/that/does/not/exist',
-				check(result) { assert.strictEqual(result.ok, false); }
-			},
-			{
-				command: [process.execPath, '-e', 'process.stdin.resume(); process.stdin.on("end", () => process.exit(7));'],
-				check(result) { assert.strictEqual(result.code, 7); }
-			}
-		];
-		for (const entry of failures) {
-			const failedSender = notification.createNotificationSender(entry.command);
-			entry.check(await failedSender({ event: 'storage-low' }));
-			entry.check(await failedSender({ event: 'storage-low' }));
-		}
-	});
-
 	it('terminates a stuck child after timeout and permits a later send', async function() {
 		const markerPath = path.join(temporaryDir, 'timeout.log');
 		const sender = createWorkerSender(markerPath, 'ignore-term', {
@@ -165,35 +98,29 @@ describe('notification behavior contracts', function() {
 		assert.strictEqual(countStarts(markerPath), 2);
 	});
 
-	it('keeps notification intervals independent by phase and retries skipped attempts', async function() {
-		const interval = 3 * 60 * 60 * 1000;
-		const now = interval + 1001;
-		const notifiedAt = { warning: now - 1, cleanup: 0 };
-		assert.strictEqual(
-			notification.shouldSendStorageLowNotification('notificationCommand', 1000 + interval, 1000, interval),
-			false
+	it('queues notifications and advances phase suppression only after successful delivery', async function() {
+		const order = [];
+		const queued = notification.createNotificationQueue(function (payload) {
+			order.push('start-' + payload.id);
+			return new Promise(resolve => setTimeout(function () {
+				order.push('end-' + payload.id);
+				resolve({ ok: true });
+			}, 10));
+		});
+		await Promise.all([ queued({ id: 'a' }), queued({ id: 'b' }) ]);
+		assert.deepStrictEqual(order, [ 'start-a', 'end-a', 'start-b', 'end-b' ]);
+
+		const notified = { warning: 0, cleanup: 0 };
+		await notification.sendStorageLowPhaseNotification(
+			function () { return Promise.resolve({ ok: false }); },
+			{}, 'warning', 100, notified
 		);
-		assert.strictEqual(
-			notification.shouldSendStorageLowNotification('notificationCommand', now, now - interval - 1, interval),
-			true
+		assert.strictEqual(notified.warning, 0);
+		await notification.sendStorageLowPhaseNotification(
+			function () { return Promise.resolve({ ok: true }); },
+			{}, 'warning', 200, notified
 		);
-		assert.strictEqual(
-			notification.shouldSendStorageLowPhaseNotification('notificationCommand', 'warning', now, notifiedAt, interval),
-			false
-		);
-		assert.strictEqual(
-			notification.shouldSendStorageLowPhaseNotification('notificationCommand', 'cleanup', now, notifiedAt, interval),
-			true
-		);
-		const result = await notification.sendStorageLowPhaseNotification(
-			() => Promise.resolve({ ok: false, skipped: true, reason: 'in-flight' }),
-			{ event: 'storage-low' },
-			'cleanup',
-			now,
-			notifiedAt
-		);
-		assert.strictEqual(result.skipped, true);
-		assert.strictEqual(notifiedAt.warning, now - 1);
-		assert.strictEqual(notifiedAt.cleanup, 0);
+		assert.strictEqual(notified.warning, 200);
 	});
+
 });

@@ -4,8 +4,18 @@ P = Class.create(P, {
 
 		this.view.content.className = 'loading';
 		this.livePlayerDisposed = false;
+		this.storageHealth = null;
+		this.storageHealthSummary = null;
+		this.onStorageHealth = function (event) {
+			this.storageHealth = event.memo.data;
+			this.storageHealthSummary = event.memo.summary;
+			this.drawStorageWarning();
+			this.drawReserves();
+		}.bindAsEventListener(this);
+		document.observe('chinachu:storage-health', this.onStorageHealth);
 
 		this.draw();
+		chinachu.util.loadStorageHealth();
 
 		this.onSchedule = this.drawChannels.bindAsEventListener(this);
 		document.observe('chinachu:schedule', this.onSchedule);
@@ -37,6 +47,7 @@ P = Class.create(P, {
 		document.stopObserving('chinachu:reserves', this.onReserves);
 		document.stopObserving('chinachu:recording', this.onRecording);
 		document.stopObserving('chinachu:recorded', this.onRecorded);
+		document.stopObserving('chinachu:storage-health', this.onStorageHealth);
 
 		return this;
 	},
@@ -51,6 +62,12 @@ P = Class.create(P, {
 		var r1 = flagrate.createElement("div", { "class": "row" }).insertTo(container);
 		var r1F = flagrate.createElement("div", { "class": "col-md-12" }).insertTo(r1);
 		var r2 = this.r2 = flagrate.createElement("div", { "class": "row channel-cards" }).insertTo(container);
+		var storageWarningRow = this.storageWarningRow = flagrate.createElement('div', { 'class': 'row dashboard-storage-warning-row' }).insertTo(container);
+		var storageWarningColumn = flagrate.createElement('div', { 'class': 'col-md-12' }).insertTo(storageWarningRow);
+		this.storageWarning = flagrate.createElement('a', {
+			'class': 'dashboard-storage-warning',
+			href: '#!/dashboard/storage/'
+		}).insertTo(storageWarningColumn).hide();
 		var r3 = flagrate.createElement("div", { "class": "row program-cards" }).insertTo(container);
 		this.r3L = flagrate.createElement("div", { "class": "col-md-4" }).insertTo(r3);
 		this.r3C = flagrate.createElement("div", { "class": "col-md-4" }).insertTo(r3);
@@ -85,7 +102,39 @@ P = Class.create(P, {
 		setTimeout(this.drawReserves.bind(this), 0);
 		setTimeout(this.drawRecording.bind(this), 0);
 		setTimeout(this.drawRecorded.bind(this), 0);
+		this.drawStorageWarning();
 
+		return this;
+	},
+
+	drawStorageWarning: function () {
+		if (!this.storageWarning) return this;
+		var summary = this.storageHealthSummary;
+		this.storageWarning.update();
+		this.storageWarning.removeClassName('dashboard-storage-warning-warning');
+		this.storageWarning.removeClassName('dashboard-storage-warning-critical');
+		this.storageWarning.removeClassName('dashboard-storage-warning-unknown');
+		if (!summary) {
+			this.storageWarning.hide();
+			this.storageWarningRow.hide();
+			return this;
+		}
+		this.storageWarning.addClassName('dashboard-storage-warning-' + summary.level);
+		this.storageWarning.writeAttribute('title', summary.title + '。Storage画面を開く');
+		this.storageWarning.writeAttribute('aria-label', summary.message + ' Storage画面を開く');
+		flagrate.createElement('span', {
+			'class': 'dashboard-storage-warning-mark',
+			'aria-hidden': 'true'
+		}).insertText(summary.mark).insertTo(this.storageWarning);
+		flagrate.createElement('span', {
+			'class': 'dashboard-storage-warning-message'
+		}).insertText(summary.message).insertTo(this.storageWarning);
+		flagrate.createElement('span', {
+			'class': 'glyphicon glyphicon-chevron-right dashboard-storage-warning-arrow',
+			'aria-hidden': 'true'
+		}).insertTo(this.storageWarning);
+		this.storageWarningRow.show();
+		this.storageWarning.show();
 		return this;
 	},
 
@@ -557,6 +606,7 @@ P = Class.create(P, {
 
 		var now = Date.now();
 		var hasMore = false;
+		var page = this;
 
 		programs.each(function (program, i) {
 
@@ -583,6 +633,15 @@ P = Class.create(P, {
 			);
 			if (program.episode) {
 				title.insert('<span class="episode">#' + program.episode + '</span>');
+			}
+			if (type === 'reserves' && page.storageHealth) {
+				var storage = chinachu.util.findStorageHealth(page.storageHealth, program);
+				var storageNotice = chinachu.util.getStorageHealthNotice(storage, page.storageHealth.thresholds);
+				if (storageNotice) {
+					flagrate.createElement('div', {
+						'class': 'storage-program-warning' + (storageNotice.strong ? ' storage-program-warning-strong' : '')
+					}).insertText(storageNotice.message).insertTo(li);
+				}
 			}
 
 			if (program._isRecording && program.pid) {

@@ -1,5 +1,5 @@
 /*jslint browser:true, nomen:true, plusplus:true, regexp:true, vars:true */
-/*global $, Prototype, Ajax, Class, Element, sakura, flagrate, dateFormat */
+/*global $, Prototype, Ajax, Class, Element, sakura, flagrate, dateFormat, chinachuStorageHealthView */
 (function () {
 
 	"use strict";
@@ -819,7 +819,9 @@
 	var formInputTypeRecordedDir = function _formInputTypeRecordedDir(recordedDirId, config) {
 		return {
 			create: function () {
+				var wrapper = new Element('div');
 				var select = new Element('select').setStyle({ width: '100%' });
+				var healthNote = new Element('div', { className: 'storage-inline-health' });
 				var items = getRecordedDirSelectItems(config);
 				var current = typeof recordedDirId === 'string' ? recordedDirId : '';
 
@@ -834,19 +836,31 @@
 					select.insert(option);
 				});
 
-				return select;
+				var updateHealth = function () {
+					util.loadStorageHealth(function (storageData) {
+						var storage = util.findStorageHealth(storageData, { recordedDirId: select.value || '' });
+						var notice = util.getStorageHealthNotice(storage, storageData && storageData.thresholds);
+						healthNote.className = 'storage-inline-health' + (notice && notice.strong ? ' storage-inline-health-strong' : '');
+						healthNote.update(notice ? notice.message.escapeHTML() + '<br><span>この状態が録画開始時まで続く場合、録画できない可能性があります。ルールの保存自体は可能です。</span>' : '');
+					});
+				};
+				select.observe('change', updateHealth);
+				wrapper.insert(select);
+				wrapper.insert(healthNote);
+				setTimeout(updateHealth, 0);
+				return wrapper;
 			},
 			getVal: function () {
-				return this.element.value || '';
+				return this.element.down('select').value || '';
 			},
 			setVal: function (val) {
-				this.element.value = val || '';
+				this.element.down('select').value = val || '';
 			},
 			enable: function () {
-				this.element.disabled = false;
+				this.element.down('select').disabled = false;
 			},
 			disable: function () {
-				this.element.disabled = true;
+				this.element.down('select').disabled = true;
 			}
 		};
 	};
@@ -887,6 +901,103 @@
 
 
 	var util = chinachu.util = {};
+	var storageHealthCache = null;
+	var storageHealthLoadedAt = 0;
+	var storageHealthRequest = null;
+	var storageHealthCallbacks = [];
+	var storageHealthRequestFailed = false;
+
+	util.summarizeStorageHealth = chinachuStorageHealthView.summarize;
+
+	function publishStorageHealth(data, requestFailed) {
+		var summary = util.summarizeStorageHealth(data, { requestFailed: requestFailed });
+		document.fire('chinachu:storage-health', {
+			data: data,
+			summary: summary,
+			requestFailed: requestFailed
+		});
+	}
+
+	util.loadStorageHealth = function _loadStorageHealth(callback) {
+		if (storageHealthCache && Date.now() - storageHealthLoadedAt < 15000) {
+			if (typeof callback === 'function') callback(storageHealthCache, { requestFailed: storageHealthRequestFailed });
+			publishStorageHealth(storageHealthCache, storageHealthRequestFailed);
+			return;
+		}
+		if (typeof callback === 'function') storageHealthCallbacks.push(callback);
+		if (storageHealthRequest) return;
+		storageHealthRequestFailed = false;
+		storageHealthRequest = new Ajax.Request('./api/storage.json', {
+			method: 'get',
+			onSuccess: function (t) {
+				try {
+					storageHealthCache = t.responseText.evalJSON();
+					storageHealthLoadedAt = Date.now();
+				} catch (_) {
+					storageHealthCache = null;
+					storageHealthRequestFailed = true;
+				}
+			},
+			onFailure: function () {
+				storageHealthCache = null;
+				storageHealthRequestFailed = true;
+			},
+			onComplete: function () {
+				var callbacks = storageHealthCallbacks.splice(0);
+				storageHealthRequest = null;
+				callbacks.each(function (queued) { queued(storageHealthCache, { requestFailed: storageHealthRequestFailed }); });
+				publishStorageHealth(storageHealthCache, storageHealthRequestFailed);
+			}
+		});
+	};
+
+	util.findStorageHealth = function _findStorageHealth(storageData, target) {
+		if (!storageData || !Object.isArray(storageData.storages)) return null;
+		target = target || {};
+		if (typeof target.recordedDirId === 'string' && target.recordedDirId !== '') {
+			var byId = storageData.storages.find(function (storage) {
+				return storage.id === target.recordedDirId ||
+					(Object.isArray(storage.aliasIds) && storage.aliasIds.indexOf(target.recordedDirId) !== -1);
+			});
+			if (byId) return byId;
+			return { status: 'unknown', unresolvedRecordedDirId: target.recordedDirId };
+		}
+		if (typeof target.recordedDir === 'string' && target.recordedDir !== '') {
+			var normalized = target.recordedDir.replace(/\/+$/, '');
+			var byPath = storageData.storages.find(function (storage) {
+				return String(storage.configuredPath || storage.path || '').replace(/\/+$/, '') === normalized;
+			});
+			if (byPath) return byPath;
+		}
+		return storageData.storages.find(function (storage) { return storage.id === null; }) || null;
+	};
+
+	util.getStorageHealthNotice = function _getStorageHealthNotice(storage, thresholds) {
+		if (!storage) return { strong: true, message: '録画先の状態を取得できません。' };
+		var abnormal = {
+			'not-mounted': '録画先が未マウントです。',
+			'wrong-storage': '録画先が想定と異なるストレージです。',
+			'broken-link': '録画先のリンクが切れています。',
+			'missing': '録画先パスが存在しません。',
+			'read-only': '録画先が読み取り専用です。',
+			'unknown': '録画先の状態を確認できません。'
+		};
+		if (abnormal[storage.status]) return { strong: true, message: abnormal[storage.status] };
+		if (storage.status !== 'low-space') return null;
+		if (storage.lowSpacePhase === 'warning') {
+			return thresholds && thresholds.warningEnabled === true &&
+				typeof thresholds.warningMB === 'number' && isFinite(thresholds.warningMB) &&
+				typeof thresholds.cleanupMB === 'number' && isFinite(thresholds.cleanupMB) &&
+				thresholds.warningMB > thresholds.cleanupMB ?
+				{ strong: false, message: '録画先の空き容量が少なくなっています。' } : null;
+		}
+		return {
+			strong: true,
+			message: thresholds && thresholds.action === 'remove' && storage.stopNewRecordings !== true ?
+				'録画先が容量不足です。自動削除を実行中です。' :
+				'録画先が容量不足のため、録画停止・開始抑止の対象です。'
+		};
+	};
 
 	/** section: util
 	 * class util

@@ -15,6 +15,8 @@ const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
 const RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 const RECORDED_DATA_FILE = __dirname + '/data/recorded.json';
 const MATCH_DATA_FILE = __dirname + '/data/match.json';
+const STORAGE_STATE_FILE = __dirname + '/data/storage-state.json';
+const STORAGE_REFRESH_SOCKET = __dirname + '/data/storage-refresh.sock';
 const SCHEDULER_STATE_FILE = __dirname + '/data/scheduler-state.json';
 const SCHEDULER_LOG_FILE = __dirname + '/log/scheduler';
 
@@ -63,6 +65,10 @@ const ruleUid = require('./lib/rule-uid');
 const healthDiagnosticsModule = require('./lib/health-diagnostics');
 const serviceControlModule = require('./lib/service-control');
 const mediaDeliveryModule = require('./lib/media-delivery');
+const storageHealth = require('./lib/storage-health');
+const storageLow = require('./lib/storage-low');
+const storageRuntimeState = require('./lib/storage-runtime-state');
+const storageRefreshIpc = require('./lib/storage-refresh-ipc');
 
 // Directory Checking
 if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./web/')) {
@@ -808,6 +814,10 @@ function httpServerMain(req, res, query) {
 				healthDiagnostics: healthDiagnostics,
 				serviceControl: serviceControl,
 				mediaDelivery: mediaDelivery,
+				storageHealth: storageHealth,
+				storageLow   : storageLow,
+				storageRuntimeState: storageRuntimeState,
+				storageRefreshIpc: storageRefreshIpc,
 				define: {
 					CONFIG_FILE        : CONFIG_FILE,
 					RULES_FILE         : RULES_FILE,
@@ -816,6 +826,8 @@ function httpServerMain(req, res, query) {
 					RECORDING_DATA_FILE: RECORDING_DATA_FILE,
 					RECORDED_DATA_FILE : RECORDED_DATA_FILE,
 					MATCH_DATA_FILE    : MATCH_DATA_FILE,
+					STORAGE_STATE_FILE : STORAGE_STATE_FILE,
+					STORAGE_REFRESH_SOCKET: STORAGE_REFRESH_SOCKET,
 					OPERATOR_LOG_FILE  : OPERATOR_LOG_FILE,
 					WUI_LOG_FILE       : WUI_LOG_FILE,
 					SCHEDULER_LOG_FILE : SCHEDULER_LOG_FILE,

@@ -3,9 +3,14 @@ P = Class.create(P, {
 	init: function() {
 
 		this.view.content.className = 'loading';
+		this.storageHealth = null;
 
 		this.initToolbar();
 		this.draw();
+		chinachu.util.loadStorageHealth(function (storageData) {
+			this.storageHealth = storageData;
+			if (this.grid) this.drawMain();
+		}.bind(this));
 
 	this.onPageLeft = function() {
 		this.movePage(-1);
@@ -267,6 +272,7 @@ P = Class.create(P, {
 		var rows = [];
 
 		var programs = [];
+		var page = this;
 
 		for (var i = 0, l = global.chinachu.reserves.length; i < l; i++) {
 			programs.push(global.chinachu.reserves[i]);
@@ -430,6 +436,14 @@ P = Class.create(P, {
 			if (program.isConflict) {
 				titleHtml = '<span class="flag conflict">競合</span>' + titleHtml;
 				row.className += ' disabled';
+			}
+
+			var storage = chinachu.util.findStorageHealth(page.storageHealth, program);
+			var storageNotice = page.storageHealth ? chinachu.util.getStorageHealthNotice(storage, page.storageHealth.thresholds) : null;
+			if (storageNotice) {
+				titleHtml += '<span class="storage-program-warning' + (storageNotice.strong ? ' storage-program-warning-strong' : '') +
+					'" title="' + storageNotice.message.escapeHTML() + '">録画先: ' + storageNotice.message.escapeHTML() + '</span>';
+				if (storageNotice.strong) row.className += ' storage-warning';
 			}
 
 			row.cell.title = {

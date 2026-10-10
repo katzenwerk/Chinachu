@@ -3,5 +3,11 @@
     "script" : "storage",
     "methods": ["get"],
     "types"  : ["json"]
+  },
+
+  "/refresh": {
+    "script" : "storage",
+    "methods": ["post"],
+    "types"  : ["json"]
   }
 }
