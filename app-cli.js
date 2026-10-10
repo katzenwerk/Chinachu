@@ -11,6 +11,7 @@ var RESERVES_DATA_FILE  = __dirname + '/data/reserves.json';
 var SCHEDULE_DATA_FILE  = __dirname + '/data/schedule.json';
 var RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 var RECORDED_DATA_FILE  = __dirname + '/data/recorded.json';
+var RESERVATION_LOCK_TIMEOUT_EXIT_CODE = 73;
 
 // 標準モジュールのロード
 var fs            = require('fs');
@@ -42,6 +43,7 @@ var opts       = require('opts');
 var dateFormat = require('dateformat').default;
 var Table      = require('easy-table');
 var ruleUid    = require('./lib/rule-uid');
+var reservationStore = require('./lib/reservation-store');
 
 // 引数
 opts.parse([
@@ -273,6 +275,35 @@ var recorded  = JSON.parse( fs.readFileSync(RECORDED_DATA_FILE,  { encoding: 'ut
 
 var clock     = new Date().getTime();
 
+function reservationOperationError(message) {
+	var error = new Error(message);
+	error.code = 'RESERVATION_OPERATION_ERROR';
+	return error;
+}
+
+function exitReservationError(error) {
+	var message = error && error.message ? error.message : String(error);
+	var exitCode = error && error.code === 'RESERVATION_LOCK_TIMEOUT' ? RESERVATION_LOCK_TIMEOUT_EXIT_CODE : 1;
+	fs.writeSync(2, message + '\n');
+	process.exit(exitCode);
+}
+
+function updateReserves(callback) {
+	try {
+		return reservationStore.withLock(RESERVES_DATA_FILE, function () {
+			reserves = reservationStore.readArray(RESERVES_DATA_FILE);
+			var result = callback(reserves);
+			reservationStore.writeArrayAtomic(RESERVES_DATA_FILE, reserves);
+			return result;
+		});
+	} catch (error) {
+		if (error && (error.code === 'RESERVATION_OPERATION_ERROR' || error.code === 'RESERVATION_LOCK_TIMEOUT')) {
+			exitReservationError(error);
+		}
+		throw error;
+	}
+}
+
 // ルール
 var rule = {};
 
@@ -423,30 +454,32 @@ function chinachuReserve() {
 		process.exit(1);
 	}
 
-	if (chinachu.getProgramById(opts.get('id'), reserves) !== null) {
-		util.error('既に予約されています');
-		process.exit(1);
-	}
-
 	target.isManualReserved = true;
 
 	if (opts.get('1seg')) {
 		target['1seg'] = true;
 	}
 
-	reserves.push(target);
-	reserves.sort(function(a, b) {
-		return a.start - b.start;
-	});
-
 	if (opts.get('simulation')) {
+		if (chinachu.getProgramById(opts.get('id'), reserves) !== null) {
+			util.error('既に予約されています');
+			process.exit(1);
+		}
 		console.log('[simulation] reserve:');
 		console.log(JSON.stringify(target, null, '  '));
 	} else {
+		updateReserves(function (currentReserves) {
+			if (chinachu.getProgramById(opts.get('id'), currentReserves) !== null) {
+				throw reservationOperationError('既に予約されています');
+			}
+			currentReserves.push(target);
+			currentReserves.sort(function(a, b) {
+				return a.start - b.start;
+			});
+		});
+
 		console.log('reserve:');
 		console.log(JSON.stringify(target, null, '  '));
-
-		fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(reserves));
 
 		console.log('予約しました。 スケジューラーを実行して競合を確認することをお勧めします');
 	}
@@ -456,33 +489,40 @@ function chinachuReserve() {
 
 // 予約解除
 function chinachuUnreserve() {
-	var target = chinachu.getProgramById(opts.get('id'), reserves);
-
-	if (target === null) {
-		util.error('見つかりません');
-		process.exit(1);
-	}
-
-	if (!target.isManualReserved) {
-		util.error('自動予約された番組は解除できません。自動予約ルールを編集してください');
-		process.exit(1);
-	}
-
-	for (var i = 0; reserves.length > i; i++) {
-		if (target.id === reserves[i].id) {
-			reserves.splice(i, 1);
-			break;
-		}
-	}
+	var target;
 
 	if (opts.get('simulation')) {
+		target = chinachu.getProgramById(opts.get('id'), reserves);
+		if (target === null) {
+			util.error('見つかりません');
+			process.exit(1);
+		}
+		if (!target.isManualReserved) {
+			util.error('自動予約された番組は解除できません。自動予約ルールを編集してください');
+			process.exit(1);
+		}
 		console.log('[simulation] unreserve:');
 		console.log(JSON.stringify(target, null, '  '));
 	} else {
+		target = updateReserves(function (currentReserves) {
+			var current = chinachu.getProgramById(opts.get('id'), currentReserves);
+			if (current === null) {
+				throw reservationOperationError('見つかりません');
+			}
+			if (!current.isManualReserved) {
+				throw reservationOperationError('自動予約された番組は解除できません。自動予約ルールを編集してください');
+			}
+			for (var i = 0; currentReserves.length > i; i++) {
+				if (current.id === currentReserves[i].id) {
+					currentReserves.splice(i, 1);
+					break;
+				}
+			}
+			return current;
+		});
+
 		console.log('unreserve:');
 		console.log(JSON.stringify(target, null, '  '));
-
-		fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(reserves));
 
 		console.log('予約を解除しました。 ');
 	}
@@ -492,38 +532,42 @@ function chinachuUnreserve() {
 
 // スキップ
 function chinachuSkip() {
-	var target = chinachu.getProgramById(opts.get('id'), reserves);
-
-	if (target === null) {
-		util.error('見つかりません');
-		process.exit(1);
-	}
-
-	if (target.isManualReserved) {
-		util.error('手動予約された番組はスキップできません。予約を解除してください。');
-		process.exit(1);
-	}
-
-	if (target.isSkip) {
-		util.error('既にスキップが有効になっています');
-		process.exit(1);
-	}
-
-	for (var i = 0, l = reserves.length; i < l; i++) {
-		if (target.id === reserves[i].id) {
-			reserves[i].isSkip = true;
-			break;
-		}
-	}
+	var target;
 
 	if (opts.get('simulation')) {
+		target = chinachu.getProgramById(opts.get('id'), reserves);
+		if (target === null) {
+			util.error('見つかりません');
+			process.exit(1);
+		}
+		if (target.isManualReserved) {
+			util.error('手動予約された番組はスキップできません。予約を解除してください。');
+			process.exit(1);
+		}
+		if (target.isSkip) {
+			util.error('既にスキップが有効になっています');
+			process.exit(1);
+		}
 		console.log('[simulation] skip:');
 		console.log(JSON.stringify(target, null, '  '));
 	} else {
+		target = updateReserves(function (currentReserves) {
+			var current = chinachu.getProgramById(opts.get('id'), currentReserves);
+			if (current === null) {
+				throw reservationOperationError('見つかりません');
+			}
+			if (current.isManualReserved) {
+				throw reservationOperationError('手動予約された番組はスキップできません。予約を解除してください。');
+			}
+			if (current.isSkip) {
+				throw reservationOperationError('既にスキップが有効になっています');
+			}
+			current.isSkip = true;
+			return current;
+		});
+
 		console.log('skip:');
 		console.log(JSON.stringify(target, null, '  '));
-
-		fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(reserves));
 
 		console.log('スキップを有効にしました');
 	}
@@ -533,33 +577,35 @@ function chinachuSkip() {
 
 // スキップ解除
 function chinachuUnskip() {
-	var target = chinachu.getProgramById(opts.get('id'), reserves);
-
-	if (target === null) {
-		util.error('見つかりません');
-		process.exit(1);
-	}
-
-	if (!target.isSkip) {
-		util.error('既にスキップは解除されています');
-		process.exit(1);
-	}
-
-	for (var i = 0, l = reserves.length; i < l; i++) {
-		if (target.id === reserves[i].id) {
-			delete reserves[i].isSkip;
-			break;
-		}
-	}
+	var target;
 
 	if (opts.get('simulation')) {
+		target = chinachu.getProgramById(opts.get('id'), reserves);
+		if (target === null) {
+			util.error('見つかりません');
+			process.exit(1);
+		}
+		if (!target.isSkip) {
+			util.error('既にスキップは解除されています');
+			process.exit(1);
+		}
 		console.log('[simulation] skip:');
 		console.log(JSON.stringify(target, null, '  '));
 	} else {
+		target = updateReserves(function (currentReserves) {
+			var current = chinachu.getProgramById(opts.get('id'), currentReserves);
+			if (current === null) {
+				throw reservationOperationError('見つかりません');
+			}
+			if (!current.isSkip) {
+				throw reservationOperationError('既にスキップは解除されています');
+			}
+			delete current.isSkip;
+			return current;
+		});
+
 		console.log('skip:');
 		console.log(JSON.stringify(target, null, '  '));
-
-		fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(reserves));
 
 		console.log('スキップを解除しました');
 	}
@@ -586,11 +632,12 @@ function chinachuStop() {
 		console.log(JSON.stringify(target, null, '  '));
 
 		if (!target.isManualReserved) {
-			const rp  = chinachu.getProgramById(target.id, reserves);
-			if (rp) {
-				rp.isSkip = true;
-				fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(reserves));
-			}
+			updateReserves(function (currentReserves) {
+				const rp = chinachu.getProgramById(target.id, currentReserves);
+				if (rp) {
+					rp.isSkip = true;
+				}
+			});
 		}
 
 		fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));

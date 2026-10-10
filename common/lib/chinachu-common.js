@@ -84,7 +84,17 @@ exports.jsonWatcher = function (filepath, callback, option) {
 		if (timer !== null) { clearTimeout(timer); }
 		timer = setTimeout(read, option.wait);
 	};
-	return fs.watch(filepath, onUpdated);
+
+	// ファイル自体をwatchするとatomic rename後に旧inodeを監視し続けるため、
+	// 親directoryを監視して対象basenameのeventだけを取り込む。
+	var directory = path.dirname(filepath);
+	var basename = path.basename(filepath);
+	return fs.watch(directory, function (eventType, filename) {
+		if (filename !== null && typeof filename !== 'undefined' && String(filename) !== basename) {
+			return;
+		}
+		onUpdated();
+	});
 };
 
 exports.getProgramById = function (id, array) {

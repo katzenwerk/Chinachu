@@ -12,12 +12,18 @@ var it = test.it;
 var chinachu = require("chinachu-common");
 
 describe("jsonWatcher", function() {
-	it("reads initial JSON data and reports a later update", { timeout: 5000 }, async function() {
+	it("reads initial JSON data and keeps reporting atomic replacements", { timeout: 5000 }, async function() {
 		var temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "chinachu-json-watcher-"));
 		var temporaryFile = path.join(temporaryDirectory, "watch.json");
 		var initialData = { a: 0, b: 1, c: "", d: "string", e: null, nested: { value: true }, items: [1, "two"] };
-		var updatedData = { updated: true, value: "変更後" };
+		var updatedData1 = { updated: true, value: "変更後1" };
+		var updatedData2 = { updated: true, value: "変更後2" };
 		var watcher = null;
+		var replaceAtomically = function(data, suffix) {
+			var temporaryReplacement = temporaryFile + "." + suffix + ".tmp";
+			fs.writeFileSync(temporaryReplacement, JSON.stringify(data));
+			fs.renameSync(temporaryReplacement, temporaryFile);
+		};
 
 		try {
 			fs.writeFileSync(temporaryFile, JSON.stringify(initialData));
@@ -32,10 +38,11 @@ describe("jsonWatcher", function() {
 			});
 			assert.deepStrictEqual(receivedInitial, initialData);
 
-			var update = new Promise(function(resolve, reject) {
+			var updates = new Promise(function(resolve, reject) {
 				var timeout = setTimeout(function() {
 					reject(new Error("Timed out waiting for jsonWatcher update."));
 				}, 3000);
+				var received = [];
 				watcher.close();
 				watcher = chinachu.jsonWatcher(temporaryFile, function(err, data, message) {
 					if (err) {
@@ -43,21 +50,24 @@ describe("jsonWatcher", function() {
 						reject(new Error(err));
 						return;
 					}
-					if (data.updated) {
+					if (!data.updated) {
+						return;
+					}
+					received.push({ data: data, message: message });
+					if (data.value === updatedData1.value) {
+						replaceAtomically(updatedData2, "second");
+					} else if (data.value === updatedData2.value) {
 						clearTimeout(timeout);
-						resolve({ data: data, message: message });
+						resolve(received);
 					}
 				}, { wait: 25 });
-				fs.writeFile(temporaryFile, JSON.stringify(updatedData), function(err) {
-					if (err) {
-						clearTimeout(timeout);
-						reject(err);
-					}
-				});
+				replaceAtomically(updatedData1, "first");
 			});
-			var receivedUpdate = await update;
-			assert.deepStrictEqual(receivedUpdate.data, updatedData);
-			assert.strictEqual(receivedUpdate.message, "READ: `" + temporaryFile + "` is updated.");
+			var receivedUpdates = await updates;
+			assert.deepStrictEqual(receivedUpdates.map(function(entry) { return entry.data; }), [updatedData1, updatedData2]);
+			receivedUpdates.forEach(function(entry) {
+				assert.strictEqual(entry.message, "READ: `" + temporaryFile + "` is updated.");
+			});
 		} finally {
 			if (watcher && typeof watcher.close === "function") watcher.close();
 			fs.rmSync(temporaryDirectory, { recursive: true, force: true });

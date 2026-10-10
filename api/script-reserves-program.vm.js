@@ -16,7 +16,7 @@
 			}
 			
 			child_process.exec('node app-cli.js -mode unreserve -id ' + program.id, function(err, stdout, stderr) {
-				if (err) return response.error(500);
+				if (err) return response.error(err.code === 73 ? 503 : 500);
 				
 				response.head(200);
 				response.end('{}');

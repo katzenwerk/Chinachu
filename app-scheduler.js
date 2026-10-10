@@ -18,6 +18,7 @@ const RESERVES2_DATA_FILE = __dirname + '/data/reserves2.json';
 const RECORDED_DATA_FILE = __dirname + '/data/recorded.json';
 const MATCH_DATA_FILE = __dirname + '/data/match.json';
 const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
+const RESERVES_CHANGED_EXIT_CODE = 75;
 
 // 標準モジュールのロード
 const path = require('path');
@@ -25,6 +26,7 @@ const fs = require('fs');
 const util = require('util');
 const schedulerState = require('./lib/scheduler-state');
 const schedulerPreflight = require('./lib/operator-scheduler-preflight');
+const reservationStore = require('./lib/reservation-store');
 const schedulerStartedAt = Date.now();
 
 function formatJstLogTime() {
@@ -82,10 +84,8 @@ const rules = JSON.parse(fs.readFileSync(RULES_FILE, { encoding: 'utf8' }) || '[
 let reserves = null;//まだ読み込まない
 let tuners = null;
 const schedulerBaselines = schedulerState.emptyBaselines();
-let reservesReadIdentity = null;
 let reservesOutputIdentity = null;
 let reservesReadFingerprint = null;
-let reservesChangedDuringRun = false;
 
 schedulerBaselines.config = schedulerPreflight.createFileBaseline(CONFIG_FILE, config);
 schedulerBaselines.rules = schedulerPreflight.createFileBaseline(RULES_FILE, rules);
@@ -441,40 +441,37 @@ function outputReserves() {
 		array.push(reserve);
 	});
 
-	try {
-		if (!schedulerPreflight.sameFileIdentity(
-			schedulerPreflight.fileIdentity(RESERVES_DATA_FILE),
-			reservesReadIdentity
-		) || schedulerPreflight.fingerprint(
-			schedulerPreflight.projectReserves(readJsonArray(RESERVES_DATA_FILE))
+	reservationStore.withLock(RESERVES_DATA_FILE, function () {
+		// reservation output lock acquired
+		var latestReserves = reservationStore.readArray(RESERVES_DATA_FILE);
+		if (schedulerPreflight.fingerprint(
+			schedulerPreflight.projectReserves(latestReserves)
 		) !== reservesReadFingerprint) {
-			reservesChangedDuringRun = true;
+			var changedError = new Error('reserves.json changed while scheduler was running');
+			changedError.code = 'RESERVES_CHANGED_DURING_RUN';
+			throw changedError;
 		}
-	} catch (_) {
-		reservesChangedDuringRun = true;
-	}
 
-	// Chinachu本体・Web側の更新検知互換性を優先し、元版と同じ直接書き込みにする
-	fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(array));
-	reservesOutputIdentity = schedulerPreflight.fileIdentity(RESERVES_DATA_FILE);
-	if (!reservesChangedDuringRun) {
+		// 完全な一時fileを同一filesystem上でrenameし、途中書き込みを公開しない。
+		reservationStore.writeArrayAtomic(RESERVES_DATA_FILE, array);
+		reservesOutputIdentity = schedulerPreflight.fileIdentity(RESERVES_DATA_FILE);
 		schedulerBaselines.reserves = schedulerPreflight.createFileBaseline(
 			RESERVES_DATA_FILE,
 			schedulerPreflight.projectReserves(array)
 		);
-	}
 
-	// reserves2 は副次出力。失敗しても本体の reserves.json 更新と後続フックを止めない
-	try {
-		schedulerLog('WRITE: ' + RESERVES2_DATA_FILE);
+		// reserves2 は副次出力。失敗しても本体の reserves.json 更新と後続フックを止めない
+		try {
+			schedulerLog('WRITE: ' + RESERVES2_DATA_FILE);
 
-		var currentReserves2 = readJsonArray(RESERVES2_DATA_FILE, { createIfMissing: true });
-		var reserves2Array = remakeReserves2(currentReserves2, array, now);
+			var currentReserves2 = readJsonArray(RESERVES2_DATA_FILE, { createIfMissing: true });
+			var reserves2Array = remakeReserves2(currentReserves2, array, now);
 
-		writeJsonAtomic(RESERVES2_DATA_FILE, reserves2Array);
-	} catch (e) {
-		schedulerLog('WARNING: `' + RESERVES2_DATA_FILE + '`の保存に失敗しました: ' + (e && e.stack ? e.stack : e));
-	}
+			writeJsonAtomic(RESERVES2_DATA_FILE, reserves2Array);
+		} catch (e) {
+			schedulerLog('WARNING: `' + RESERVES2_DATA_FILE + '`の保存に失敗しました: ' + (e && e.stack ? e.stack : e));
+		}
+	});
 }
 
 // (function) emit child process output with scheduler timestamp
@@ -621,8 +618,8 @@ function scheduler() {
 		});
 	});
 
-	reserves = readJsonArray(RESERVES_DATA_FILE, { createIfMissing: true });//読み込む
-	reservesReadIdentity = schedulerPreflight.fileIdentity(RESERVES_DATA_FILE);
+	reservationStore.ensureArrayFile(RESERVES_DATA_FILE);
+	reserves = readJsonArray(RESERVES_DATA_FILE);//読み込む
 	reservesReadFingerprint = schedulerPreflight.fingerprint(schedulerPreflight.projectReserves(reserves));
 
 	var typeNum = {};
@@ -691,11 +688,12 @@ function scheduler() {
 	var duplicateCount = 0;
 	for (i = 0; i < matches.length; i++) {
 		a = matches[i];
+		if (a.isManualReserved || a.isSkip) { continue; }
 
 		for (j = 0; j < matches.length; j++) {
 			var b = matches[j];
 
-			if (b.isDuplicate || b.isSkip) { continue; }
+			if (b.isDuplicate) { continue; }
 
 			if (a.id === b.id) { continue; }
 			if (a.channel.type !== b.channel.type) { continue; }
@@ -704,13 +702,21 @@ function scheduler() {
 			if (a.end !== b.end) { continue; }
 			if (a.title !== b.title) { continue; }
 
-			// 最終的にsidの若い方を選択させる
-			if (parseInt(a.channel.sid, 10) < parseInt(b.channel.sid, 10)) { continue; }
+			// 明示的な手動予約を自動予約より優先する。
+			if (b.isManualReserved) {
+				// 下の共通処理で自動予約側だけを重複扱いにする。
+			} else if (b.isSkip) {
+				// 下の共通処理で非Skip側だけを重複扱いにする。
+			} else {
+				// 従来どおりsidの若い方を選択させる
+				if (parseInt(a.channel.sid, 10) < parseInt(b.channel.sid, 10)) { continue; }
+			}
 
 			schedulerLog('DUPLICATE: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
 			a.isDuplicate = true;
 
 			++duplicateCount;
+			break;
 		}
 	}
 
@@ -1694,6 +1700,12 @@ function getEpgFromMirakurun(path) {
 			});
 		})
 		.catch(e => {
+			if (e && e.code === 'RESERVES_CHANGED_DURING_RUN') {
+				schedulerLog('RESERVATION UPDATE CONFLICT: retry with the latest reserves.json');
+				console.error(e.message);
+				process.exit(RESERVES_CHANGED_EXIT_CODE);
+				return;
+			}
 
 			schedulerLog('Mirakurun -> Error:');
 			console.error(e);

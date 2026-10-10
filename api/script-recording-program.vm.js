@@ -11,19 +11,12 @@
 			return;
 
 		case 'DELETE':
-			if (!program.isManualReserved) {
-				const rp  = chinachu.getProgramById(program.id, data.reserves);
-				if (rp) {
-					rp.isSkip = true;
-					fs.writeFileSync(define.RESERVES_DATA_FILE, JSON.stringify(data.reserves));
-				}
-			}
+			child_process.exec('node app-cli.js -mode stop -id ' + program.id, function(err, stdout, stderr) {
+				if (err) return response.error(err.code === 73 ? 503 : 500);
 
-			program.abort = true;
-			fs.writeFileSync(define.RECORDING_DATA_FILE, JSON.stringify(data.recording));
-
-			response.head(200);
-			response.end('{}');
+				response.head(200);
+				response.end('{}');
+			});
 			return;
 	}
 

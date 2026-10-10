@@ -75,6 +75,7 @@ const mirakurunEpgReconcile = require('./lib/mirakurun-epg-reconcile');
 const operatorSchedulerRequest = require('./lib/operator-scheduler-request');
 const operatorSchedulerPreflight = require('./lib/operator-scheduler-preflight');
 const schedulerState = require('./lib/scheduler-state');
+const reservationStore = require('./lib/reservation-store');
 const chinachu = require('chinachu-common');
 const mirakurun = new (require("mirakurun").default)();
 
@@ -230,7 +231,7 @@ console.info(mirakurun);
 notificationSettings.warnings.forEach(message => operatorLog('WARNING: ' + message));
 
 // 初回起動や clean 環境向けに、不足している台帳JSONだけを作成する
-ensureJsonArrayFile(RESERVES_DATA_FILE);
+reservationStore.ensureArrayFile(RESERVES_DATA_FILE);
 ensureJsonArrayFile(RESERVES2_DATA_FILE);
 ensureJsonArrayFile(RECORDING_DATA_FILE);
 ensureJsonArrayFile(RECORDED_DATA_FILE);
@@ -1243,18 +1244,29 @@ function removeManualReserve(program) {
 		return false;
 	}
 
-	for (let i = 0, l = reserves.length; i < l; i++) {
-		if (reserves[i].id !== program.id) {
-			continue;
-		}
+	try {
+		return reservationStore.withLock(RESERVES_DATA_FILE, () => {
+			const latestReserves = reservationStore.readArray(RESERVES_DATA_FILE);
 
-		reserves.splice(i, 1);
-		fs.writeFileSync(RESERVES_DATA_FILE, JSON.stringify(reserves));
-		operatorLog('WRITE: ' + RESERVES_DATA_FILE);
-		return true;
+			for (let i = 0, l = latestReserves.length; i < l; i++) {
+				if (latestReserves[i].id !== program.id) {
+					continue;
+				}
+
+				latestReserves.splice(i, 1);
+				reserves = latestReserves;
+				reservationStore.writeArrayAtomic(RESERVES_DATA_FILE, reserves);
+				operatorLog('WRITE: ' + RESERVES_DATA_FILE);
+				return true;
+			}
+
+			return false;
+		});
+	} catch (error) {
+		operatorLog('WARNING: manual reserve removal failed: ' + error.message);
+		return false;
 	}
 
-	return false;
 }
 
 // ストリームを安全に中止する

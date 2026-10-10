@@ -709,9 +709,24 @@ EOF
   return 0
 }
 
-chinachu_update () {
+chinachu_run_scheduler_once () {
   node app-scheduler.js "$@" > /dev/stdout 2>&1 | tee -a ./log/scheduler
   return ${PIPESTATUS[0]}
+}
+
+chinachu_update () {
+  local status
+
+  chinachu_run_scheduler_once "$@"
+  status=$?
+
+  if [ "$status" -eq 75 ]; then
+    echo "Scheduler reservation update conflict; retrying once with the latest reserves.json." >&2
+    chinachu_run_scheduler_once "$@"
+    status=$?
+  fi
+
+  return "$status"
 }
 
 chinachu_search () {
@@ -730,8 +745,8 @@ chinachu_reserve () {
     read line
     case ${line:-y} in
       [yY])
-        node app-scheduler.js > /dev/stdout 2>&1 | tee -a ./log/scheduler
-        return ${PIPESTATUS[0]}
+        chinachu_update
+        return $?
         ;;
       [nN])
         echo "Ok." && return 0

@@ -23,7 +23,7 @@ function writeFixture(mode, options = {}) {
 	fs.mkdirSync(nodeModules);
 	fs.mkdirSync(mirakurunModule);
 	fs.symlinkSync(path.join(repositoryRoot, 'lib'), path.join(directory, 'lib'), 'dir');
-	[ 'opts', 'dateformat', 'chinachu-common' ].forEach(name => {
+	[ 'opts', 'dateformat', 'chinachu-common', 'easy-table' ].forEach(name => {
 		fs.symlinkSync(path.join(repositoryRoot, 'node_modules', name), path.join(nodeModules, name), 'dir');
 	});
 
@@ -32,6 +32,7 @@ function writeFixture(mode, options = {}) {
 		'void process.pid; // fixture: avoid changing process priority'
 	);
 	fs.writeFileSync(path.join(directory, 'app-scheduler.js'), schedulerSource);
+	fs.copyFileSync(path.join(repositoryRoot, 'app-cli.js'), path.join(directory, 'app-cli.js'));
 	fs.copyFileSync(path.join(repositoryRoot, 'app-matching.js'), path.join(directory, 'app-matching.js'));
 	fs.copyFileSync(path.join(repositoryRoot, 'chinachu'), path.join(directory, 'chinachu'));
 	fs.chmodSync(path.join(directory, 'chinachu'), 0o755);
@@ -45,13 +46,13 @@ function writeFixture(mode, options = {}) {
 		mirakurunDropCheckIntervalSec: 0,
 		storageLowSpaceAction: 'none',
 		recordedDirs: [
-			{ id: 'anime3', path: path.join(directory, 'anime3') },
-			{ id: 'anime4', path: path.join(directory, 'anime4') }
+			{ id: 'recorded-a', path: path.join(directory, 'recorded-a') },
+			{ id: 'recorded-b', path: path.join(directory, 'recorded-b') }
 		]
 	}));
 	fs.writeFileSync(path.join(directory, 'rules.json'), JSON.stringify(options.rules || []));
 	[ 'schedule', 'reserves', 'reserves2', 'recording', 'recorded', 'match' ].forEach(name => {
-		fs.writeFileSync(path.join(directory, 'data', name + '.json'), '[]');
+		fs.writeFileSync(path.join(directory, 'data', name + '.json'), JSON.stringify(name === 'reserves' ? (options.reserves || []) : []));
 	});
 
 	fs.writeFileSync(path.join(mirakurunModule, 'package.json'), JSON.stringify({ main: 'index.js' }));
@@ -77,6 +78,79 @@ function runUpdate(directory) {
 		cwd: directory,
 		env: Object.assign({}, process.env, { PATH: path.join(directory, 'bin') + ':' + process.env.PATH }),
 		encoding: 'utf8'
+	});
+}
+
+function runCli(directory, mode, id) {
+	return childProcess.spawnSync(process.execPath, [ 'app-cli.js', '-mode', mode, '-id', id ], {
+		cwd: directory,
+		encoding: 'utf8'
+	});
+}
+
+function readData(directory, name) {
+	return JSON.parse(fs.readFileSync(path.join(directory, 'data', name + '.json'), 'utf8'));
+}
+
+function duplicateFixtureOptions(reverseServices) {
+	const startAt = Date.now() + 3600000;
+	const low = { id: 1001, serviceId: 1, networkId: 1, name: 'Low SID', channel: { type: 'GR', channel: '27' } };
+	const high = { id: 1002, serviceId: 2, networkId: 1, name: 'High SID', channel: { type: 'GR', channel: '27' } };
+	return {
+		startAt,
+		lowId: (1001001).toString(36),
+		highId: (1002001).toString(36),
+		services: reverseServices ? [ high, low ] : [ low, high ],
+		programs: [
+			{ id: 1001001, serviceId: 1, networkId: 1, name: 'Same show', description: '', startAt, duration: 1800000 },
+			{ id: 1002001, serviceId: 2, networkId: 1, name: 'Same show', description: '', startAt, duration: 1800000 }
+		]
+	};
+}
+
+function instrumentScheduler(directory, target, marker) {
+	const file = path.join(directory, 'app-scheduler.js');
+	const source = fs.readFileSync(file, 'utf8');
+	assert.match(source, new RegExp(target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+	fs.writeFileSync(file, source.replace(
+		target,
+		target + "\n\t\tconsole.log('" + marker + "'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);"
+	));
+}
+
+function runUpdateWithCliAtMarker(directory, marker, mode, id) {
+	return new Promise((resolve, reject) => {
+		const child = childProcess.spawn('bash', [ './chinachu', 'update' ], {
+			cwd: directory,
+			env: Object.assign({}, process.env, { PATH: path.join(directory, 'bin') + ':' + process.env.PATH }),
+			stdio: [ 'ignore', 'pipe', 'pipe' ]
+		});
+		let output = '';
+		let cli = null;
+		let cliOutput = '';
+		let startedCli = false;
+		child.stdout.on('data', chunk => {
+			output += chunk.toString();
+			if (!startedCli && output.indexOf(marker) !== -1) {
+				startedCli = true;
+				cli = childProcess.spawn(process.execPath, [ 'app-cli.js', '-mode', mode, '-id', id ], {
+					cwd: directory,
+					stdio: [ 'ignore', 'pipe', 'pipe' ]
+				});
+				cli.stdout.on('data', cliChunk => { cliOutput += cliChunk.toString(); });
+				cli.stderr.on('data', cliChunk => { cliOutput += cliChunk.toString(); });
+			}
+		});
+		child.stderr.on('data', chunk => { output += chunk.toString(); });
+		child.once('error', reject);
+		child.once('close', async status => {
+			if (!startedCli || !cli) {
+				reject(new Error('scheduler marker was not observed: ' + output));
+				return;
+			}
+			const cliStatus = cli.exitCode === null ? await new Promise(done => cli.once('close', done)) : cli.exitCode;
+			resolve({ status, output, cliStatus, cliOutput });
+		});
 	});
 }
 
@@ -141,7 +215,7 @@ describe('Scheduler reservation snapshot propagation', function() {
 	it('keeps historical JSON snapshots after rules and directory mappings change', function() {
 		const startAt = Date.now() + 3600000;
 		const directory = writeFixture('success', {
-			rules: [{ isDisabled: true }, { ruleUid: 'uid-anime3', recordedDirId: 'anime3' }],
+			rules: [{ isDisabled: true }, { ruleUid: 'uid-recorded-a', recordedDirId: 'recorded-a' }],
 			tuners: [{ types: ['GR'] }],
 			services: [{ id: 1001, serviceId: 1, networkId: 1, name: 'Fixture channel', channel: { type: 'GR', channel: '27' } }],
 			programs: [{ id: 1001001, serviceId: 1, networkId: 1, name: 'Fixture anime', description: '', startAt, duration: 1800000 }]
@@ -152,18 +226,18 @@ describe('Scheduler reservation snapshot propagation', function() {
 			const read = name => JSON.parse(fs.readFileSync(path.join(directory, 'data', name + '.json'), 'utf8'));
 			const oldMeta = read('match')[0].reservationMeta;
 			assert.strictEqual(oldMeta.ruleId, 1);
-			assert.strictEqual(oldMeta.ruleUid, 'uid-anime3');
+			assert.strictEqual(oldMeta.ruleUid, 'uid-recorded-a');
 			const reserve = read('reserves2')[0];
 			fs.writeFileSync(path.join(directory, 'data', 'recorded.json'), JSON.stringify([
-				{ ...reserve, recorded: path.join(directory, 'anime3', 'fixture.m2ts') }
+				{ ...reserve, recorded: path.join(directory, 'recorded-a', 'fixture.m2ts') }
 			]));
 			// Delete/reorder the old rules, reuse their index, and remap the same HDD ID.
 			fs.writeFileSync(path.join(directory, 'rules.json'), JSON.stringify([
-				{ recordedDirId: 'anime4' }, { recordedDirId: 'anime4' }
+				{ recordedDirId: 'recorded-b' }, { recordedDirId: 'recorded-b' }
 			]));
 			const configPath = path.join(directory, 'config.json');
 			const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-			config.recordedDirs[0].path = path.join(directory, 'remapped-anime3');
+			config.recordedDirs[0].path = path.join(directory, 'remapped-recorded-a');
 			fs.writeFileSync(configPath, JSON.stringify(config));
 			[true, false].forEach(hasReserve => {
 				if (!hasReserve) fs.writeFileSync(path.join(directory, 'data', 'reserves2.json'), '[]');
@@ -187,15 +261,15 @@ describe('Scheduler reservation snapshot propagation', function() {
 	const cases = [
 		{ name: 'single rule with index zero and no directory', rules: [{}], ruleId: 0, ruleIdSource: 'index' },
 		{
-			name: 'last matching rule selects anime4 over anime3',
-			rules: [{ recordedDirId: 'anime3' }, { recordedDirId: ' anime4 ' }],
-			ruleId: 1, ruleIdSource: 'index', recordedDirId: 'anime4', directory: 'anime4'
+			name: 'last matching rule selects recorded-b over recorded-a',
+			rules: [{ recordedDirId: 'recorded-a' }, { recordedDirId: ' recorded-b ' }],
+			ruleId: 1, ruleIdSource: 'index', recordedDirId: 'recorded-b', directory: 'recorded-b'
 		},
 		{
-			name: 'explicit string ID selects anime3',
-			rules: [{ id: 'rule-anime', ruleUid: 'uid-anime3', recordedDirId: 'anime3', recorded_format: '<title>/<id>.m2ts' }],
-			ruleId: 'rule-anime', ruleIdSource: 'id', recordedDirId: 'anime3', directory: 'anime3',
-			ruleUid: 'uid-anime3',
+			name: 'explicit string ID selects recorded-a',
+			rules: [{ id: 'rule-recorded', ruleUid: 'uid-recorded-a', recordedDirId: 'recorded-a', recorded_format: '<title>/<id>.m2ts' }],
+			ruleId: 'rule-recorded', ruleIdSource: 'id', recordedDirId: 'recorded-a', directory: 'recorded-a',
+			ruleUid: 'uid-recorded-a',
 			recordedFormat: '<title>/<id>.m2ts'
 		},
 		{
@@ -242,10 +316,182 @@ describe('Scheduler reservation snapshot propagation', function() {
 					}
 				});
 				assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(directory, 'rules.json'), 'utf8')), entry.rules);
-				['anime3', 'anime4', 'recorded'].forEach(name => assert.strictEqual(fs.existsSync(path.join(directory, name)), false));
+				['recorded-a', 'recorded-b', 'recorded'].forEach(name => assert.strictEqual(fs.existsSync(path.join(directory, name)), false));
 			} finally {
 				fs.rmSync(directory, { recursive: true, force: true });
 			}
 		});
+	});
+});
+
+describe('Scheduler Skip and duplicate reservation boundaries', function() {
+	it('keeps a skipped duplicate stable and returns to the low SID after Unskip regardless of service order', function() {
+		[ false, true ].forEach(reverseServices => {
+			const fixture = duplicateFixtureOptions(reverseServices);
+			const directory = writeFixture('success', {
+				rules: [{ ruleUid: 'stable-rule', recordedDirId: 'recorded-a', recorded_format: '<title>/<id>.m2ts' }],
+				tuners: [{ types: ['GR'] }],
+				services: fixture.services,
+				programs: fixture.programs
+			});
+
+			try {
+				let result = runUpdate(directory);
+				assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+				assert.deepStrictEqual(readData(directory, 'reserves').map(program => program.id), [ fixture.lowId ]);
+
+				result = runCli(directory, 'skip', fixture.lowId);
+				assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+				for (let i = 0; i < 2; i++) {
+					result = runUpdate(directory);
+					assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+					const skipped = readData(directory, 'reserves');
+					assert.strictEqual(skipped.length, 1);
+					assert.strictEqual(skipped[0].id, fixture.lowId);
+					assert.strictEqual(skipped[0].isSkip, true);
+					assert.strictEqual(skipped[0].ruleUid, 'stable-rule');
+					assert.strictEqual(skipped[0].recordedDirId, 'recorded-a');
+					assert.strictEqual(skipped[0].recordedDir, path.join(directory, 'recorded-a') + '/');
+					assert.strictEqual(skipped[0].recordedFormat, '<title>/<id>.m2ts');
+				}
+
+				result = runCli(directory, 'unskip', fixture.lowId);
+				assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+				for (let i = 0; i < 2; i++) {
+					result = runUpdate(directory);
+					assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+					const active = readData(directory, 'reserves');
+					assert.strictEqual(active.length, 1);
+					assert.strictEqual(active[0].id, fixture.lowId);
+					assert.strictEqual(active[0].isSkip, undefined);
+				}
+			} finally {
+				fs.rmSync(directory, { recursive: true, force: true });
+			}
+		});
+	});
+
+	it('keeps an explicit manual duplicate without discarding the existing Skip marker', function() {
+		const fixture = duplicateFixtureOptions(true);
+		const directory = writeFixture('success', {
+			rules: [{ sid: 1, ruleUid: 'low-only-rule' }],
+			tuners: [{ types: ['GR'] }],
+			services: fixture.services,
+			programs: fixture.programs
+		});
+
+		try {
+			let result = runUpdate(directory);
+			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+			result = runCli(directory, 'skip', fixture.lowId);
+			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+			result = runCli(directory, 'reserve', fixture.highId);
+			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+
+			result = runUpdate(directory);
+			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+			let current = readData(directory, 'reserves');
+			assert.deepStrictEqual(current.map(program => program.id).sort(), [ fixture.lowId, fixture.highId ].sort());
+			assert.strictEqual(current.find(program => program.id === fixture.lowId).isSkip, true);
+			assert.strictEqual(current.find(program => program.id === fixture.highId).isManualReserved, true);
+
+			result = runCli(directory, 'unreserve', fixture.highId);
+			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+			result = runUpdate(directory);
+			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+			current = readData(directory, 'reserves');
+			assert.strictEqual(current.length, 1);
+			assert.strictEqual(current[0].id, fixture.lowId);
+			assert.strictEqual(current[0].isSkip, true);
+		} finally {
+			fs.rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it('retries once and preserves CLI Skip, Unskip, and manual reserve changes made during a scheduler run', { timeout: 20000 }, async function() {
+		for (const entry of [
+			{ mode: 'skip', setup: false },
+			{ mode: 'unskip', setup: true },
+			{ mode: 'reserve', setup: false, manual: true }
+		]) {
+			const fixture = duplicateFixtureOptions(false);
+			const raceRule = {
+				ruleUid: 'race-rule',
+				recordedDirId: 'recorded-a',
+				recorded_format: '<title>/<id>.m2ts'
+			};
+			if (entry.manual) {
+				raceRule.sid = 1;
+			}
+			const directory = writeFixture('success', {
+				rules: [raceRule],
+				tuners: [{ types: ['GR'] }],
+				services: fixture.services,
+				programs: fixture.programs
+			});
+
+			try {
+				let result = runUpdate(directory);
+				assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+				if (entry.setup) {
+					result = runCli(directory, 'skip', fixture.lowId);
+					assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+				}
+
+				instrumentScheduler(directory, 'function outputReserves() {', 'BEFORE_RESERVATION_LOCK');
+				const raced = await runUpdateWithCliAtMarker(
+					directory,
+					'BEFORE_RESERVATION_LOCK',
+					entry.mode,
+					entry.manual ? fixture.highId : fixture.lowId
+				);
+				assert.strictEqual(raced.status, 0, raced.output);
+				assert.strictEqual(raced.cliStatus, 0, raced.cliOutput);
+				assert.match(raced.output, /reserves\.json changed while scheduler was running/);
+				assert.match(raced.output, /retrying once with the latest reserves\.json/);
+				assert.strictEqual(raced.output.split('BEFORE_RESERVATION_LOCK').length - 1, 2);
+
+				const current = readData(directory, 'reserves');
+				const low = current.find(program => program.id === fixture.lowId);
+				if (!entry.manual) {
+					assert.strictEqual(low.ruleUid, 'race-rule');
+					assert.strictEqual(low.recordedDirId, 'recorded-a');
+					assert.strictEqual(low.recordedDir, path.join(directory, 'recorded-a') + '/');
+					assert.strictEqual(low.recordedFormat, '<title>/<id>.m2ts');
+				}
+				if (entry.mode === 'skip') {
+					assert.strictEqual(low.isSkip, true);
+				} else if (entry.mode === 'unskip') {
+					assert.strictEqual(low.isSkip, undefined);
+				} else {
+					assert.strictEqual(current.find(program => program.id === fixture.highId).isManualReserved, true);
+				}
+			} finally {
+				fs.rmSync(directory, { recursive: true, force: true });
+			}
+		}
+	});
+
+	it('serializes a CLI Skip started after the scheduler acquires its output lock', { timeout: 10000 }, async function() {
+		const fixture = duplicateFixtureOptions(false);
+		const directory = writeFixture('success', {
+			rules: [{}],
+			tuners: [{ types: ['GR'] }],
+			services: fixture.services,
+			programs: fixture.programs
+		});
+
+		try {
+			let result = runUpdate(directory);
+			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+			instrumentScheduler(directory, '// reservation output lock acquired', 'AFTER_RESERVATION_LOCK');
+			const raced = await runUpdateWithCliAtMarker(directory, 'AFTER_RESERVATION_LOCK', 'skip', fixture.lowId);
+			assert.strictEqual(raced.status, 0, raced.output);
+			assert.strictEqual(raced.cliStatus, 0, raced.cliOutput);
+			assert.strictEqual(readData(directory, 'reserves').find(program => program.id === fixture.lowId).isSkip, true);
+			assert.strictEqual(fs.existsSync(path.join(directory, 'data', 'reserves.json.lock')), false);
+		} finally {
+			fs.rmSync(directory, { recursive: true, force: true });
+		}
 	});
 });

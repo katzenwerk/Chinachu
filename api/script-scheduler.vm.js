@@ -7,7 +7,7 @@
 		
 		case 'PUT':
 			child_process.exec('./chinachu update', function(err, stdout, stderr) {
-				if (err) return response.error(500);
+				if (err) return response.error(err.code === 75 ? 503 : 500);
 				
 				res();
 			});
