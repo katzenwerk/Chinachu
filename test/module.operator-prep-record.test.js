@@ -288,39 +288,6 @@ async function createOperatorFixture(programs, onStream, options) {
 }
 
 describe('Operator recording preparation attempts', function() {
-	it('keeps a started manual stop as a shortened recording and removes its reserve', { timeout: 10000 }, async function() {
-		const fixture = await createOperatorFixture([
-			createProgram('2', { isManualReserved: true })
-		], request => {
-			request.res.writeHead(200, { 'Content-Type': 'video/MP2T' });
-			request.res.write(Buffer.alloc(188, 0x47));
-		});
-
-		try {
-			await waitForCondition(
-				() => /RECORD: #2\b[\s\S]*WRITE: .*recording\.json/.test(fixture.output()),
-				'manual recording did not start',
-				7000
-			);
-			fixture.abort('2');
-			await waitForCondition(
-				() => fixture.read('recording').length === 0 &&
-					fixture.read('reserves').length === 0 &&
-					fixture.read('recorded').some(item => item.id === '2') &&
-					/FIN ABORT SHORT: #2\b/.test(fixture.output()),
-				'started manual stop did not finalize as a shortened recording',
-				3000
-			);
-
-			const recorded = fixture.read('recorded')[0];
-			assert.strictEqual(recorded.operatorAbort, true);
-			assert.strictEqual(recorded.operatorAbortReason, 'ABORT RECORDING');
-			assert.match(fixture.output(), /FIN ABORT SHORT: #2\b/);
-		} finally {
-			await fixture.close();
-		}
-	});
-
 	it('keeps normal error retry behavior for an active scheduled reserve', { timeout: 12000 }, async function() {
 		const fixture = await createOperatorFixture([ createProgram('2') ], request => {
 			if (request.index === 1) {

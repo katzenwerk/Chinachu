@@ -10,10 +10,10 @@ const program = {
 	title: 'Fixture anime', channel: { id: 'fixture-channel', name: 'Fixture channel', type: 'GR' }
 };
 const reservation = {
-	...program, ruleId: 0, ruleIdSource: 'index', ruleUid: 'uid-anime3', recordedDirId: 'anime3', recordedDir: '/fixture/anime3/',
+	...program, ruleId: 0, ruleIdSource: 'index', ruleUid: 'uid-recorded-a', recordedDirId: 'recorded-a', recordedDir: '/fixture/recorded-a/',
 	snapshotAt: nowMs - 7200000, updatedAt: nowMs - 7200000, source: 'scheduler'
 };
-const recorded = { ...program, recorded: '/fixture/anime3/program.m2ts' };
+const recorded = { ...program, recorded: '/fixture/recorded-a/program.m2ts' };
 const snapshotFields = ['ruleId', 'ruleIdSource', 'ruleUid', 'recordedDirId', 'recordedDir', 'reserveSnapshotAt', 'reserveUpdatedAt'];
 
 function ledger(options = {}) {
@@ -42,7 +42,7 @@ describe('Matching reservation snapshots', function() {
 		for (let i = 0; i < 2; i++) {
 			previous = ledger({
 				oldResults: previous, recordedList: [recorded],
-				config: { recordedDirs: [{ id: 'anime3', path: '/fixture/changed/' }], recordedDir: '/fixture/default/' }
+				config: { recordedDirs: [{ id: 'recorded-a', path: '/fixture/changed/' }], recordedDir: '/fixture/default/' }
 			});
 			assert.deepStrictEqual(snapshot(previous[0].reservationMeta), expected);
 			assert.strictEqual(previous[0].reservationMeta.hasReserve, false);
@@ -68,7 +68,7 @@ describe('Matching reservation snapshots', function() {
 	it('uses a new reservation as a whole, including missing values, after rule changes', function() {
 		const old = ledger({ recordedList: [recorded], reserves2List: [reservation] });
 		[
-			{ ...program, ruleId: 'new-rule', ruleIdSource: 'id', recordedDirId: 'anime4', recordedDir: '/fixture/anime4/' },
+			{ ...program, ruleId: 'new-rule', ruleIdSource: 'id', recordedDirId: 'recorded-b', recordedDir: '/fixture/recorded-b/' },
 			{ ...program, ruleId: 1, ruleIdSource: 'index' },
 			{ ...program }
 		].forEach(reserve => {

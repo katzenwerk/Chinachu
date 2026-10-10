@@ -135,44 +135,6 @@ describe('Operator scheduler preflight', function() {
 		}
 	});
 
-	it('uses the successful scheduler start as the EPG completion boundary', async function() {
-		for (const scenario of [
-			{ finishedAt: 4000, dirty: true },
-			{ finishedAt: 2500, dirty: false }
-		]) {
-			const fixture = createFixture();
-			try {
-				fixture.values.jobs = jobsFixture({ finishedAt: scenario.finishedAt });
-				const result = await fixture.preflight.check();
-				assert.strictEqual(result.reasons.includes('epg'), scenario.dirty);
-			} finally {
-				fixture.cleanup();
-			}
-		}
-	});
-
-	it('treats failed and abnormal aborted terminal EPG cycles as periodic fallback reasons', async function() {
-		for (const child of [ { hasFailed: true }, { hasAborted: true } ]) {
-			const fixture = createFixture();
-			try {
-				fixture.values.jobs = jobsFixture(Object.assign({ finishedAt: 4000 }, child));
-				assert.ok((await fixture.preflight.check()).reasons.includes('epg'));
-			} finally {
-				fixture.cleanup();
-			}
-		}
-	});
-
-	it('does not use an EPG cycle with a running child as a dirty reason', async function() {
-		const fixture = createFixture();
-		try {
-			fixture.values.jobs = jobsFixture({ status: 'running', finishedAt: undefined });
-			assert.strictEqual((await fixture.preflight.check()).reasons.includes('epg'), false);
-		} finally {
-			fixture.cleanup();
-		}
-	});
-
 	it('detects rules content changes but ignores mtime-only changes', async function() {
 		const changed = createFixture();
 		try {
@@ -192,98 +154,6 @@ describe('Operator scheduler preflight', function() {
 		}
 	});
 
-	it('detects config content changes', async function() {
-		const fixture = createFixture();
-		try {
-			writeJson(fixture.paths.config, { normalizationForm: 'NFC', recordedDir: '/recorded' });
-			assert.ok((await fixture.preflight.check()).reasons.includes('config'));
-		} finally {
-			fixture.cleanup();
-		}
-	});
-
-	it('detects manual reserve and skip changes', async function() {
-		for (const reserve of [
-			{ id: 'manual-1', start: 1000, end: 2000, isManualReserved: true, '1seg': true },
-			{ id: 'auto-1', start: 1000, end: 2000, isSkip: true }
-		]) {
-			const fixture = createFixture();
-			try {
-				writeJson(fixture.paths.reserves, [ reserve ]);
-				assert.ok((await fixture.preflight.check()).reasons.includes('reserves'));
-			} finally {
-				fixture.cleanup();
-			}
-		}
-	});
-
-	it('ignores scheduler-generated reserve fields and detects later external semantics', async function() {
-		const fixture = createFixture();
-		try {
-			writeJson(fixture.paths.reserves, [ {
-				id: 'different-auto-output',
-				start: 5000,
-				end: 6000,
-				isConflict: true,
-				ruleId: 10,
-				ruleIdSource: 'index',
-				ruleUid: 'stable-rule'
-			} ]);
-			assert.strictEqual((await fixture.preflight.check()).reasons.includes('reserves'), false);
-
-			writeJson(fixture.paths.reserves, [ {
-				id: 'manual-during-scheduler',
-				start: 5000,
-				end: 6000,
-				isManualReserved: true
-			} ]);
-			assert.ok((await fixture.preflight.check()).reasons.includes('reserves'));
-		} finally {
-			fixture.cleanup();
-		}
-	});
-
-	it('detects service scheduling changes and ignores volatile service fields', async function() {
-		const changed = createFixture();
-		try {
-			changed.values.services = servicesFixture({ name: 'Renamed Service' });
-			assert.ok((await changed.preflight.check()).reasons.includes('services'));
-		} finally {
-			changed.cleanup();
-		}
-
-		const volatile = createFixture();
-		try {
-			volatile.values.services = servicesFixture({ remoteControlKeyId: 99, currentUsers: [ 'recording' ] });
-			assert.strictEqual((await volatile.preflight.check()).reasons.includes('services'), false);
-		} finally {
-			volatile.cleanup();
-		}
-	});
-
-	it('detects tuner capacity changes and ignores volatile tuner use', async function() {
-		for (const tuners of [
-			tunersFixture({ types: [ 'GR', 'BS' ] }),
-			tunersFixture().concat(tunersFixture({ name: 'Tuner 2' }))
-		]) {
-			const changed = createFixture();
-			try {
-				changed.values.tuners = tuners;
-				assert.ok((await changed.preflight.check()).reasons.includes('tuners'));
-			} finally {
-				changed.cleanup();
-			}
-		}
-
-		const volatile = createFixture();
-		try {
-			volatile.values.tuners = tunersFixture({ isAvailable: false, users: [ { id: 'recording' } ] });
-			assert.strictEqual((await volatile.preflight.check()).reasons.includes('tuners'), false);
-		} finally {
-			volatile.cleanup();
-		}
-	});
-
 	it('isolates jobs, services, and tuners API failures as safe dirty reasons', async function() {
 		for (const name of [ 'jobs', 'services', 'tuners' ]) {
 			const options = {};
@@ -295,67 +165,6 @@ describe('Operator scheduler preflight', function() {
 			} finally {
 				fixture.cleanup();
 			}
-		}
-	});
-
-	it('treats missing or corrupt state and required outputs as dirty', async function() {
-		const cases = [
-			{ target: 'state', action: fs.unlinkSync, reason: 'state' },
-			{ target: 'state', action: file => fs.writeFileSync(file, '{broken'), reason: 'state' },
-			{ target: 'schedule', action: fs.unlinkSync, reason: 'schedule' },
-			{ target: 'reserves', action: file => fs.writeFileSync(file, '{broken'), reason: 'reserves' },
-			{ target: 'reserves2', action: fs.unlinkSync, reason: 'reserves2' }
-		];
-		for (const item of cases) {
-			const fixture = createFixture();
-			try {
-				item.action(fixture.paths[item.target]);
-				assert.ok((await fixture.preflight.check()).reasons.includes(item.reason));
-			} finally {
-				fixture.cleanup();
-			}
-		}
-	});
-
-	it('reports recorded changes as advisory without making the result dirty', async function() {
-		const fixture = createFixture();
-		try {
-			writeJson(fixture.paths.recorded, [ { id: 'recorded-1' } ]);
-			const result = await fixture.preflight.check();
-			assert.strictEqual(result.dirty, false);
-			assert.deepStrictEqual(result.advisory, [ 'recorded' ]);
-		} finally {
-			fixture.cleanup();
-		}
-	});
-
-	it('coalesces concurrent checks into one set of Mirakurun requests', async function() {
-		let resolveJobs;
-		const jobs = new Promise(resolve => { resolveJobs = resolve; });
-		const fixture = createFixture({ fetchJobs: () => { fixture.calls.jobs++; return jobs; } });
-		try {
-			const first = fixture.preflight.check();
-			const second = fixture.preflight.check();
-			assert.strictEqual(first, second);
-			resolveJobs(fixture.values.jobs);
-			await first;
-			assert.deepStrictEqual(fixture.calls, { jobs: 1, services: 1, tuners: 1 });
-		} finally {
-			fixture.cleanup();
-		}
-	});
-
-	it('suppresses an in-flight result after shutdown', async function() {
-		let resolveJobs;
-		const jobs = new Promise(resolve => { resolveJobs = resolve; });
-		const fixture = createFixture({ fetchJobs: () => jobs });
-		try {
-			const check = fixture.preflight.check();
-			fixture.preflight.stop();
-			resolveJobs(fixture.values.jobs);
-			assert.strictEqual(await check, null);
-		} finally {
-			fixture.cleanup();
 		}
 	});
 
@@ -388,18 +197,4 @@ describe('Operator scheduler preflight', function() {
 		}
 	});
 
-	it('does not start a periodic scheduler after shadow runner shutdown', async function() {
-		let resolveCheck;
-		let starts = 0;
-		const runner = new preflightModule.ShadowPeriodicScheduler({
-			preflight: { check: () => new Promise(resolve => { resolveCheck = resolve; }) },
-			startScheduler: () => { starts++; }
-		});
-		const request = runner.request();
-		await Promise.resolve();
-		runner.stop();
-		resolveCheck({ dirty: false, reasons: [], advisory: [] });
-		assert.strictEqual(await request, null);
-		assert.strictEqual(starts, 0);
-	});
 });

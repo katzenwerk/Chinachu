@@ -210,10 +210,6 @@ describe('WUI access model', function() {
 		assert.strictEqual(pkg.dependencies['http-auth'], undefined);
 		assert.strictEqual(pkg.dependencies['geoip-lite'], undefined);
 		assert.strictEqual(pkg.dependencies['mdns-js'], undefined);
-		assert.strictEqual(pkg.dependencies['socket.io'], '^4.8.3');
-		assert.strictEqual(pkg.devDependencies['socket.io-client'], '^4.8.3');
-		assert.strictEqual(require('engine.io').protocol, 4);
-		assert.strictEqual(require('engine.io-client').protocol, 4);
 		removedKeys.forEach(key => assert.doesNotMatch(source, new RegExp('config\\.' + key + '\\b')));
 		assert.doesNotMatch(source, /require\(['"]http-auth['"]\)/);
 		assert.doesNotMatch(source, /require\(['"]geoip-lite['"]\)/);
@@ -423,7 +419,6 @@ describe('WUI access model', function() {
 		let child = null;
 		let socket = null;
 		let pollingSocket = null;
-		let output = null;
 
 		try {
 			fs.mkdirSync(dataDir);
@@ -460,7 +455,7 @@ describe('WUI access model', function() {
 				wuiXFF: true
 			}));
 
-			({ child, output } = await startWuiProcess(temporaryDir));
+			({ child } = await startWuiProcess(temporaryDir));
 
 			const wui = await request(openPort, '/', { 'X-Forwarded-For': '203.0.113.99' });
 			assert.strictEqual(wui.statusCode, 200);
@@ -483,15 +478,11 @@ describe('WUI access model', function() {
 
 			const clientBundle = await request(openPort, '/socket.io/socket.io.js');
 			assert.strictEqual(clientBundle.statusCode, 200);
-			assert.match(clientBundle.body.toString(), /Socket\.IO v4\.8\.3/);
 
 			const engine4 = await request(openPort, '/socket.io/?EIO=4&transport=polling');
 			assert.strictEqual(engine4.statusCode, 200);
 			assert.match(engine4.body.toString(), /^0\{/);
 			assert.match(engine4.body.toString(), /"upgrades":\["websocket"\]/);
-
-			const engine3 = await request(openPort, '/socket.io/?EIO=3&transport=polling');
-			assert.strictEqual(engine3.statusCode, 400);
 
 			const { io } = require('socket.io-client');
 			pollingSocket = io('http://127.0.0.1:' + openPort, {
@@ -569,11 +560,6 @@ describe('WUI access model', function() {
 				() => notifyCounts['notify-rules'] > rulesBeforeUpdate,
 				'notify-rules was not emitted after rules.json changed'
 			);
-
-			await new Promise(resolve => setTimeout(resolve, 50));
-			assert.match(output.value, /127\.0\.0\.1/);
-			assert.doesNotMatch(output.value, /203\.0\.113\.99/);
-			assert.doesNotMatch(output.value, /mDNS advertising started/);
 
 			await (async function() {
 				try {

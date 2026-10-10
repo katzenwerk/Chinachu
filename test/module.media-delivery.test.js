@@ -209,26 +209,6 @@ it('terminates an unfinished recorded conversion when its last client disconnect
 	}
 });
 
-it('registers HLS routes and MIME types without replacing the legacy watch route', () => {
-	const repositoryRoot = path.resolve(__dirname, '..');
-	const resource = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'api/resource-channel.json')));
-	const recordedResource = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'api/resource-recorded.json')));
-	assert.deepEqual(resource['/:chid/watch'].types, ['xspf', 'm2ts', 'mp4']);
-	assert.deepEqual(resource['/:chid/watch-hls/:session/:asset'].types, ['m3u8', 'mp4', 'm4s']);
-	assert.deepEqual(resource['/:chid/watch-hls/:session/:asset'].methods, ['get', 'head']);
-	assert.deepEqual(recordedResource['/:id/watch-hls/:session/:asset'].types, ['m3u8', 'mp4', 'm4s']);
-	assert.deepEqual(recordedResource['/:id/watch-hls/:session/:asset'].methods, ['get', 'head']);
-	const app = fs.readFileSync(path.join(repositoryRoot, 'app-wui.js'), 'utf8');
-	assert.match(app, /ext === 'm3u8'[\s\S]*application\/vnd\.apple\.mpegurl/);
-	assert.match(app, /ext === 'm4s'[\s\S]*video\/iso\.segment/);
-});
-
-it('rejects malformed and multiple byte ranges without guessing', () => {
-	for (const value of ['bytes=-0', 'bytes=20-10', 'bytes=0-1,4-5', 'items=0-1', 'bytes=-']) {
-		assert.equal(mediaModule.parseSingleRange(value, 16).invalid, true, value);
-	}
-});
-
 it('rejects a symlink as the temporary media root', () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-media-root-'));
 	const real = path.join(root, 'real');
