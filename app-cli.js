@@ -8,6 +8,7 @@
 var CONFIG_FILE         = __dirname + '/config.json';
 var RULES_FILE          = __dirname + '/rules.json';
 var RESERVES_DATA_FILE  = __dirname + '/data/reserves.json';
+var RESERVES2_DATA_FILE = __dirname + '/data/reserves2.json';
 var SCHEDULE_DATA_FILE  = __dirname + '/data/schedule.json';
 var RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 var RECORDED_DATA_FILE  = __dirname + '/data/recorded.json';
@@ -32,7 +33,7 @@ var net           = require('net');
 var child_process = require('child_process');
 
 // ディレクトリチェック
-if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./web/')) {
+if (!fs.existsSync('./data/') || !fs.existsSync('./log/')) {
 	util.error('必要なディレクトリが存在しないか、カレントワーキングディレクトリが不正です。');
 	process.exit(1);
 }
@@ -42,7 +43,7 @@ var chinachu   = require('chinachu-common');
 var opts       = require('opts');
 var dateFormat = require('dateformat').default;
 var Table      = require('easy-table');
-var ruleUid    = require('./lib/rule-uid');
+var ruleStore  = require('./lib/rule-store');
 var reservationStore = require('./lib/reservation-store');
 
 // 引数
@@ -99,6 +100,13 @@ opts.parse([
 		short      : 'n',
 		long       : 'num',
 		description: '番号',
+		value      : true,
+		required   : false
+	},
+	{
+		short      : 'uid',
+		long       : 'rule-uid',
+		description: 'ルールUID',
 		value      : true,
 		required   : false
 	},
@@ -288,12 +296,20 @@ function exitReservationError(error) {
 	process.exit(exitCode);
 }
 
-function updateReserves(callback) {
+function updateReserves(callback, updateHistory) {
 	try {
 		return reservationStore.withLock(RESERVES_DATA_FILE, function () {
 			reserves = reservationStore.readArray(RESERVES_DATA_FILE);
 			var result = callback(reserves);
-			reservationStore.writeArrayAtomic(RESERVES_DATA_FILE, reserves);
+			if (updateHistory) {
+				reservationStore.updateArrayAtomic(RESERVES2_DATA_FILE, function (currentHistory) {
+					updateHistory(result, currentHistory);
+					reservationStore.writeArrayAtomic(RESERVES_DATA_FILE, reserves);
+					return currentHistory;
+				}, { createIfMissing: true });
+			} else {
+				reservationStore.writeArrayAtomic(RESERVES_DATA_FILE, reserves);
+			}
 			return result;
 		});
 	} catch (error) {
@@ -301,6 +317,58 @@ function updateReserves(callback) {
 			exitReservationError(error);
 		}
 		throw error;
+	}
+}
+
+function makeReserves2Key(program) {
+	var channel = program && program.channel || {};
+	var channelId = channel.id || program && program.channelId || '';
+	var start = parseInt(program && program.start, 10);
+	var seconds = parseInt(program && program.seconds, 10);
+
+	if (program && typeof program.key === 'string' && program.key !== '') {
+		return program.key;
+	}
+	if (!channelId || !start || !seconds) {
+		return '';
+	}
+
+	return [channelId, start, seconds].join('|');
+}
+
+function updateManualReserveHistory(program, remove, current) {
+	var key = makeReserves2Key(program);
+	var now = Date.now();
+	var index = -1;
+
+	current.some(function (entry, i) {
+		if ((key && makeReserves2Key(entry) === key) || (!key && entry && entry.id === program.id)) {
+			index = i;
+			return true;
+		}
+		return false;
+	});
+
+	if (remove) {
+		if (index !== -1) {
+			current.splice(index, 1);
+		}
+	} else {
+		var snapshot = Object.assign({}, program, {
+			source: 'manual',
+			origId: program.origId || program.programId || program.id || '',
+			key: key,
+			snapshotAt: now,
+			updatedAt: now
+		});
+		if (index === -1) {
+			current.push(snapshot);
+		} else {
+			current[index] = snapshot;
+		}
+		current.sort(function (a, b) {
+			return parseInt(a.start || 0, 10) - parseInt(b.start || 0, 10);
+		});
 	}
 }
 
@@ -476,6 +544,8 @@ function chinachuReserve() {
 			currentReserves.sort(function(a, b) {
 				return a.start - b.start;
 			});
+		}, function (_, currentHistory) {
+			updateManualReserveHistory(target, false, currentHistory);
 		});
 
 		console.log('reserve:');
@@ -519,6 +589,8 @@ function chinachuUnreserve() {
 				}
 			}
 			return current;
+		}, function (current, currentHistory) {
+			updateManualReserveHistory(current, true, currentHistory);
 		});
 
 		console.log('unreserve:');
@@ -650,99 +722,76 @@ function chinachuStop() {
 
 // Rule
 function chinachuRule() {
-	var r = {};
+	var selectedRule = null;
+	var target = {
+		ruleUid: opts.get('rule-uid') || null,
+		index: opts.get('n')
+	};
+	var hasTarget = target.ruleUid !== null || (target.index !== undefined && target.index !== null && target.index !== false && target.index !== '');
 
-	if (opts.get('n')) {
-		r = rules[parseInt(opts.get('n'), 10)] || {};
-	}
+	try {
+		var updateResult = ruleStore.updateRules(RULES_FILE, function(currentRules) {
+			var targetIndex = hasTarget ? ruleStore.findIndex(currentRules, target) : -1;
+			var r = targetIndex === -1 ? {} : Object.assign({}, currentRules[targetIndex]);
 
-	for (var i in rule) {
-		r[i] = rule[i];
-	}
+			for (var key in rule) r[key] = rule[key];
 
-	for (var i in r) {
-		if ((typeof r[i] === 'string') && (r[i] === 'null')) {
-			delete r[i];
-		} else if ((typeof r[i] === 'object') && !!r[i].length && (r[i].length === 1) && (r[i][0] === 'null')) {
-			delete r[i];
-		} else if ((typeof r[i] === 'object') && !r[i].length) {
-			for (var j in r[i]) {
-				if ((typeof r[i][j] === 'string') && (r[i][j] === 'null')) {
-					delete r[i][j];
-				} else if ((typeof r[i][j] === 'number') && (r[i][j] === -1)) {
-					delete r[i][j];
+			for (var i in r) {
+				if ((typeof r[i] === 'string') && (r[i] === 'null')) {
+					delete r[i];
+				} else if ((typeof r[i] === 'object') && !!r[i].length && (r[i].length === 1) && (r[i][0] === 'null')) {
+					delete r[i];
+				} else if ((typeof r[i] === 'object') && !r[i].length) {
+					for (var j in r[i]) {
+						if ((typeof r[i][j] === 'string') && (r[i][j] === 'null')) delete r[i][j];
+						else if ((typeof r[i][j] === 'number') && (r[i][j] === -1)) delete r[i][j];
+					}
+					if (i === 'hour' && (typeof r[i].start === 'undefined' || typeof r[i].end === 'undefined')) delete r[i];
+					if (i === 'duration' && (typeof r[i].min === 'undefined' || typeof r[i].max === 'undefined')) delete r[i];
 				}
 			}
 
-			if (i === 'hour' && (typeof r[i].start === 'undefined' || typeof r[i].end === 'undefined')) {
-				delete r[i];
+			if (JSON.stringify(r) === '{}') {
+				throw ruleStore.targetError(hasTarget ? 'RULE_TARGET_NOT_FOUND' : 'RULE_TARGET_INVALID',
+					hasTarget ? '見つかりません' : 'ルールが空です。一つ以上の条件が必要です。');
 			}
 
-			if (i === 'duration' && (typeof r[i].min === 'undefined' || typeof r[i].max === 'undefined')) {
-				delete r[i];
+			if (opts.get('enable')) delete r.isDisabled;
+			if (opts.get('disable')) r.isDisabled = true;
+
+			if (opts.get('remove')) {
+				if (targetIndex === -1) throw ruleStore.targetError('RULE_TARGET_NOT_FOUND', '見つかりません');
+				selectedRule = currentRules[targetIndex];
+				currentRules.splice(targetIndex, 1);
+			} else if (targetIndex !== -1) {
+				r.ruleUid = currentRules[targetIndex].ruleUid;
+				currentRules[targetIndex] = r;
+				selectedRule = r;
+			} else {
+				currentRules.push(r);
+				selectedRule = r;
 			}
+		}, { write: !opts.get('simulation') });
+		rules = updateResult.rules;
+		if (!opts.get('simulation') && updateResult.assigned > 0) {
+			console.log('RULE UID BACKFILL: assigned=' + updateResult.assigned + ' existing=' + updateResult.existing);
 		}
-	}
-
-	if (JSON.stringify(r) === '{}') {
-		if (opts.get('enable') || opts.get('disable') || opts.get('remove')) {
-			util.error('見つかりません');
-		} else {
-			util.error('ルールが空です。一つ以上の条件が必要です。');
+	} catch (error) {
+		util.error(error.message);
+		if (error.code === 'RESERVATION_LOCK_TIMEOUT') process.exit(ruleStore.CLI_EXIT_LOCK_TIMEOUT);
+		if (error.code === 'RULE_TARGET_NOT_FOUND' || error.code === 'RULE_TARGET_INVALID' ||
+				error.code === 'RULE_UID_DUPLICATE' || error.code === 'RULE_UID_INVALID') {
+			process.exit(ruleStore.CLI_EXIT_TARGET_CONFLICT);
 		}
 		process.exit(1);
 	}
 
-	if (opts.get('enable')) {
-		if (r.isDisabled) {
-			delete r.isDisabled;
-		}
-	}
-
-	if (opts.get('disable')) {
-		r.isDisabled = true;
-	}
-
-	if (opts.get('n')) {
-		if (opts.get('remove')) {
-			rules.splice(parseInt(opts.get('n'), 10), 1);
-		} else {
-			rules[parseInt(opts.get('n'), 10)] = r;
-		}
+	var prefix = opts.get('simulation') ? '[simulation] ' : '';
+	if (opts.get('remove')) {
+		console.log(prefix + 'ルールを削除します');
 	} else {
-		rules.push(r);
-	}
-
-	if (opts.get('simulation')) {
-		try {
-			ruleUid.ensureRuleUids(rules);
-		} catch (error) {
-			util.error('ルールUIDが不正です: ' + error.message);
-			process.exit(1);
-		}
-		if (opts.get('remove')) {
-			console.log('[simulation] ルールを削除します');
-		} else {
-			console.log('[simulation] Rule config:');
-			console.log(JSON.stringify(r, null, '  '));
-		}
-	} else {
-		try {
-			var uidResult = ruleUid.ensureRuleUids(rules);
-			if (uidResult.assigned > 0) {
-				console.log('RULE UID BACKFILL: assigned=' + uidResult.assigned + ' existing=' + uidResult.existing);
-			}
-		} catch (error) {
-			util.error('ルールUIDが不正です: ' + error.message);
-			process.exit(1);
-		}
-		if (opts.get('remove')) {
-			console.log('ルールを削除します');
-		} else {
-			console.log('Rule config:');
-			console.log(JSON.stringify(r, null, '  '));
-		}
-		fs.writeFileSync(RULES_FILE, JSON.stringify(rules, null, '  '));
+		console.log(prefix + 'Rule config:');
+		console.log(JSON.stringify(selectedRule, null, '  '));
 	}
 
 	process.exit(0);

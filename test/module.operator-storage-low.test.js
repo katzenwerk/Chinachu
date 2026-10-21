@@ -13,7 +13,6 @@ const { StorageMonitor } = require('../lib/storage-monitor');
 const storageManualRefresh = require('../lib/storage-manual-refresh');
 const storageRefreshIpc = require('../lib/storage-refresh-ipc');
 const storageRuntimeState = require('../lib/storage-runtime-state');
-const storageHealthView = require('../web/lib/storage-health-view');
 
 function linuxDev(major, minor) {
 	major = BigInt(major);
@@ -39,7 +38,146 @@ function createStorageFs(dev, resolvedPath, calls) {
 	};
 }
 
+function createMountFixtureFs(entries, realpaths) {
+	entries = entries || {};
+	realpaths = realpaths || {};
+	function missing(targetPath) {
+		const error = new Error('ENOENT: ' + targetPath);
+		error.code = 'ENOENT';
+		throw error;
+	}
+	return {
+		statSync: function (targetPath) {
+			const entry = entries[path.resolve(targetPath)];
+			if (!entry) return missing(targetPath);
+			return {
+				dev: entry.dev,
+				ino: entry.ino || 10n,
+				isDirectory: function () { return entry.directory !== false; }
+			};
+		},
+		lstatSync: function (targetPath) {
+			const normalized = path.resolve(targetPath);
+			const entry = entries[normalized];
+			if (!entry) return missing(targetPath);
+			return { isSymbolicLink: function () { return entry.symlink === true; } };
+		},
+		realpathSync: function (targetPath) {
+			const normalized = path.resolve(targetPath);
+			if (!entries[normalized] && !realpaths[normalized]) return missing(targetPath);
+			return realpaths[normalized] || normalized;
+		},
+		accessSync: function () {},
+		statfsSync: function () {
+			return { bsize: 4096, blocks: 1000, bfree: 500, bavail: 400 };
+		}
+	};
+}
+
 describe('Operator low-storage handling', function() {
+	it('blocks root filesystem fallbacks and permits a verified separate filesystem', function() {
+		const rootDev = linuxDev(8, 1);
+		const archiveDev = linuxDev(8, 2);
+		const mountInfo = {
+			available: true,
+			mounts: storageHealth.parseMountInfo([
+				'1 0 8:1 / / rw - ext4 /dev/root rw',
+				'2 1 8:2 / /mnt/archive rw - ext4 /dev/archive rw'
+			].join('\n'))
+		};
+		const configured = storageHealth.getDestinations({
+			recordedDir: '/recorded',
+			recordedStorage: { protectRootFilesystem: true },
+			recordedDirs: [{ id: 'archive', name: 'Archive', path: '/mnt/archive/recorded', storage: {} }]
+		});
+		assert.strictEqual(configured[0].rootProtectionEnabled, true);
+		assert.strictEqual(configured[0].protected, true);
+		assert.strictEqual(configured[1].rootProtectionEnabled, false);
+		function inspect(destinationPath, entries, realpaths, enabled) {
+			return storageHealth.inspectDestination({
+				id: 'target', name: 'Target', path: destinationPath, configuredPath: destinationPath,
+				expectedMount: null, rootProtectionEnabled: enabled !== false, aliasIds: []
+			}, {
+				fs: createMountFixtureFs(entries, realpaths), mountInfo: mountInfo,
+				platform: 'linux', checkCapacity: false
+			});
+		}
+
+		const separate = inspect('/mnt/archive/recorded', {
+			'/': { dev: rootDev }, '/mnt': { dev: rootDev }, '/mnt/archive': { dev: archiveDev },
+			'/mnt/archive/recorded': { dev: archiveDev }
+		});
+		assert.strictEqual(separate.status, 'ok');
+		assert.strictEqual(separate.rootFilesystemSame, false);
+		assert.strictEqual(separate.canWrite, true);
+
+		const rootFallback = inspect('/recorded/missing', {
+			'/': { dev: rootDev }, '/recorded': { dev: rootDev }
+		});
+		assert.strictEqual(rootFallback.status, 'system-filesystem');
+		assert.strictEqual(rootFallback.rootFilesystemSame, true);
+		assert.strictEqual(rootFallback.canCreate, false);
+
+		const separateMissing = inspect('/mnt/archive/missing', {
+			'/': { dev: rootDev }, '/mnt': { dev: rootDev }, '/mnt/archive': { dev: archiveDev }
+		});
+		assert.strictEqual(separateMissing.status, 'missing');
+		assert.strictEqual(separateMissing.rootFilesystemSame, false);
+		assert.strictEqual(separateMissing.canCreate, true);
+
+		const symlinkToRoot = inspect('/recorded-link', {
+			'/': { dev: rootDev }, '/recorded-link': { dev: rootDev, symlink: true },
+			'/var': { dev: rootDev }, '/var/recordings': { dev: rootDev }
+		}, { '/recorded-link': '/var/recordings' });
+		assert.strictEqual(symlinkToRoot.status, 'system-filesystem');
+
+		const compatibilityOff = inspect('/recorded', {
+			'/': { dev: rootDev }, '/recorded': { dev: rootDev }
+		}, {}, false);
+		assert.strictEqual(compatibilityOff.status, 'ok');
+		assert.strictEqual(compatibilityOff.canWrite, true);
+	});
+
+	it('fails closed when root filesystem identity cannot be verified', function() {
+		const destination = {
+			id: 'archive', name: 'Archive', path: '/mnt/archive/recorded', configuredPath: '/mnt/archive/recorded',
+			expectedMount: null, rootProtectionEnabled: true, aliasIds: []
+		};
+		const calls = { stat: 0, access: 0, statfs: 0 };
+		const health = storageHealth.inspectDestination(destination, {
+			fs: createStorageFs(linuxDev(8, 2), destination.path, calls),
+			mountInfo: { available: false, mounts: [], error: new Error('unavailable') },
+			platform: 'linux', checkCapacity: false
+		});
+		assert.strictEqual(health.status, 'unknown');
+		assert.strictEqual(health.canWrite, false);
+		assert.match(health.detail, /root filesystem protection/);
+	});
+
+	it('forces a fresh safety check before recording output creation', function() {
+		const source = fs.readFileSync(path.join(__dirname, '..', 'app-operator.js'), 'utf8');
+		const doRecord = source.slice(source.indexOf('function doRecord(program, stream)'));
+		const forcedCheck = doRecord.indexOf('ensureRecordingDestinationHealthy(program, false, { force: true })');
+		const outputCreation = doRecord.indexOf("fs.createWriteStream(recPath, { flags: 'a' })");
+		assert.ok(forcedCheck !== -1);
+		assert.ok(outputCreation !== -1);
+		assert.ok(forcedCheck < outputCreation);
+	});
+
+	it('keeps expectedMount active independently of root protection', function() {
+		const rootDev = linuxDev(8, 1);
+		const destination = {
+			id: 'archive', name: 'Archive', path: '/mnt/archive/recorded', configuredPath: '/mnt/archive/recorded',
+			expectedMount: '/mnt/archive', rootProtectionEnabled: false, aliasIds: []
+		};
+		const health = storageHealth.inspectDestination(destination, {
+			fs: createMountFixtureFs({ '/': { dev: rootDev }, '/mnt': { dev: rootDev }, '/mnt/archive/recorded': { dev: rootDev } }),
+			mountInfo: { available: true, mounts: storageHealth.parseMountInfo('1 0 8:1 / / rw - ext4 /dev/root rw') },
+			platform: 'linux', checkCapacity: false
+		});
+		assert.strictEqual(health.status, 'not-mounted');
+		assert.strictEqual(health.canWrite, false);
+	});
 	it('requires stat.dev to match the longest mountinfo entry', function() {
 		const calls = { stat: 0, access: 0, statfs: 0 };
 		const destination = {
@@ -186,6 +324,37 @@ describe('Operator low-storage handling', function() {
 		assert.strictEqual(monitor.get('linux-dev:8:2'), null);
 	});
 
+	it('keeps a safety error unresolved until a forced check verifies recovery', function() {
+		let recovered = false;
+		const destination = {
+			id: 'archive', name: 'Archive', path: '/mnt/archive', configuredPath: '/mnt/archive',
+			expectedMount: null, rootProtectionEnabled: true, aliasIds: []
+		};
+		const monitor = new StorageMonitor({
+			now: function () { return 1000; },
+			inspect: function (item, options) {
+				if (!recovered) return {
+					status: 'system-filesystem', detail: 'root', canWrite: false,
+					filesystemKey: null, rootFilesystemSame: true
+				};
+				return {
+					status: 'ok', detail: null, canWrite: true, capacityReliable: options.checkCapacity !== false,
+					filesystemKey: 'linux-dev:8:2', filesystemId: '8:2', mountFingerprint: 'archive',
+					resolvedPath: item.path, available: 400, total: 1000, used: 600,
+					lowSpacePhase: null, capacityCheckedAt: options.now || null
+				};
+			}
+		});
+		const blocked = monitor.check(destination);
+		assert.strictEqual(blocked.status, 'system-filesystem');
+		assert.strictEqual(blocked.safetyBlocked, true);
+		recovered = true;
+		assert.strictEqual(monitor.check(destination), blocked);
+		const healthy = monitor.check(destination, { force: true });
+		assert.strictEqual(healthy.status, 'ok');
+		assert.strictEqual(monitor.getDestinationStates()[0].safetyBlocked, false);
+	});
+
 	it('serves Storage API snapshots without filesystem or recorded-file probes', function() {
 		const script = fs.readFileSync(path.join(__dirname, '..', 'api', 'script-storage.vm.js'), 'utf8');
 		const checkedAt = Date.now() - 5000;
@@ -256,10 +425,23 @@ describe('Operator low-storage handling', function() {
 		vm.runInNewContext(script, context);
 		assert.strictEqual(JSON.parse(body).storages[0].status, 'unobserved');
 
+		state.storages[0] = {
+			id: null, name: 'Default', path: '/recorded', configuredPath: '/recorded',
+			rootProtectionEnabled: true, status: 'system-filesystem', safetyBlocked: true,
+			identityCheckedAt: 1, capacityCheckedAt: null, stopNewRecordings: true
+		};
+		context.config.recordedStorage = { protectRootFilesystem: true };
+		serializedState = JSON.stringify(state);
+		vm.runInNewContext(script, context);
+		const safety = JSON.parse(body).storages[0];
+		assert.strictEqual(safety.status, 'system-filesystem');
+		assert.strictEqual(safety.capacityStale, false);
+		assert.strictEqual(safety.stopNewRecordings, true);
+
 		serializedState = '{broken';
 		vm.runInNewContext(script, context);
 		assert.strictEqual(JSON.parse(body).storages[0].status, 'unobserved');
-		assert.strictEqual(reads, 5);
+		assert.strictEqual(reads, 6);
 	});
 
 	it('atomically replaces Storage snapshots and preserves the old file on failure', function() {
@@ -365,41 +547,6 @@ describe('Operator low-storage handling', function() {
 		assert.strictEqual(JSON.parse(body).error, 'operator_unavailable');
 	});
 
-	it('keeps manual refresh guarded and places its controls in the existing headers', function() {
-		const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'page', 'dashboard', 'storage.js'), 'utf8');
-		const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'chinachu.css'), 'utf8');
-		assert.match(source, /HDDがスリープ中の場合、スピンアップする可能性があります/);
-		assert.match(source, /複数のHDDがスリープ中の場合、スピンアップする可能性があります/);
-		assert.match(source, /if \(!window\.confirm\(message\)\) return this/);
-		assert.match(source, /if \(this\.storageRefreshRequest\) return this/);
-		assert.match(source, /\.\/api\/storage\/refresh\.json/);
-		assert.ok(source.indexOf('window.confirm(message)') < source.indexOf("new Ajax.Request('./api/storage/refresh.json'"));
-		assert.match(source, /this\.view\.toolbar\.add\(\{/);
-		assert.match(source, /key: 'refresh-all'/);
-		assert.doesNotMatch(source, /storage-health-heading/);
-		assert.ok(source.indexOf('headerActions.insert(refreshOne)') < source.indexOf('headerActions.insert(state)'));
-		assert.match(source, /storage\.status !== 'stale'/);
-		assert.match(css, /\.storage-health-header-actions \{[^}]*display: flex;[^}]*margin-left: auto;/);
-		assert.match(css, /@media \(max-width: 560px\) \{[\s\S]*\.storage-health-header-actions \{[^}]*flex-wrap: wrap;/);
-	});
-
-	it('keeps stale capacity visible without reporting historical Low as current navigation state', function() {
-		const summary = storageHealthView.summarize({
-			thresholds: { warningEnabled: true, warningMB: 10000, cleanupMB: 3000, action: 'stop' },
-			storages: [ {
-				name: 'Archive',
-				status: 'stale',
-				observedStatus: 'low-space',
-				observedLowSpacePhase: 'cleanup',
-				capacityCheckedAt: 1,
-				total: 1000,
-				used: 900,
-				available: 100
-			} ]
-		});
-		assert.strictEqual(summary, null);
-	});
-
 	it('enables Warning only above the effective Low threshold while preserving Low handling', function() {
 		[
 			{ config: {}, enabled: false, warning: null },
@@ -423,54 +570,118 @@ describe('Operator low-storage handling', function() {
 		assert.strictEqual(storageLow.getPhase(60000, enabled.cleanupThresholdMB, enabled.warningThresholdMB, enabled.warningEnabled), null);
 	});
 
-	it('stops every recording present at the start of one low-storage pass', function() {
-		function runPass(ids) {
-			const recording = ids.map(id => ({ id: id }));
-			const stopped = [];
-
-			storageLow.stopCurrentRecordings(recording, function(id, reason) {
-				stopped.push({ id: id, reason: reason });
-				const index = recording.findIndex(program => program.id === id);
-				if (index !== -1) {
-					recording.splice(index, 1);
-				}
-			});
-
-			return { recording: recording, stopped: stopped };
-		}
-
-		const multiple = runPass([ 'A', 'B', 'C' ]);
-		assert.deepStrictEqual(multiple.stopped, [
-			{ id: 'A', reason: 'LOW STORAGE' },
-			{ id: 'B', reason: 'LOW STORAGE' },
-			{ id: 'C', reason: 'LOW STORAGE' }
-		]);
-		assert.deepStrictEqual(multiple.recording, []);
-
-		const single = runPass([ 'A' ]);
-		assert.deepStrictEqual(single.stopped, [ { id: 'A', reason: 'LOW STORAGE' } ]);
-		assert.deepStrictEqual(single.recording, []);
-	});
-
-	it('stops only recordings assigned to the low filesystem and leaves unknown destinations running', function() {
+	it('stops every initial recording on the low filesystem without touching other or unknown destinations', function() {
 		const recording = [
-			{ id: 'low', filesystemKey: 'fs-low' },
+			{ id: 'low-a', filesystemKey: 'fs-low' },
+			{ id: 'low-b', filesystemKey: 'fs-low' },
 			{ id: 'healthy', filesystemKey: 'fs-healthy' },
 			{ id: 'unknown', filesystemKey: null }
 		];
 		const stopped = [];
 		const unknown = [];
-		storageLow.stopCurrentRecordings(recording, function (id) {
-			stopped.push(id);
+		storageLow.stopCurrentRecordings(recording, function (id, reason) {
+			stopped.push({ id, reason });
+			const index = recording.findIndex(program => program.id === id);
+			if (index !== -1) recording.splice(index, 1);
 		}, function (program) {
 			return program.filesystemKey ? program.filesystemKey === 'fs-low' : null;
 		}, function (program) {
 			unknown.push(program.id);
 		});
 
-		assert.deepStrictEqual(stopped, [ 'low' ]);
+		assert.deepStrictEqual(stopped, [
+			{ id: 'low-a', reason: 'LOW STORAGE' },
+			{ id: 'low-b', reason: 'LOW STORAGE' }
+		]);
 		assert.deepStrictEqual(unknown, [ 'unknown' ]);
-		assert.strictEqual(recording[1].id, 'healthy');
+		assert.deepStrictEqual(recording.map(program => program.id), [ 'healthy', 'unknown' ]);
+	});
+
+	it('normalizes the three Low Storage modes and stops active recordings only for STOP-ALL or failed REMOVE', function() {
+		assert.strictEqual(storageLow.normalizeAction('stop-new'), 'stop-new');
+		assert.strictEqual(storageLow.normalizeAction('stop'), 'stop');
+		assert.strictEqual(storageLow.normalizeAction('remove'), 'remove');
+		assert.strictEqual(storageLow.normalizeAction('none'), 'stop');
+		assert.strictEqual(storageLow.normalizeAction('invalid'), 'stop');
+		assert.strictEqual(storageLow.shouldStopCurrentRecordings('stop-new', false), false);
+		assert.strictEqual(storageLow.shouldStopCurrentRecordings('stop', false), true);
+		assert.strictEqual(storageLow.shouldStopCurrentRecordings('remove', false), false);
+		assert.strictEqual(storageLow.shouldStopCurrentRecordings('remove', true), true);
+
+	});
+
+	it('finds recursive cleanup candidates without crossing symlinks, mounts, active files, or duplicate roots', function() {
+		const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-storage-cleanup-'));
+		const root = path.join(temporaryDir, 'recorded');
+		const nested = path.join(root, 'series');
+		const otherMount = path.join(root, 'other-mount');
+		const outside = path.join(temporaryDir, 'outside');
+		const rootLink = path.join(temporaryDir, 'recorded-link');
+		const active = path.join(nested, 'active.m2ts');
+		const oldest = path.join(nested, 'oldest.m2ts');
+		const newer = path.join(root, 'newer.ts');
+		try {
+			fs.mkdirSync(nested, { recursive: true });
+			fs.mkdirSync(otherMount);
+			fs.mkdirSync(outside);
+			fs.writeFileSync(active, 'ACTIVE');
+			fs.writeFileSync(oldest, 'OLDEST');
+			fs.writeFileSync(newer, 'NEWER');
+			fs.writeFileSync(path.join(nested, 'ignore.mp4'), 'IGNORE');
+			fs.writeFileSync(path.join(otherMount, 'mounted.m2ts'), 'MOUNTED');
+			fs.writeFileSync(path.join(outside, 'linked.m2ts'), 'LINKED');
+			fs.symlinkSync(path.join(outside, 'linked.m2ts'), path.join(root, 'file-link.m2ts'));
+			fs.symlinkSync(outside, path.join(root, 'dir-link'));
+			fs.symlinkSync(root, rootLink, 'dir');
+			fs.utimesSync(active, new Date(1000), new Date(1000));
+			fs.utimesSync(oldest, new Date(2000), new Date(2000));
+			fs.utimesSync(newer, new Date(3000), new Date(3000));
+
+			const rootStats = fs.lstatSync(root, { bigint: true });
+			const filesystemKey = 'linux-dev:' + storageHealth.linuxDeviceId(rootStats.dev);
+			const fixtureFs = Object.create(fs);
+			fixtureFs.lstatSync = function(targetPath, options) {
+				const stats = fs.lstatSync(targetPath, options);
+				if (path.resolve(targetPath) === otherMount || path.resolve(targetPath).startsWith(otherMount + path.sep)) {
+					return new Proxy(stats, {
+						get(value, key) {
+							return key === 'dev' ? value.dev + 1n : Reflect.get(value, key, value);
+						}
+					});
+				}
+				return stats;
+			};
+
+			const candidates = storageLow.findCleanupCandidates({
+				fs: fixtureFs,
+				roots: [ root, nested ],
+				filesystemKey: filesystemKey,
+				protectedPaths: new Set([ active ])
+			});
+			assert.deepStrictEqual(candidates.map(item => item.path), [ oldest, newer ]);
+			assert.deepStrictEqual(storageLow.findCleanupCandidates({
+				fs: fixtureFs,
+				roots: [ rootLink ],
+				filesystemKey: filesystemKey
+			}), []);
+			assert.ok(storageLow.validateCleanupCandidate(candidates[0], {
+				fs: fixtureFs,
+				roots: [ root ],
+				filesystemKey: filesystemKey,
+				protectedPaths: new Set([ active ])
+			}));
+
+			fs.unlinkSync(oldest);
+			fs.symlinkSync(path.join(outside, 'linked.m2ts'), oldest);
+			assert.strictEqual(storageLow.validateCleanupCandidate(candidates[0], {
+				fs: fixtureFs,
+				roots: [ root ],
+				filesystemKey: filesystemKey,
+				protectedPaths: new Set([ active ])
+			}), null);
+		} finally {
+			fs.rmSync(temporaryDir, { recursive: true, force: true });
+		}
 	});
 
 	it('does not infer a match deletion without a recorded ledger entry', function() {
@@ -485,5 +696,68 @@ describe('Operator low-storage handling', function() {
 			false
 		);
 		assert.strictEqual(item.recordingResult.cleanupState, undefined);
+	});
+
+	it('records low-storage deletion only in the matching v2 deletion field', function() {
+		const deletedAt = 1760281200000;
+		const target = {
+			schemaVersion: 2,
+			key: 'channel-a|1760194800000|1800',
+			status: 'RECORDED',
+			start: 1760194800000,
+			end: 1760196600000,
+			fullTitle: 'Target',
+			recording: { recordedId: 'recorded-a', path: '/recorded/target.m2ts' },
+			deletion: null
+		};
+		const other = {
+			schemaVersion: 2,
+			key: 'channel-b|1760194800000|1800',
+			status: 'RECORDED',
+			start: 1760194800000,
+			end: 1760196600000,
+			fullTitle: 'Other',
+			recording: { recordedId: 'recorded-a', path: '/recorded/other.m2ts' },
+			deletion: null
+		};
+
+		assert.strictEqual(storageLow.markMatchRecordingDeleted(
+			[target, other],
+			[{ id: 'recorded-a', recorded: '/recorded/target.m2ts' }],
+			'/recorded/target.m2ts',
+			deletedAt,
+			'storage-low'
+		), true);
+		assert.strictEqual(target.status, 'RECORDED');
+		assert.deepStrictEqual(target.recording, {
+			recordedId: 'recorded-a',
+			path: '/recorded/target.m2ts'
+		});
+		assert.deepStrictEqual(target.deletion, { deletedAt, reason: 'storage-low' });
+		assert.strictEqual(target.program, undefined);
+		assert.strictEqual(target.recordingResult, undefined);
+		assert.strictEqual(other.deletion, null);
+	});
+
+	it('does not update ambiguous deletion history targets', function() {
+		const entries = [0, 1].map(index => ({
+			schemaVersion: 2,
+			key: `channel-${index}|1760194800000|1800`,
+			status: 'RECORDED',
+			start: 1760194800000,
+			end: 1760196600000,
+			fullTitle: `Duplicate ${index}`,
+			recording: { recordedId: 'recorded-a', path: '/recorded/target.m2ts' },
+			deletion: null
+		}));
+
+		assert.strictEqual(storageLow.markMatchRecordingDeleted(
+			entries,
+			[{ id: 'recorded-a', recorded: '/recorded/target.m2ts' }],
+			'/recorded/target.m2ts',
+			1760281200000,
+			'storage-low'
+		), false);
+		assert.deepStrictEqual(entries.map(entry => entry.deletion), [null, null]);
 	});
 });

@@ -16,8 +16,9 @@ const RESERVES2_DATA_FILE = __dirname + '/data/reserves2.json';
 const RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 const RECORDED_DATA_FILE  = __dirname + '/data/recorded.json';
 const MATCH_DATA_FILE     = __dirname + '/data/match.json';
+const BITRATE_STATS_FILE = __dirname + '/data/bitrate-stats.json';
 const STORAGE_STATE_FILE  = __dirname + '/data/storage-state.json';
-const STORAGE_REFRESH_SOCKET = __dirname + '/data/storage-refresh.sock';
+const RECORDED_THUMBNAIL_DIR = __dirname + '/data/thumbnails';
 const SCHEDULER_STATE_FILE = __dirname + '/data/scheduler-state.json';
 const LEGACY_SCHEDULER_STATE_FILE = __dirname + '/data/epg-scheduler-state.json';
 
@@ -52,7 +53,7 @@ if (typeof util.log !== 'function') {
 const child_process = require('child_process');
 
 // ディレクトリチェック
-if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./web/')) {
+if (!fs.existsSync('./data/') || !fs.existsSync('./log/')) {
 	console.error('必要なディレクトリが存在しないか、カレントワーキングディレクトリが不正です。');
 	process.exit(1);
 }
@@ -73,8 +74,10 @@ const { StorageMonitor } = require('./lib/storage-monitor');
 const storageRuntimeState = require('./lib/storage-runtime-state');
 const storageRefreshIpc = require('./lib/storage-refresh-ipc');
 const storageManualRefresh = require('./lib/storage-manual-refresh');
+const recordedThumbnail = require('./lib/recorded-thumbnail');
 const matchOutput = require('./lib/match-output');
 const runtimePrivileges = require('./lib/runtime-privileges');
+const runtimePathsModule = require('./lib/runtime-paths');
 const mirakurunConnection = require('./lib/mirakurun-connection');
 const mirakurunDropWatch = require('./lib/mirakurun-drop-watch');
 const mirakurunEpgJobWatch = require('./lib/mirakurun-epg-job-watch');
@@ -83,6 +86,8 @@ const operatorSchedulerRequest = require('./lib/operator-scheduler-request');
 const operatorSchedulerPreflight = require('./lib/operator-scheduler-preflight');
 const schedulerState = require('./lib/scheduler-state');
 const reservationStore = require('./lib/reservation-store');
+const matchV2 = require('./lib/match-v2');
+const bitrateStats = require('./lib/bitrate-stats');
 const chinachu = require('chinachu-common');
 const mirakurun = new (require("mirakurun").default)();
 
@@ -240,6 +245,16 @@ try {
 	process.exit(1);
 }
 
+let runtimePaths;
+try {
+	runtimePaths = runtimePathsModule.resolveRuntimePaths(__dirname);
+} catch (error) {
+	console.error('[fatal] failed to prepare runtime directory: ' + error.message);
+	process.exit(1);
+}
+const STORAGE_REFRESH_SOCKET = runtimePaths.storageRefreshSocket;
+const RECORDED_THUMBNAIL_SOCKET = runtimePaths.recordedThumbnailSocket;
+
 // Mirakurun Client
 const mirakurunPath = mirakurunConnection.configureClient(mirakurun, config);
 
@@ -269,7 +284,7 @@ if (typeof storageLowSpaceConfiguredAction === 'undefined') {
 	operatorLog('WARNING: storageLowSpaceAction is not configured; using stop.');
 } else if (storageLowSpaceConfiguredAction === 'none') {
 	operatorLog('WARNING: storageLowSpaceAction none is deprecated; using stop without rewriting config.json.');
-} else if (storageLowSpaceConfiguredAction !== 'remove' && storageLowSpaceConfiguredAction !== 'stop') {
+} else if (!['stop-new', 'stop', 'remove'].includes(storageLowSpaceConfiguredAction)) {
 	operatorLog('WARNING: Unknown storageLowSpaceAction `' + storageLowSpaceConfiguredAction + '`; using stop.');
 }
 
@@ -279,6 +294,22 @@ ensureJsonArrayFile(RESERVES2_DATA_FILE);
 ensureJsonArrayFile(RECORDING_DATA_FILE);
 ensureJsonArrayFile(RECORDED_DATA_FILE);
 ensureJsonArrayFile(MATCH_DATA_FILE);
+
+try {
+	const matchV2Startup = matchV2.runV2Fix({
+		matchFile: MATCH_DATA_FILE,
+		backupFile: MATCH_DATA_FILE + '.v1-backup',
+		reservationStore,
+		legacyOnly: true,
+		reuseMatchingBackup: true
+	});
+	operatorLog('MATCH V2FIX: ' + (matchV2Startup.changed ?
+		'converted=' + matchV2Startup.converted + ' total=' + matchV2Startup.total + ' backup=' + matchV2Startup.backupFile :
+		'skipped; all entries are already v2'));
+} catch (error) {
+	console.error('[fatal] match v2 startup conversion failed: ' + error.message);
+	process.exit(1);
+}
 
 // 録画中リストをクリア
 fs.writeFileSync(RECORDING_DATA_FILE, '[]');
@@ -325,6 +356,7 @@ let storageLastPersistedRevision = -1;
 let storageDisplaySnapshots = loadStorageDisplaySnapshots();
 const runManualStorageRefresh = storageManualRefresh.createSingleFlight(handleManualStorageRefresh);
 let storageRefreshServer = null;
+let recordedThumbnailServer = null;
 let recordingChecked = 0;
 let recordedStorageWakeupHistory = {};
 let mirakurunDropChecked = 0;
@@ -336,6 +368,13 @@ let periodicPreflightPending = false;
 let shutdownStarted = false;
 const activeRecordingOutputs = new Set();
 const activeDurationProbes = new Set();
+const recordedThumbnailGenerator = recordedThumbnail.createGenerator({
+	outputDir: RECORDED_THUMBNAIL_DIR,
+	log: operatorLog,
+	timeoutMs: 30000,
+	maxPending: 4,
+	maxQueueAgeMs: 60000
+});
 
 // EPG由来のscheduler要求だけをsingle pendingへ集約する。
 // periodic schedulerはpreflightがdirtyの場合のみstartScheduler()を要求する。
@@ -762,12 +801,17 @@ function shutdownOperator(signal) {
 		storageRefreshServer.close();
 		storageRefreshServer = null;
 	}
+	if (recordedThumbnailServer) {
+		recordedThumbnailServer.close();
+		recordedThumbnailServer = null;
+	}
 
 	epgJobReconciler.stop();
 	epgJobWatcher.stop();
 	shadowPeriodicScheduler.stop();
 	schedulerPreflight.stop();
 	stopScheduler();
+	recordedThumbnailGenerator.stop();
 	stopActiveDurationProbes();
 	recording.slice().forEach(program => {
 		if (typeof program._operatorFinalize === 'function') {
@@ -902,6 +946,45 @@ function persistRecordedDuration(programId, recordedPath, duration) {
 		return true;
 	} catch (error) {
 		operatorLog('WARNING: ffprobe duration update failed: ' + recordedPath + ' (' + error.message + ')');
+		return false;
+	}
+}
+
+// close済み録画ファイル1件だけを実測し、正常録画のビットレート統計をbest-effortで更新する。
+// recordedDurationSecondsは実ファイル内のmedia時間なので、予定時間や壁時計時間より容量との対応がよい。
+function updateBitrateStatsAfterClose(program, recordedPath, recordedDurationSeconds) {
+	try {
+		if (!bitrateStats.isEligibleRecording(program, recordedDurationSeconds)) {
+			return false;
+		}
+
+		const fileStat = fs.statSync(recordedPath);
+		if ((typeof fileStat.isFile === 'function' && !fileStat.isFile()) ||
+			!Number.isSafeInteger(fileStat.size) || fileStat.size <= 0) {
+			return false;
+		}
+
+		const measurement = bitrateStats.createRecordingMeasurement(
+			program,
+			fileStat.size,
+			recordedDurationSeconds
+		);
+		if (!measurement) {
+			return false;
+		}
+
+		const result = bitrateStats.tryUpdateFile(BITRATE_STATS_FILE, measurement);
+		if (result.error) {
+			throw result.error;
+		}
+		if (result.updated) {
+			operatorLog('BITRATE STATS: channel=' + measurement.channelKey +
+				' program=' + measurement.recording.programId +
+				' mbps=' + measurement.recording.mbps.toFixed(6));
+		}
+		return result.updated;
+	} catch (error) {
+		operatorLog('WARNING: bitrate stats update failed: ' + recordedPath + ' (' + error.message + ')');
 		return false;
 	}
 }
@@ -1049,9 +1132,10 @@ function updateMatchLedger(reason) {
 		operatorLog('RUN: ' + appMatchingFile + (reason ? ' (' + reason + ')' : ''));
 
 		commandProcess = child_process.spawnSync(process.execPath, [
-			appMatchingFile,
-			'--recorded', RECORDED_DATA_FILE,
-			'--reserves2', RESERVES2_DATA_FILE,
+				appMatchingFile,
+				'--recorded', RECORDED_DATA_FILE,
+				'--recording', RECORDING_DATA_FILE,
+				'--reserves2', RESERVES2_DATA_FILE,
 			'--old-match', MATCH_DATA_FILE,
 			'--output', MATCH_DATA_FILE,
 			'--config', CONFIG_FILE
@@ -1135,9 +1219,10 @@ function getRecordedPath(program) {
 	return joinRecordedPath(getRecordedDir(program), recordedName);
 }
 
-// expectedMountのmount guardと、Low対象filesystemの録画開始guardを適用する。
-// 未設定の従来録画先にはmount必須条件を適用しない。
-function ensureRecordingDestinationHealthy(program, allowCreate) {
+// expectedMount / root filesystem guardと、Low対象filesystemの録画開始guardを適用する。
+// 未設定の従来録画先にはmount必須条件やroot領域保護を適用しない。
+function ensureRecordingDestinationHealthy(program, allowCreate, options) {
+	options = options || {};
 	if (program && typeof program.recordedDirId === 'string' && program.recordedDirId.trim() !== '' &&
 		(typeof program.recordedDir !== 'string' || program.recordedDir.trim() === '')) {
 		const now = Date.now();
@@ -1159,7 +1244,13 @@ function ensureRecordingDestinationHealthy(program, allowCreate) {
 		return false;
 	}
 
-	let health = storageMonitor.check(destination, { now: Date.now() });
+	const cachedGroup = storageMonitor.getByDestination(destination);
+	const cleanupState = cachedGroup && storageCleanupState[cachedGroup.filesystemKey];
+	let health = storageMonitor.check(destination, {
+		now: Date.now(),
+		force: options.force === true,
+		refreshAfterMs: cleanupState && cleanupState.awaitingCapacityRefresh === true ? 1000 : undefined
+	});
 
 	if (allowCreate && health.status === 'missing' && health.canCreate) {
 		try {
@@ -1999,7 +2090,13 @@ function doRecord(program, stream) {
 		safeAbortStream(stream, 'drop record');
 		return;
 	}
-	if (!ensureRecordingDestinationHealthy(program, false)) {
+	// 保存先パスの算出自体はfilesystemへ触れない。shutdown後の再開時だけ、
+	// 暫定recordedに保存した同一pathを使う。
+	const isResumedRecording = typeof program._operatorResumeRecordedPath === 'string';
+	const recPath = isResumedRecording ? program._operatorResumeRecordedPath : getRecordedPath(program);
+	// stream取得後、録画ファイルを作成する直前にfilesystem identityを必ず再確認する。
+	// 直前のprepareやStorage snapshotを録画許可の根拠にはしない。
+	if (!ensureRecordingDestinationHealthy(program, false, { force: true })) {
 		operatorLog('DROP RECORD: unsafe recording destination: ' + printProgram(program));
 		safeAbortStream(stream, 'unsafe recording destination');
 		removeRecording(program.id, 'STORAGE HEALTH BLOCK');
@@ -2023,9 +2120,6 @@ function doRecord(program, stream) {
 	program.command = `mirakurun type=${program.channel.type} url=${stream.req.path} priority=${program.priority}`;// dummy
 	program.pid = -1;// dummy
 
-	// 保存先パス。shutdown後の再開時だけ、暫定recordedに保存した同一pathを使う。
-	const isResumedRecording = typeof program._operatorResumeRecordedPath === 'string';
-	const recPath = isResumedRecording ? program._operatorResumeRecordedPath : getRecordedPath(program);
 	if (isResumedRecording && !fs.existsSync(recPath)) {
 		operatorLog('WARNING: RESUME RECORDING FILE NOT FOUND, recreate at same path: ' + recPath);
 	}
@@ -2052,6 +2146,7 @@ function doRecord(program, stream) {
 	let finalized = false;
 	let inputEnded = false;
 	let probeDurationAfterClose = false;
+	let generateThumbnailAfterClose = false;
 
 	function finalizeNg(reason, error) {
 		if (finalized) {
@@ -2104,6 +2199,14 @@ function doRecord(program, stream) {
 			probeRecordedDuration(recPath, duration => {
 				if (duration !== null) {
 					persistRecordedDuration(program.id, recPath, duration);
+					updateBitrateStatsAfterClose(program, recPath, duration);
+				}
+				if (generateThumbnailAfterClose && !shutdownStarted) {
+					recordedThumbnailGenerator.enqueue({
+						id: program.id,
+						inputPath: recPath,
+						durationSeconds: duration !== null ? duration : program.operatorActualSeconds
+					});
 				}
 			});
 		}
@@ -2166,6 +2269,9 @@ function doRecord(program, stream) {
 			program.operatorAbort !== true &&
 			program.operatorEndLack !== true;
 		probeDurationAfterClose = !isNgRecording && !isResumePending;
+		// 録画開始後に確定した短縮録画も recorded.json の録画結果として扱う。
+		// ファイルが残る限り、通常終了と同じ保存済みサムネイル生成経路を利用する。
+		generateThumbnailAfterClose = probeDurationAfterClose;
 
 		if (!isNgRecording) {
 			for (let i = 0, l = recorded.length; i < l; i++) {
@@ -2249,12 +2355,6 @@ function stopRecording(programId, reason) {
 }
 
 
-// 容量不足時の削除対象拡張子か確認する
-function isStorageCleanupTargetFile(filePath) {
-	const ext = path.extname(filePath).toLowerCase();
-	return ext === '.ts' || ext === '.m2ts';
-}
-
 // 現在録画中の保存先パス一覧を取得する
 function getRecordingPathSet() {
 	const paths = new Set();
@@ -2284,80 +2384,52 @@ function getRecordingPathSet() {
 	return paths;
 }
 
-// config.recordedDir 直下の古い録画ファイルを探す。
-// サブディレクトリ、シンボリックリンク、リンク先、別マウント配下は追わない。
-function findRecordedCleanupCandidates(limit) {
-	const baseDir = config.recordedDir;
-	let entries;
-	const candidates = [];
-	const recordingPaths = getRecordingPathSet();
-
-	try {
-		entries = fs.readdirSync(baseDir);
-	} catch (e) {
-		operatorLog('WARNING: Storage cleanup scan failed: ' + e.message);
-		return [];
-	}
-
-	for (let i = 0, l = entries.length; i < l; i++) {
-		const filePath = path.join(baseDir, entries[i]);
-		let stats;
-
-		try {
-			stats = fs.lstatSync(filePath);
-		} catch (e) {
-			operatorLog('WARNING: Storage cleanup stat failed: ' + filePath + ' (' + e.message + ')');
-			continue;
+function getCleanupRoots(group) {
+	const roots = new Set(group && group.destinations || []);
+	if (!group || !group.filesystemId || process.platform !== 'linux') return Array.from(roots);
+	const mountInfo = storageHealth.readMountInfo(fs);
+	if (!mountInfo.available) return Array.from(roots);
+	storageHealth.getDestinations(config).forEach(destination => {
+		const mount = storageHealth.findMount(mountInfo.mounts, destination.path);
+		if (mount && mount.filesystemId === group.filesystemId) {
+			roots.add(destination.configuredPath || destination.path);
 		}
-
-		if (!stats.isFile()) {
-			continue;
-		}
-
-		if (stats.isSymbolicLink && stats.isSymbolicLink()) {
-			continue;
-		}
-
-		if (!isStorageCleanupTargetFile(filePath)) {
-			continue;
-		}
-
-		if (recordingPaths.has(path.resolve(filePath))) {
-			continue;
-		}
-
-		candidates.push({
-			path: filePath,
-			name: path.basename(filePath),
-			mtimeMs: stats.mtimeMs,
-			size: stats.size
-		});
-	}
-
-	candidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
-	return candidates.slice(0, typeof limit === 'number' && limit > 0 ? limit : candidates.length);
+	});
+	return Array.from(roots);
 }
 
-function findOldestRecordedFileInRecordedDir() {
-	return findRecordedCleanupCandidates(1)[0] || null;
+function cleanupScanOptions(group, limit) {
+	return {
+		fs: fs,
+		// /proc/self/mountinfo identifies every configured root on this filesystem
+		// without stat'ing unrelated recording HDDs. Unknown roots are not probed.
+		roots: getCleanupRoots(group),
+		filesystemKey: group && group.filesystemKey,
+		protectedPaths: getRecordingPathSet(),
+		limit: limit,
+		onError: function (operation, targetPath, error) {
+			operatorLog('WARNING: Storage cleanup ' + operation + ' failed: ' + targetPath + ' (' + error.message + ')');
+		}
+	};
+}
+
+function findRecordedCleanupCandidates(group, limit) {
+	return storageLow.findCleanupCandidates(cleanupScanOptions(group, limit));
 }
 
 // 実ファイル削除後、recorded.json 側に同一パスの記録が残っていれば整合更新する
 // 削除対象の選定には recorded 台帳を使わない
 function markMatchRecordingDeleted(recordedEntries, filePath, deletedAt) {
-	let items;
-
 	try {
-		items = JSON.parse(fs.readFileSync(MATCH_DATA_FILE, { encoding: 'utf8' }));
-		if (!Array.isArray(items)) {
-			throw new Error('match data is not an array');
-		}
-
-		if (!storageLow.markMatchRecordingDeleted(items, recordedEntries, filePath, deletedAt, 'storage-low')) {
-			return false;
-		}
-
-		fs.writeFileSync(MATCH_DATA_FILE, JSON.stringify(items));
+		const changed = reservationStore.withLock(MATCH_DATA_FILE, () => {
+			const items = reservationStore.readArray(MATCH_DATA_FILE);
+			if (!storageLow.markMatchRecordingDeleted(items, recordedEntries, filePath, deletedAt, 'storage-low')) {
+				return false;
+			}
+			reservationStore.writeArrayAtomic(MATCH_DATA_FILE, items);
+			return true;
+		});
+		if (!changed) return false;
 		operatorLog('WRITE: ' + MATCH_DATA_FILE);
 		return true;
 	} catch (error) {
@@ -2369,46 +2441,60 @@ function markMatchRecordingDeleted(recordedEntries, filePath, deletedAt) {
 function removeRecordedLedgerEntriesByPath(filePath, deletedAt) {
 	const resolvedFilePath = path.resolve(filePath);
 	const removed = [];
-	let changed = false;
+	const remaining = [];
 
-	for (let i = recorded.length - 1; i >= 0; i--) {
-		if (!recorded[i] || !recorded[i].recorded) {
-			continue;
-		}
+	recorded.forEach(entry => {
+		if (entry && entry.recorded && path.resolve(entry.recorded) === resolvedFilePath) removed.push(entry);
+		else remaining.push(entry);
+	});
 
-		if (path.resolve(recorded[i].recorded) !== resolvedFilePath) {
-			continue;
-		}
-
-		removed.push(recorded[i]);
-		recorded.splice(i, 1);
-		changed = true;
+	if (removed.length === 0) return { recordedUpdated: false, matchUpdated: false, thumbnails: [] };
+	reservationStore.writeArrayAtomic(RECORDED_DATA_FILE, remaining);
+	recorded.splice(0, recorded.length, ...remaining);
+	operatorLog('WRITE: ' + RECORDED_DATA_FILE);
+	const matchUpdated = markMatchRecordingDeleted(removed, filePath, deletedAt);
+	const thumbnails = [];
+	if (matchUpdated) {
+		removed.forEach(entry => {
+			const id = entry && (entry.id || entry.recordedId || entry.origId || entry.programId);
+			if (!id) return;
+			try {
+				thumbnails.push({ id: String(id), result: recordedThumbnailGenerator.discard(String(id)) });
+			} catch (error) {
+				operatorLog('WARNING: Storage cleanup thumbnail removal failed: ' + id + ' (' + error.message + ')');
+				thumbnails.push({ id: String(id), result: { removed: false, reason: error.code || 'thumbnail-delete-failed' } });
+			}
+		});
 	}
-
-	if (changed) {
-		fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
-		operatorLog('WRITE: ' + RECORDED_DATA_FILE);
-		markMatchRecordingDeleted(removed, filePath, deletedAt);
-		scheduleMatchLedgerUpdate('recorded cleanup');
-	}
+	scheduleMatchLedgerUpdate('recorded cleanup');
+	return { recordedUpdated: true, matchUpdated: matchUpdated, thumbnails: thumbnails };
 }
 
-// 容量不足時に config.recordedDir 直下の最古 ts/m2ts を1件削除する
-function removeOldestRecordedFileInRecordedDir() {
-	const target = findOldestRecordedFileInRecordedDir();
+// Low対象filesystemに属する録画先配下から、検証済みの最古候補を1件削除する。
+function removeOldestRecordedFileOnFilesystem(group, candidate) {
+	const target = storageLow.validateCleanupCandidate(candidate, cleanupScanOptions(group));
+	let fileDeleted = false;
 
 	if (!target) {
-		operatorLog('WARNING: Storage cleanup target not found in recordedDir root.');
+		operatorLog('WARNING: Storage cleanup target failed the final safety check.');
 		return false;
 	}
 
 	try {
 		fs.unlinkSync(target.path);
+		fileDeleted = true;
 		operatorLog('REMOVE: Storage cleanup -> ' + target.path + ' (' + target.size + ' bytes)');
-		removeRecordedLedgerEntriesByPath(target.path, Date.now());
+		const outcome = removeRecordedLedgerEntriesByPath(target.path, Date.now());
+		if (outcome.recordedUpdated && !outcome.matchUpdated) {
+			operatorLog('ERROR: Storage cleanup partial completion: fileDeleted=true recordedUpdated=true matchUpdated=false path=' + target.path + ' (do not retry file deletion)');
+		}
 		return true;
 	} catch (e) {
-		operatorLog('WARNING: Storage cleanup remove failed: ' + target.path + ' (' + e.message + ')');
+		if (fileDeleted) {
+			operatorLog('ERROR: Storage cleanup partial completion: fileDeleted=true recordedUpdated=false matchUpdated=false path=' + target.path + ' (' + e.message + '; do not retry file deletion)');
+		} else {
+			operatorLog('WARNING: Storage cleanup remove failed: ' + target.path + ' (' + e.message + ')');
+		}
 		return false;
 	}
 }
@@ -2434,10 +2520,6 @@ function stopRecordingsOnFilesystem(filesystemKey) {
 
 const storageNotificationPending = {};
 
-function isDefaultStorageGroup(group) {
-	return group && group.destinations.some(destination => path.resolve(destination) === path.resolve(config.recordedDir));
-}
-
 function getStorageSnapshotCompatibility() {
 	return {
 		action: storageLowSpaceAction,
@@ -2454,6 +2536,7 @@ function createUnobservedStorageState(destination) {
 		path: destination.path,
 		configuredPath: destination.configuredPath,
 		expectedMount: destination.expectedMount,
+		rootProtectionEnabled: destination.rootProtectionEnabled === true,
 		status: 'unobserved',
 		detail: 'Capacity has not been checked by an Operator storage event.',
 		filesystemKey: null,
@@ -2487,6 +2570,7 @@ function chooseStorageDisplayState(destination, observed) {
 	const token = storageRuntimeState.destinationToken(destination);
 	const cached = storageDisplaySnapshots.get(token);
 	if (!observed) return cached || createUnobservedStorageState(destination);
+	if (observed.safetyBlocked === true) return observed;
 	if (!cached || !storageRuntimeState.matchesDestination(cached, destination)) return observed;
 	if (Number(cached.capacityCheckedAt) > Number(observed.capacityCheckedAt)) return cached;
 	if (!observed.filesystemKey || !cached.filesystemKey ||
@@ -2512,7 +2596,8 @@ function persistStorageRuntimeState(force) {
 			name: destination.name,
 			path: destination.path,
 			configuredPath: destination.configuredPath,
-			expectedMount: destination.expectedMount
+			expectedMount: destination.expectedMount,
+			rootProtectionEnabled: destination.rootProtectionEnabled === true
 		});
 		storageDisplaySnapshots.set(storageRuntimeState.destinationToken(destination), result);
 		return result;
@@ -2600,38 +2685,45 @@ function handleStorageGroup(group) {
 	}
 	notifyStorageGroup(group);
 	if (group.phase !== 'cleanup') {
+		const previous = storageCleanupState[group.filesystemKey];
+		if (previous && previous.mountFingerprint === group.mountFingerprint) {
+			delete storageCleanupState[group.filesystemKey];
+		}
 		persistStorageRuntimeState();
 		return;
 	}
 
-	let shouldStopRecordings = storageLowSpaceAction === 'stop';
-	if (storageLowSpaceAction === 'remove' && isDefaultStorageGroup(group)) {
+	let cleanupFailed = false;
+	if (storageLowSpaceAction === 'remove') {
 		const previous = storageCleanupState[group.filesystemKey];
 		if (!previous || previous.handledCapacityCheckedAt !== group.capacityCheckedAt) {
-			const candidates = findRecordedCleanupCandidates(5);
+			const candidates = findRecordedCleanupCandidates(group, 5);
 			storageCleanupState[group.filesystemKey] = {
 				mountFingerprint: group.mountFingerprint,
 				cleanupCandidateSource: true,
 				cleanupCandidates: candidates.map(candidate => ({ name: candidate.name, size: candidate.size, mtimeMs: candidate.mtimeMs })),
 				cleanupCandidatesCheckedAt: Date.now(),
-				handledCapacityCheckedAt: group.capacityCheckedAt
+				handledCapacityCheckedAt: group.capacityCheckedAt,
+				awaitingCapacityRefresh: false,
+				cleanupFallbackStopAll: false
 			};
-			if (candidates.length > 0 && removeOldestRecordedFileInRecordedDir()) {
-				storageCleanupState[group.filesystemKey].cleanupCandidates = findRecordedCleanupCandidates(5).map(candidate => ({
+			if (candidates.length > 0 && removeOldestRecordedFileOnFilesystem(group, candidates[0])) {
+				storageCleanupState[group.filesystemKey].awaitingCapacityRefresh = true;
+				storageCleanupState[group.filesystemKey].cleanupCandidates = findRecordedCleanupCandidates(group, 5).map(candidate => ({
 					name: candidate.name, size: candidate.size, mtimeMs: candidate.mtimeMs
 				}));
 			} else {
 				operatorLog('WARNING: Storage cleanup cannot safely free space; stopping recordings on the low filesystem.');
-				shouldStopRecordings = true;
+				storageCleanupState[group.filesystemKey].cleanupFallbackStopAll = true;
+				cleanupFailed = true;
 			}
 		}
-	} else if (storageLowSpaceAction === 'remove') {
-		operatorLog('WARNING: Storage cleanup is limited to the default filesystem; stopping recordings on the low filesystem.');
-		shouldStopRecordings = true;
 	}
 
 	group.stopNewRecordings = true;
-	if (shouldStopRecordings) stopRecordingsOnFilesystem(group.filesystemKey);
+	if (storageLow.shouldStopCurrentRecordings(storageLowSpaceAction, cleanupFailed)) {
+		stopRecordingsOnFilesystem(group.filesystemKey);
+	}
 	persistStorageRuntimeState();
 }
 
@@ -2643,7 +2735,11 @@ function checkActiveRecordingStorage() {
 		checked.add(filesystemKey);
 		const destination = storageHealth.findDestination(config, program);
 		if (!destination) return;
-		const group = storageMonitor.check(destination, { now: Date.now() });
+		const cleanupState = storageCleanupState[filesystemKey];
+		const group = storageMonitor.check(destination, {
+			now: Date.now(),
+			refreshAfterMs: cleanupState && cleanupState.awaitingCapacityRefresh === true ? 1000 : undefined
+		});
 		if (group && group.capacityCheckedAt) handleStorageGroup(group, destination);
 		else persistStorageRuntimeState();
 	});
@@ -2665,6 +2761,7 @@ function storageStateFromGroup(group, destination) {
 		path: destination.path,
 		configuredPath: destination.configuredPath || destination.path,
 		expectedMount: destination.expectedMount || null,
+		rootProtectionEnabled: destination.rootProtectionEnabled === true,
 		capacityReliable: Number(group.capacityCheckedAt) > 0,
 		total: typeof group.totalBytes === 'number' ? group.totalBytes : group.total,
 		used: typeof group.usedBytes === 'number' ? group.usedBytes : group.used,
@@ -2768,6 +2865,94 @@ function startStorageRefreshServer() {
 }
 
 startStorageRefreshServer();
+
+function recordedThumbnailRequestError(code, statusCode, publicMessage) {
+	const error = new Error(publicMessage);
+	error.code = code;
+	error.statusCode = statusCode;
+	error.publicMessage = publicMessage;
+	return error;
+}
+
+function getRecordedThumbnailDuration(entry) {
+	const measured = Number(entry && entry.recordedDurationSeconds);
+	if (Number.isFinite(measured) && measured > 0) return measured;
+	const actual = Number(entry && entry.operatorActualSeconds);
+	if (Number.isFinite(actual) && actual > 0) return actual;
+	return null;
+}
+
+function handleRecordedThumbnailRequest(request) {
+	const id = request && String(request.id || '');
+	const outputPath = recordedThumbnail.resolveOutputPath(RECORDED_THUMBNAIL_DIR, id);
+	if (!outputPath) {
+		throw recordedThumbnailRequestError('invalid_recorded_id', 400, '録画IDが不正です。');
+	}
+	if (request && request.action === 'status') {
+		return recordedThumbnailGenerator.getStatus(id);
+	}
+	if (request && request.action === 'delete') {
+		return recordedThumbnailGenerator.discard(id);
+	}
+	if (request && request.action === 'cancel') {
+		return recordedThumbnailGenerator.cancel(id);
+	}
+	if (fs.existsSync(outputPath)) {
+		return recordedThumbnailGenerator.getStatus(id);
+	}
+
+	let entries;
+	try {
+		entries = reservationStore.readArray(RECORDED_DATA_FILE);
+	} catch (error) {
+		throw recordedThumbnailRequestError('recorded_data_unavailable', 503, '録画管理データを読み取れません。');
+	}
+	const entry = entries.find(item => item && String(item.id) === id);
+	if (!entry) {
+		throw recordedThumbnailRequestError('recorded_not_found', 404, '録画管理データが見つかりません。');
+	}
+	if (entry.operatorResumePending === true) {
+		throw recordedThumbnailRequestError('recording_incomplete', 409, '再開待ちの録画からはサムネイルを生成できません。');
+	}
+	if (typeof entry.recorded !== 'string' || entry.recorded.trim() === '' || !fs.existsSync(entry.recorded)) {
+		recordedThumbnailGenerator.markSourceMissing(id);
+		throw recordedThumbnailRequestError('recorded_file_missing', 410, '録画ファイルが見つかりません。');
+	}
+
+	const result = recordedThumbnailGenerator.enqueue({
+		id: id,
+		inputPath: entry.recorded,
+		durationSeconds: getRecordedThumbnailDuration(entry)
+	});
+	if (result.reason === 'queue-full') {
+		throw recordedThumbnailRequestError('thumbnail_queue_full', 429, 'サムネイル生成が混雑しています。時間をおいて再試行してください。');
+	}
+	if (result.reason === 'stopped') {
+		throw recordedThumbnailRequestError('operator_stopping', 503, 'Operator停止中のため生成を開始できません。');
+	}
+	if (result.reason === 'invalid') {
+		throw recordedThumbnailRequestError('invalid_recorded_data', 500, '録画管理データの保存先が不正です。');
+	}
+
+	return recordedThumbnailGenerator.getStatus(id);
+}
+
+function startRecordedThumbnailServer() {
+	recordedThumbnailServer = storageRefreshIpc.createServer({
+		socketPath: RECORDED_THUMBNAIL_SOCKET,
+		handler: handleRecordedThumbnailRequest,
+		log: operatorLog,
+		label: 'Recorded thumbnail IPC'
+	});
+	recordedThumbnailServer.listen().then(() => {
+		operatorLog('Recorded thumbnail IPC listening.');
+	}).catch(error => {
+		operatorLog('WARNING: Recorded thumbnail IPC startup failed: ' + error.message);
+		recordedThumbnailServer = null;
+	});
+}
+
+startRecordedThumbnailServer();
 
 // ファイル更新監視: ./data/reserves.json
 chinachu.jsonWatcher(

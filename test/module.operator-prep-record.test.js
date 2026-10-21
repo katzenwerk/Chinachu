@@ -8,7 +8,6 @@ const path = require('path');
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const matching = require('../app-matching');
 const repositoryRoot = path.resolve(__dirname, '..');
 
 function waitForCondition(predicate, message, timeoutMs) {
@@ -67,7 +66,6 @@ async function createOperatorFixture(programs, onStream, options) {
 	const recordedDir = path.join(temporaryDir, 'recorded');
 	const recordedCommandLog = path.join(temporaryDir, 'recorded-command.log');
 	const matchingLog = path.join(temporaryDir, 'matching.log');
-	const notificationLog = path.join(temporaryDir, 'notification.log');
 	const ffprobeLog = path.join(temporaryDir, 'ffprobe.log');
 	const sockets = new Set();
 	const requests = [];
@@ -123,7 +121,6 @@ async function createOperatorFixture(programs, onStream, options) {
 	fs.mkdirSync(path.join(temporaryDir, 'log'));
 	fs.symlinkSync(path.join(repositoryRoot, 'lib'), path.join(temporaryDir, 'lib'), 'dir');
 	fs.symlinkSync(path.join(repositoryRoot, 'node_modules'), path.join(temporaryDir, 'node_modules'), 'dir');
-	fs.symlinkSync(path.join(repositoryRoot, 'web'), path.join(temporaryDir, 'web'), 'dir');
 	fs.copyFileSync(path.join(repositoryRoot, 'app-operator.js'), path.join(temporaryDir, 'app-operator.js'));
 	fs.copyFileSync(path.join(repositoryRoot, 'package.json'), path.join(temporaryDir, 'package.json'));
 	fs.writeFileSync(path.join(temporaryDir, 'chinachu'), '#!/usr/bin/env node\nprocess.exit(0);\n');
@@ -134,24 +131,8 @@ async function createOperatorFixture(programs, onStream, options) {
 		fs.chmodSync(recordedCommand, 0o755);
 		options.config = Object.assign({}, options.config, { recordedCommand: recordedCommand });
 	}
-	if (options.trackNotification) {
-		const notificationCommand = path.join(temporaryDir, 'notification-test.js');
-		fs.writeFileSync(notificationCommand, [
-			'#!/usr/bin/env node',
-			"let input = '';",
-			"process.stdin.setEncoding('utf8');",
-			"process.stdin.on('data', chunk => { input += chunk; });",
-			"process.stdin.on('end', () => require('fs').appendFileSync(process.env.CHINACHU_TEST_NOTIFICATION_LOG, input));"
-		].join('\n') + '\n');
-		fs.chmodSync(notificationCommand, 0o755);
-		options.config = Object.assign({}, options.config, {
-			notificationCommand: [ process.execPath, notificationCommand ]
-		});
-	}
 	if (options.trackMatching) {
 		fs.writeFileSync(path.join(temporaryDir, 'app-matching.js'), 'require("fs").appendFileSync(process.env.CHINACHU_TEST_MATCHING_LOG, "matching\\n");\n');
-	} else if (options.copyMatching) {
-		fs.copyFileSync(path.join(repositoryRoot, 'app-matching.js'), path.join(temporaryDir, 'app-matching.js'));
 	}
 	if (options.ffprobeScript) {
 		const ffprobeCommand = path.join(temporaryDir, 'ffprobe-test.js');
@@ -172,14 +153,8 @@ async function createOperatorFixture(programs, onStream, options) {
 	fs.writeFileSync(path.join(dataDir, 'reserves.json'), JSON.stringify(programs));
 	const initialRecorded = typeof options.initialRecorded === 'function' ?
 		options.initialRecorded(recordedDir) : options.initialRecorded || [];
-	const initialReserves2 = typeof options.initialReserves2 === 'function' ?
-		options.initialReserves2(recordedDir) : options.initialReserves2 || [];
-	const initialMatch = typeof options.initialMatch === 'function' ?
-		options.initialMatch(recordedDir) : options.initialMatch || [];
 	for (const name of [ 'reserves2', 'recording', 'recorded', 'match' ]) {
-		const initial = name === 'recorded' ? initialRecorded :
-			name === 'reserves2' ? initialReserves2 :
-			name === 'match' ? initialMatch : [];
+		const initial = name === 'recorded' ? initialRecorded : [];
 		fs.writeFileSync(path.join(dataDir, name + '.json'), JSON.stringify(initial));
 	}
 	fs.mkdirSync(recordedDir, { recursive: true });
@@ -195,10 +170,10 @@ async function createOperatorFixture(programs, onStream, options) {
 			cwd: temporaryDir,
 			stdio: [ 'ignore', 'pipe', 'pipe' ],
 			env: Object.assign({}, process.env, {
-				CHINACHU_TEST_RECORDED_COMMAND_LOG: recordedCommandLog,
-				CHINACHU_TEST_MATCHING_LOG: matchingLog,
-				CHINACHU_TEST_NOTIFICATION_LOG: notificationLog,
-				CHINACHU_TEST_FFPROBE_LOG: ffprobeLog
+					CHINACHU_TEST_RECORDED_COMMAND_LOG: recordedCommandLog,
+					CHINACHU_TEST_MATCHING_LOG: matchingLog,
+					CHINACHU_TEST_FFPROBE_LOG: ffprobeLog,
+					CHINACHU_RUNTIME_DIR: path.join(temporaryDir, 'runtime')
 			})
 		});
 		child.stdout.on('data', chunk => { output += chunk.toString(); });
@@ -243,7 +218,6 @@ async function createOperatorFixture(programs, onStream, options) {
 		recordedDir,
 		recordedCommandLog,
 		matchingLog,
-		notificationLog,
 		ffprobeLog,
 		get child() {
 			return child;
@@ -252,22 +226,9 @@ async function createOperatorFixture(programs, onStream, options) {
 		read(name) {
 			return JSON.parse(fs.readFileSync(path.join(dataDir, name + '.json'), 'utf8'));
 		},
-		abort(id) {
-			const recording = this.read('recording');
-			recording.find(item => item.id === id).abort = true;
-			fs.writeFileSync(path.join(dataDir, 'recording.json'), JSON.stringify(recording));
-		},
-		writeReserves(programs) {
-			fs.writeFileSync(path.join(dataDir, 'reserves.json'), JSON.stringify(programs));
-		},
 		start: startOperator,
 		gracefulStop(signal) {
 			return signalOperator(signal || 'SIGINT');
-		},
-		async restart() {
-			await stopOperator();
-			output = '';
-			return startOperator();
 		},
 		async close() {
 			await stopOperator();
@@ -424,72 +385,4 @@ describe('Operator recording preparation attempts', function() {
 		}
 	});
 
-	it('records a low-storage cleanup in match history and preserves it through matching', { timeout: 15000 }, async function() {
-		const now = Date.now();
-		const baseProgram = Object.assign(createProgram('2'), {
-			start: now - 120000,
-			end: now - 60000,
-			seconds: 60
-		});
-		function recordedProgram(recordedDir) {
-			return Object.assign({}, baseProgram, {
-				recorded: path.join(recordedDir, 'cleanup.m2ts')
-			});
-		}
-		const triggerProgram = Object.assign(createProgram('3'), { start: now - 1000, end: now + 60000 });
-		const fixture = await createOperatorFixture([ triggerProgram ], () => {}, {
-			copyMatching: true,
-			initialRecorded(recordedDir) {
-				return [ recordedProgram(recordedDir) ];
-			},
-			initialReserves2() {
-				return [ Object.assign({}, baseProgram) ];
-			},
-			initialMatch(recordedDir) {
-				const recorded = recordedProgram(recordedDir);
-				const key = matching.makeKeyFromRecorded(recorded);
-
-				return [ matching.buildMatchItem(
-					'RECORDED', key, recorded, baseProgram, baseProgram.channel,
-					true, true, false, true, false, now, true, {}
-				) ];
-			},
-			initialFiles: {
-				'cleanup.m2ts': 'DELETE'
-			},
-			config: {
-				storageLowSpaceThresholdMB: 1000000000000,
-				storageLowSpaceAction: 'remove',
-				matchUpdateDelayMs: 0
-			}
-		});
-		const cleanupPath = path.join(fixture.recordedDir, 'cleanup.m2ts');
-
-		try {
-			await waitForCondition(() => {
-				const items = fixture.read('match');
-				const result = items[0] && items[0].recordingResult;
-
-				return !fs.existsSync(cleanupPath) &&
-					fixture.read('recorded').length === 0 &&
-					items[0] && items[0].status === 'RECORDED' &&
-					result && result.cleanupState === 'deleted' &&
-					result.cleanupReason === 'storage-low' &&
-					Number(result.deletedAt) > 0 &&
-					/MATCH: updated .*keep_recorded_over_missed=1/.test(fixture.output());
-			}, 'low-storage cleanup history was not preserved through matching', 10000);
-
-			const item = fixture.read('match')[0];
-			assert.strictEqual(item.status, 'RECORDED');
-			[ item.recordingResult, item.recordingResult.snapshot, item.program ].forEach(value => {
-				assert.strictEqual(value.fileExists, false);
-				assert.strictEqual(value.cleanupState, 'deleted');
-				assert.strictEqual(value.cleanupReason, 'storage-low');
-				assert.ok(Number(value.deletedAt) > 0);
-			});
-			assert.match(fixture.output(), /REMOVE: Storage cleanup -> .*cleanup\.m2ts \(6 bytes\)/);
-		} finally {
-			await fixture.close();
-		}
-	});
 });

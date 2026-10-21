@@ -37,6 +37,7 @@
 					path: destination.path,
 					configuredPath: destination.configuredPath,
 					expectedMount: destination.expectedMount,
+					rootProtectionEnabled: destination.rootProtectionEnabled === true,
 					status: 'unobserved',
 					detail: 'Capacity has not been checked by an Operator storage event.',
 					capacityReliable: false,
@@ -52,9 +53,11 @@
 				storage.path = destination.path;
 				storage.configuredPath = destination.configuredPath;
 				storage.expectedMount = destination.expectedMount;
+				storage.rootProtectionEnabled = destination.rootProtectionEnabled === true;
 				storage.lowStorageManaged = true;
 				storage.recorded = null;
-				storage.capacityStale = !storage.capacityCheckedAt || now - storage.capacityCheckedAt > currentWindowMs;
+				storage.capacityStale = storage.safetyBlocked === true ? false :
+					!storage.capacityCheckedAt || now - storage.capacityCheckedAt > currentWindowMs;
 				storage.observedStatus = storage.status;
 				storage.observedLowSpacePhase = storage.lowSpacePhase || null;
 				storage.lowSpaceCurrent = storage.status === 'low-space' && !storage.capacityStale;
@@ -64,7 +67,7 @@
 					storage.stopNewRecordings = false;
 				}
 				if (!storage.capacityCheckedAt && storage.identityCheckedAt && now - storage.identityCheckedAt > currentWindowMs &&
-					storage.status !== 'unobserved') {
+					storage.status !== 'unobserved' && storage.safetyBlocked !== true) {
 					storage.status = 'stale';
 					storage.stopNewRecordings = false;
 				}

@@ -23,6 +23,12 @@
     "types"  : ["png", "jpg", "txt"]
   },
 
+  "/:id/thumbnail": {
+    "script" : "recorded-program-thumbnail",
+    "methods": ["get", "post"],
+    "types"  : ["jpg", "json"]
+  },
+
   "/:id/watch": {
     "script" : "recorded-program-watch",
     "methods": ["get", "head"],

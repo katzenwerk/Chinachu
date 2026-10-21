@@ -15,6 +15,8 @@
 				case 'unskip':
 					cmd = 'node app-cli.js -mode unskip -id ' + program.id;
 					break;
+				default:
+					return response.error(404);
 			}
 			
 			child_process.exec(cmd, function(err, stdout, stderr) {

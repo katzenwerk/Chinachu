@@ -6,8 +6,6 @@
 **/
 'use strict';
 
-const PID_FILE = __dirname + '/data/scheduler.pid';
-
 const SCHEDULER_STATE_FILE = __dirname + '/data/scheduler-state.json';
 const LEGACY_SCHEDULER_STATE_FILE = __dirname + '/data/epg-scheduler-state.json';
 
@@ -15,6 +13,7 @@ const CONFIG_FILE = __dirname + '/config.json';
 const RULES_FILE = __dirname + '/rules.json';
 const RESERVES_DATA_FILE = __dirname + '/data/reserves.json';
 const RESERVES2_DATA_FILE = __dirname + '/data/reserves2.json';
+const RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 const RECORDED_DATA_FILE = __dirname + '/data/recorded.json';
 const MATCH_DATA_FILE = __dirname + '/data/match.json';
 const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
@@ -27,7 +26,17 @@ const util = require('util');
 const schedulerState = require('./lib/scheduler-state');
 const schedulerPreflight = require('./lib/operator-scheduler-preflight');
 const reservationStore = require('./lib/reservation-store');
+const runtimePathsModule = require('./lib/runtime-paths');
 const schedulerStartedAt = Date.now();
+
+let runtimePaths;
+try {
+	runtimePaths = runtimePathsModule.resolveRuntimePaths(__dirname);
+} catch (error) {
+	console.error('[fatal] failed to prepare runtime directory: ' + error.message);
+	process.exit(1);
+}
+const PID_FILE = runtimePaths.schedulerPid;
 
 function formatJstLogTime() {
 	const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
@@ -54,7 +63,7 @@ const child_process = require('child_process');
 const matchOutput = require('./lib/match-output');
 
 // ディレクトリチェック
-if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./web/')) {
+if (!fs.existsSync('./data/') || !fs.existsSync('./log/')) {
 	console.error('必要なディレクトリが存在しないか、カレントワーキングディレクトリが不正です。');
 	process.exit(1);
 }
@@ -115,16 +124,43 @@ if (fs.existsSync(SCHEDULE_DATA_FILE)) {
 
 // PID file operation
 function createPidFile() {
-	fs.writeFileSync(PID_FILE, process.pid.toString(10));
+	const descriptor = fs.openSync(PID_FILE, 'wx', 0o600);
+	try {
+		fs.writeFileSync(descriptor, process.pid.toString(10));
+	} finally {
+		fs.closeSync(descriptor);
+	}
 }
 
-function deletePidFile() {
+function deletePidFile(expectedPid) {
 	try {
-		if (fs.existsSync(PID_FILE)) {
-			fs.unlinkSync(PID_FILE);
-		}
+		if (!fs.existsSync(PID_FILE)) return;
+		const current = fs.readFileSync(PID_FILE, { encoding: 'utf8' }).trim();
+		if (typeof expectedPid !== 'undefined' && current !== String(expectedPid)) return;
+		fs.unlinkSync(PID_FILE);
 	} catch (e) {
 		schedulerLog('WARNING: `' + PID_FILE + '`の削除に失敗しました: ' + e.message);
+	}
+}
+
+function isSchedulerProcess(pid) {
+	try {
+		process.kill(pid, 0);
+	} catch (error) {
+		if (error && error.code === 'ESRCH') return false;
+		return true;
+	}
+	if (process.platform !== 'linux') return true;
+	try {
+		const argv = fs.readFileSync('/proc/' + pid + '/cmdline', 'utf8').split('\0').filter(Boolean);
+		const script = argv.find(argument => /(^|\/)app-scheduler\.js$/.test(argument));
+		if (!script) return false;
+		const cwd = fs.realpathSync('/proc/' + pid + '/cwd');
+		const resolved = path.isAbsolute(script) ? path.resolve(script) : path.resolve(cwd, script);
+		return resolved === path.resolve(__filename);
+	} catch (_) {
+		// If identity cannot be inspected, fail closed and preserve the existing PID file.
+		return true;
 	}
 }
 
@@ -142,15 +178,12 @@ function isRunning(callback) {
 			return void 0;
 		}
 
-		child_process.execFile('ps', ['h', '-p', pid], function (err, stdout) {
-
-			if (stdout === '') {
-				deletePidFile();
-				callback(false);
-			} else {
-				callback(true);
-			}
-		});
+		if (isSchedulerProcess(Number(pid))) {
+			callback(true);
+		} else {
+			deletePidFile(pid);
+			callback(false);
+		}
 	} else {
 		callback(false);
 	}
@@ -464,10 +497,9 @@ function outputReserves() {
 		try {
 			schedulerLog('WRITE: ' + RESERVES2_DATA_FILE);
 
-			var currentReserves2 = readJsonArray(RESERVES2_DATA_FILE, { createIfMissing: true });
-			var reserves2Array = remakeReserves2(currentReserves2, array, now);
-
-			writeJsonAtomic(RESERVES2_DATA_FILE, reserves2Array);
+			reservationStore.updateArrayAtomic(RESERVES2_DATA_FILE, function (currentReserves2) {
+				return remakeReserves2(currentReserves2, array, now);
+			}, { createIfMissing: true });
 		} catch (e) {
 			schedulerLog('WARNING: `' + RESERVES2_DATA_FILE + '`の保存に失敗しました: ' + (e && e.stack ? e.stack : e));
 		}
@@ -532,9 +564,10 @@ function updateMatchLedger() {
 		schedulerLog('RUN: ' + appMatchingFile);
 
 		commandProcess = child_process.spawnSync(process.execPath, [
-			appMatchingFile,
-			'--recorded', recordedDataFile,
-			'--reserves2', RESERVES2_DATA_FILE,
+				appMatchingFile,
+				'--recorded', recordedDataFile,
+				'--recording', RECORDING_DATA_FILE,
+				'--reserves2', RESERVES2_DATA_FILE,
 			'--output', matchDataFile,
 			'--config', CONFIG_FILE
 		], {
@@ -1773,9 +1806,17 @@ isRunning(running => {
 		console.error('ERROR: Scheduler is already running.');
 		process.exit(1);
 	} else {
-		createPidFile();
+		try {
+			createPidFile();
+		} catch (error) {
+			if (error && error.code === 'EEXIST') {
+				console.error('ERROR: Scheduler runtime lock was acquired by another process.');
+				process.exit(1);
+			}
+			throw error;
+		}
 
-		process.on('exit', () => deletePidFile());
+		process.on('exit', () => deletePidFile(process.pid));
 
 		// EPGデータを取得または番組表を読み込む
 		if (config.epgStartCommand) {

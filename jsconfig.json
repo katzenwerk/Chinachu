@@ -8,7 +8,6 @@
         "usr",
         "data",
         "log",
-        "web/lib",
         ".*"
     ]
 }

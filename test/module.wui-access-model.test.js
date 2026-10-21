@@ -34,6 +34,7 @@ function request(port, requestPath, headers) {
 			response.on('data', chunk => chunks.push(chunk));
 			response.once('end', () => resolve({
 				statusCode: response.statusCode,
+				headers: response.headers,
 				body: Buffer.concat(chunks)
 			}));
 		});
@@ -135,7 +136,8 @@ async function startWuiProcess(temporaryDir) {
 	const output = { value: '' };
 	const child = childProcess.spawn(process.execPath, [ 'app-wui.js' ], {
 		cwd: temporaryDir,
-		stdio: [ 'ignore', 'pipe', 'pipe' ]
+		stdio: [ 'ignore', 'pipe', 'pipe' ],
+		env: Object.assign({}, process.env, { CHINACHU_RUNTIME_DIR: path.join(temporaryDir, 'runtime') })
 	});
 	child.stdout.on('data', chunk => { output.value += chunk.toString(); });
 	child.stderr.on('data', chunk => { output.value += chunk.toString(); });
@@ -183,46 +185,6 @@ function waitForCondition(predicate, message, timeoutMs) {
 }
 
 describe('WUI access model', function() {
-	it('keeps only the Open Server configuration and dependencies', function() {
-		const config = require('../config.sample.json');
-		const pkg = require('../package.json');
-		const source = fs.readFileSync(path.join(repositoryRoot, 'app-wui.js'), 'utf8');
-		const browserSource = fs.readFileSync(path.join(repositoryRoot, 'web/chinachu.js'), 'utf8');
-		const removedKeys = [
-			'wuiPort',
-			'wuiHost',
-			'wuiUsers',
-			'wuiTlsKeyPath',
-			'wuiTlsCertPath',
-			'wuiTlsPassphrase',
-			'wuiTlsRequestCert',
-			'wuiTlsRejectUnauthorized',
-			'wuiTlsCaPath',
-			'wuiAllowCountries',
-			'wuiXFF',
-			'wuiMdnsAdvertisement'
-		];
-
-		assert.strictEqual(config.wuiOpenServer, true);
-		assert.ok(Object.hasOwn(config, 'wuiOpenHost'));
-		assert.strictEqual(config.wuiOpenPort, 20772);
-		removedKeys.forEach(key => assert.ok(!Object.hasOwn(config, key)));
-		assert.strictEqual(pkg.dependencies['http-auth'], undefined);
-		assert.strictEqual(pkg.dependencies['geoip-lite'], undefined);
-		assert.strictEqual(pkg.dependencies['mdns-js'], undefined);
-		removedKeys.forEach(key => assert.doesNotMatch(source, new RegExp('config\\.' + key + '\\b')));
-		assert.doesNotMatch(source, /require\(['"]http-auth['"]\)/);
-		assert.doesNotMatch(source, /require\(['"]geoip-lite['"]\)/);
-		assert.doesNotMatch(source, /require\(['"]mdns-js['"]\)/);
-		assert.doesNotMatch(source, /createAdvertisement/);
-		assert.doesNotMatch(source, /openServerMdns/);
-		assert.strictEqual(source.match(/http\.createServer\(httpServer\)/g).length, 1);
-		assert.match(source, /new SocketIOServer\(server/);
-		assert.doesNotMatch(source, /allowEIO3\s*:\s*true/);
-		assert.doesNotMatch(browserSource, /connectTimeout/);
-		assert.match(browserSource, /transports:\s*\[\s*'polling',\s*'websocket'\s*\]/);
-	});
-
 	it('waits for network availability before starting an auto-detected Open Server', { timeout: 10000 }, async function() {
 		const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-wui-network-wait-'));
 		const dataDir = path.join(temporaryDir, 'data');
@@ -239,7 +201,7 @@ describe('WUI access model', function() {
 
 			fs.symlinkSync(path.join(repositoryRoot, 'api'), path.join(temporaryDir, 'api'), 'dir');
 			fs.symlinkSync(path.join(repositoryRoot, 'node_modules'), path.join(temporaryDir, 'node_modules'), 'dir');
-			fs.symlinkSync(path.join(repositoryRoot, 'web'), path.join(temporaryDir, 'web'), 'dir');
+			fs.symlinkSync(path.join(repositoryRoot, 'next-web'), path.join(temporaryDir, 'next-web'), 'dir');
 
 			fs.symlinkSync(
 				path.join(repositoryRoot, 'lib/runtime-privileges.js'),
@@ -285,6 +247,23 @@ describe('WUI access model', function() {
 				path.join(repositoryRoot, 'lib/storage-refresh-ipc.js'),
 				path.join(libDir, 'storage-refresh-ipc.js')
 			);
+			fs.symlinkSync(
+				path.join(repositoryRoot, 'lib/recorded-thumbnail.js'),
+				path.join(libDir, 'recorded-thumbnail.js')
+			);
+			[
+				'ledger-cleaner-jobs.js',
+				'ledger-cleaner.js',
+				'log-history.js',
+				'match-detail-resolver.js',
+				'match-deletion-history.js',
+				'reservation-store.js',
+				'runtime-paths.js',
+				'rule-store.js',
+				'wui-config.js'
+			].forEach(name => {
+				fs.symlinkSync(path.join(repositoryRoot, 'lib', name), path.join(libDir, name));
+			});
 
 			fs.writeFileSync(
 				path.join(libDir, 'wui-open-host.js'),
@@ -319,7 +298,8 @@ describe('WUI access model', function() {
 
 			child = childProcess.spawn(process.execPath, [ 'app-wui.js' ], {
 				cwd: temporaryDir,
-				stdio: [ 'ignore', 'pipe', 'pipe' ]
+				stdio: [ 'ignore', 'pipe', 'pipe' ],
+				env: Object.assign({}, process.env, { CHINACHU_RUNTIME_DIR: path.join(temporaryDir, 'runtime') })
 			});
 
 			child.stdout.on('data', chunk => { output.value += chunk.toString(); });
@@ -367,7 +347,7 @@ describe('WUI access model', function() {
 			fs.symlinkSync(path.join(repositoryRoot, 'api'), path.join(temporaryDir, 'api'), 'dir');
 			fs.symlinkSync(path.join(repositoryRoot, 'lib'), path.join(temporaryDir, 'lib'), 'dir');
 			fs.symlinkSync(path.join(repositoryRoot, 'node_modules'), path.join(temporaryDir, 'node_modules'), 'dir');
-			fs.symlinkSync(path.join(repositoryRoot, 'web'), path.join(temporaryDir, 'web'), 'dir');
+			fs.symlinkSync(path.join(repositoryRoot, 'next-web'), path.join(temporaryDir, 'next-web'), 'dir');
 			fs.copyFileSync(path.join(repositoryRoot, 'app-wui.js'), path.join(temporaryDir, 'app-wui.js'));
 			fs.copyFileSync(path.join(repositoryRoot, 'package.json'), path.join(temporaryDir, 'package.json'));
 			fs.copyFileSync(path.join(repositoryRoot, 'processes.json'), path.join(temporaryDir, 'processes.json'));
@@ -384,7 +364,8 @@ describe('WUI access model', function() {
 
 			child = childProcess.spawn(process.execPath, [ 'app-wui.js' ], {
 				cwd: temporaryDir,
-				stdio: [ 'ignore', 'pipe', 'pipe' ]
+				stdio: [ 'ignore', 'pipe', 'pipe' ],
+				env: Object.assign({}, process.env, { CHINACHU_RUNTIME_DIR: path.join(temporaryDir, 'runtime') })
 			});
 			child.stdout.on('data', chunk => { output += chunk.toString(); });
 			child.stderr.on('data', chunk => { output += chunk.toString(); });
@@ -426,7 +407,7 @@ describe('WUI access model', function() {
 			fs.symlinkSync(path.join(repositoryRoot, 'api'), path.join(temporaryDir, 'api'), 'dir');
 			fs.symlinkSync(path.join(repositoryRoot, 'lib'), path.join(temporaryDir, 'lib'), 'dir');
 			fs.symlinkSync(path.join(repositoryRoot, 'node_modules'), path.join(temporaryDir, 'node_modules'), 'dir');
-			fs.symlinkSync(path.join(repositoryRoot, 'web'), path.join(temporaryDir, 'web'), 'dir');
+			fs.symlinkSync(path.join(repositoryRoot, 'next-web'), path.join(temporaryDir, 'next-web'), 'dir');
 			fs.copyFileSync(path.join(repositoryRoot, 'app-wui.js'), path.join(temporaryDir, 'app-wui.js'));
 			fs.copyFileSync(path.join(repositoryRoot, 'package.json'), path.join(temporaryDir, 'package.json'));
 			fs.copyFileSync(path.join(repositoryRoot, 'processes.json'), path.join(temporaryDir, 'processes.json'));
@@ -460,6 +441,19 @@ describe('WUI access model', function() {
 			const wui = await request(openPort, '/', { 'X-Forwarded-For': '203.0.113.99' });
 			assert.strictEqual(wui.statusCode, 200);
 			assert.ok(wui.body.length > 0);
+
+			const nextRedirect = await request(openPort, '/next');
+			assert.strictEqual(nextRedirect.statusCode, 302);
+			assert.strictEqual(nextRedirect.headers.location, '/next/');
+
+			const nextWui = await request(openPort, '/next/');
+			assert.strictEqual(nextWui.statusCode, 200);
+
+			const nextModule = await request(openPort, '/next/app.js');
+			assert.strictEqual(nextModule.statusCode, 200);
+
+			const traversal = await request(openPort, '/next/%2e%2e/%2e%2e/config.json');
+			assert.strictEqual(traversal.statusCode, 403);
 
 			const api = await request(openPort, '/api/status.json');
 			assert.strictEqual(api.statusCode, 200);

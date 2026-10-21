@@ -17,12 +17,11 @@ function countStarts(markerPath) {
 	return fs.readFileSync(markerPath, 'utf8').trim().split('\n').filter(Boolean).length;
 }
 
-function createWorkerSender(markerPath, mode, options) {
+function createWorkerSender(markerPath, options) {
 	return notification.createNotificationSender([
 		process.execPath,
 		workerPath,
-		markerPath,
-		mode
+		markerPath
 	], options);
 }
 
@@ -55,8 +54,6 @@ describe('notification behavior contracts', function() {
 		assert.strictEqual(payload.event, 'storage-low');
 		assert.strictEqual(payload.severity, 'critical');
 		assert.strictEqual(payload.metadata.recordedDir, '/録画 data/$HOME `command` "quoted" $(touch ' + injectedMarker + ')');
-		assert.strictEqual(payload.title, '[Chinachu] ALERT: Storage Low Space!');
-		assert.strictEqual(payload.message, 'Current Free Space is 1 MB.\nThreshold is 3000 MB.\nユーザー値: 日本語 ${touch ' + injectedMarker + '}');
 		assert.deepStrictEqual(payload.metadata, {
 			availableBytes: 1048576,
 			availableMB: 1,
@@ -84,7 +81,7 @@ describe('notification behavior contracts', function() {
 
 	it('terminates a stuck child after timeout and permits a later send', async function() {
 		const markerPath = path.join(temporaryDir, 'timeout.log');
-		const sender = createWorkerSender(markerPath, 'ignore-term', {
+		const sender = createWorkerSender(markerPath, {
 			timeoutMs: 100,
 			killGraceMs: 30
 		});

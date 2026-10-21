@@ -1,55 +1,23 @@
 (function() {
-	function addCandidate(candidates, value) {
-		if (typeof value === 'undefined' || value === null || String(value) === '') return;
-		value = String(value);
-		if (candidates.indexOf(value) === -1) candidates.push(value);
-	}
-
-	function matchCandidates(item) {
-		var candidates = [];
-		var program = item && item.program || {};
-		var result = item && item.recordingResult || item && item.recorded || {};
-		var snapshot = result && result.snapshot || {};
-		addCandidate(candidates, item && item.key);
-		addCandidate(candidates, program.id);
-		addCandidate(candidates, program.origId);
-		addCandidate(candidates, program.programId);
-		addCandidate(candidates, result.id);
-		addCandidate(candidates, result.recordedId);
-		addCandidate(candidates, result.origId);
-		addCandidate(candidates, result.programId);
-		addCandidate(candidates, snapshot.id);
-		addCandidate(candidates, snapshot.origId);
-		addCandidate(candidates, snapshot.programId);
-		addCandidate(candidates, snapshot.recordedId);
-		return candidates;
+	function readOptionalArray(file) {
+		var json;
+		if (!file || !fs.existsSync(file)) return [];
+		try {
+			json = JSON.parse(fs.readFileSync(file, { encoding: 'utf8' }).replace(/^\uFEFF/, '') || '[]');
+		} catch (_) {
+			return [];
+		}
+		return Array.isArray(json) ? json : [];
 	}
 
 	function findRecorded() {
-		var program = chinachu.getProgramById(request.param.id, data.recorded);
-		if (program !== null) return program;
-		var file = define.MATCH_DATA_FILE || './data/match.json';
-		var items;
-		try {
-			items = JSON.parse(fs.readFileSync(file, { encoding: 'utf8' }).replace(/^\uFEFF/, '') || '[]');
-		} catch (_) {
-			return null;
-		}
-		if (!Array.isArray(items)) return null;
-		for (var i = 0; i < items.length; i++) {
-			if (matchCandidates(items[i]).indexOf(String(request.param.id)) === -1) continue;
-			var sourceProgram = items[i].program || {};
-			var result = items[i].recordingResult || items[i].recorded || null;
-			var snapshot = result && result.snapshot || {};
-			if (!result || typeof result !== 'object') continue;
-			var recorded = result.recorded || result.path || snapshot.recorded || snapshot.path || sourceProgram.recorded || sourceProgram.path || '';
-			if (!recorded) continue;
-			return {
-				recorded: recorded,
-				tuner: result.tuner || snapshot.tuner || sourceProgram.tuner || null
-			};
-		}
-		return null;
+		var items = readOptionalArray(define.MATCH_DATA_FILE || './data/match.json');
+		return matchDetailResolver.resolveRecordedProgram(request.param.id, items, {
+			recorded: data && Array.isArray(data.recorded) ? data.recorded : [],
+			reserves2: readOptionalArray(define.RESERVES2_DATA_FILE),
+			reserves: data && Array.isArray(data.reserves) ? data.reserves : [],
+			schedule: data && Array.isArray(data.schedule) ? data.schedule : []
+		}).program;
 	}
 
 	if (!data.status.feature.streamer) return response.error(403);

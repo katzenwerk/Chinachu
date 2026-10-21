@@ -1,7 +1,16 @@
 (function() {
 
-	if (['wui', 'operator', 'scheduler'].indexOf(request.param.name) === -1) {
+	if (['wui', 'operator', 'scheduler', 'mirakurun'].indexOf(request.param.name) === -1) {
 		return response.error(404);
+	}
+
+	if (request.param.name === 'mirakurun') {
+		return mirakurun.getLog().then(function(data) {
+			response.head(200);
+			response.end(String(data || ''));
+		}).catch(function() {
+			response.error(502);
+		});
 	}
 
 	let filename = "";

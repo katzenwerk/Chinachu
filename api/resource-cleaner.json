@@ -1,0 +1,19 @@
+{
+  "/": {
+    "script" : "cleaner",
+    "methods": ["get"],
+    "types"  : ["json"]
+  },
+
+  "/scan": {
+    "script" : "cleaner",
+    "methods": ["post"],
+    "types"  : ["json"]
+  },
+
+  "/apply": {
+    "script" : "cleaner",
+    "methods": ["post"],
+    "types"  : ["json"]
+  }
+}

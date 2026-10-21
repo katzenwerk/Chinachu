@@ -4,7 +4,8 @@
   "mirakurunPath": "http+unix://%2Fvar%2Frun%2Fmirakurun.sock/",
   "recordedDir": "./recorded/",
   "recordedStorage": {
-    "expectedMount": null
+    "expectedMount": null,
+    "protectRootFilesystem": false
   },
   "recordedDirs": [
     {
@@ -12,7 +13,8 @@
       "name": "HDD 1",
       "path": "/mnt/hdd1/recorded",
       "storage": {
-        "expectedMount": "/mnt/hdd1"
+        "expectedMount": "/mnt/hdd1",
+        "protectRootFilesystem": false
       }
     }
   ],
@@ -38,6 +40,7 @@
   "matchRetentionDays": 90,
   "reserves2RetentionDays": 90,
   "recordedHistoryRetentionDays": 90,
+  "recordingResultCsvEnabled": false,
   "matchKeepRecordedSnapshot": true,
   "programViewShowMatchDebug": false,
   "excludeServices": [],

@@ -1,7 +1,7 @@
 {
   "name": "chinachu",
   "description": "Most Lovely DVR Software in Japan.",
-  "version": "0.10.7-thorn.29",
+  "version": "0.10.7-thorn.30",
   "private": true,
   "homepage": "https://chinachu.moe/",
   "author": {
@@ -41,7 +41,7 @@
   },
   "scripts": {
     "test": "node --test --test-isolation=none --test-concurrency=1 --test-reporter=spec test/*.test.js",
-    "check": "find api common/lib lib test -type f -name '*.js' -exec node --check {} \\; && find . -maxdepth 1 -type f -name 'app-*.js' -exec node --check {} \\;"
+    "check": "find api common/lib lib test -type f -name '*.js' -exec node --check {} \\; && find . -maxdepth 1 -type f -name 'app-*.js' -exec node --check {} \\; && find next-web -type f -name '*.js' ! -path 'next-web/sample/*' ! -path 'next-web/lib/mpeg2toh264/*' -exec sh -c 'for file do node --input-type=module --check < \"$file\" || { echo \"Syntax check failed: $file\" >&2; exit 1; }; done' sh {} +"
   },
   "engines": {
     "node": "^24.17.0",

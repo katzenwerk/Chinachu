@@ -1,0 +1,71 @@
+.storage-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-3); }
+.storage-card { display: flex; flex-direction: column; min-width: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-subtle); }
+.storage-card-head { display: flex; align-items: flex-start; gap: 11px; }
+.storage-drive-icon { display: grid; flex: 0 0 auto; place-items: center; width: 38px; height: 38px; border-radius: 10px; background: color-mix(in srgb,var(--brand) 12%,transparent); color: var(--brand); }
+.storage-card.is-warning .storage-drive-icon { background: color-mix(in srgb,var(--warning) 12%,transparent); color: var(--warning); }
+.storage-card.is-low .storage-drive-icon,.storage-card.is-unavailable .storage-drive-icon,.storage-card.is-error .storage-drive-icon,.storage-card.is-safety-error .storage-drive-icon { background: color-mix(in srgb,var(--danger) 12%,transparent); color: var(--danger); }
+.storage-card.is-stale .storage-drive-icon,.storage-card.is-unobserved .storage-drive-icon { background: color-mix(in srgb,var(--info) 12%,transparent); color: var(--info); }
+.storage-card-ident { flex: 1; min-width: 0; }
+.storage-card-ident > div { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.storage-card h2 { margin: 0; font-size: 15px; font-weight: var(--font-title-weight); }
+.storage-card-ident p { overflow: hidden; margin: 4px 0 0; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.storage-status-badge { padding: 2px 8px; border: 1px solid transparent; border-radius: 999px; font-size: 10px; font-weight: var(--font-support-weight); }
+.storage-status-badge.is-normal { border-color: color-mix(in srgb,var(--brand) 35%,transparent); background: color-mix(in srgb,var(--brand) 12%,transparent); color: var(--brand); }
+.storage-status-badge.is-warning { border-color: var(--warning-border); background: color-mix(in srgb,var(--warning) 12%,transparent); color: var(--warning); }
+.storage-status-badge.is-low,.storage-status-badge.is-unavailable,.storage-status-badge.is-error,.storage-status-badge.is-safety-error { border-color: var(--danger-border); background: color-mix(in srgb,var(--danger) 12%,transparent); color: var(--danger); }
+.storage-status-badge.is-stale,.storage-status-badge.is-unobserved { border-color: color-mix(in srgb,var(--info) 35%,transparent); background: color-mix(in srgb,var(--info) 12%,transparent); color: var(--info); }
+.storage-card-tools { display: flex; align-items: center; flex: 0 0 auto; gap: 9px; }
+.storage-card-tools time { color: var(--muted); font-size: 10px; line-height: 1.35; text-align: right; font-variant-numeric: tabular-nums; }
+.storage-card-tools time span { display: block; }
+.storage-card.is-reference .storage-checked-value,.storage-card.is-reference .storage-checked-ago { color: var(--danger); }
+.storage-refresh { display: grid; flex: 0 0 auto; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 50%; background: var(--panel); color: var(--muted); }
+.storage-refresh:not([disabled]) { cursor: pointer; }
+.storage-refresh:not([disabled]):hover { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
+.storage-refresh.is-loading { animation: storage-refresh-spin .8s linear infinite; }
+.storage-refresh[disabled] { cursor: not-allowed; opacity: .58; }
+.storage-refresh .icon { width: 17px; height: 17px; }
+.storage-primary-metric { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 18px; margin: 22px 0 12px; }
+.storage-primary-metric span { display: block; color: var(--muted); font-size: 10px; }
+.storage-primary-metric strong { display: block; margin-top: 2px; font-size: 21px; line-height: 1.1; font-weight: var(--font-heading-weight); font-variant-numeric: tabular-nums; }
+.storage-primary-metric > div:last-child { text-align: right; }
+.storage-usage-wrap { position: relative; }
+.storage-usage-bar { overflow: hidden; height: 9px; border-radius: 999px; background: color-mix(in srgb,var(--border) 72%,transparent); }
+.storage-usage-bar i { display: block; height: 100%; border-radius: inherit; background: var(--brand); }
+.storage-usage-bar.is-warning i { background: var(--warning); }
+.storage-usage-bar.is-low i,.storage-usage-bar.is-unavailable i,.storage-usage-bar.is-error i,.storage-usage-bar.is-safety-error i { background: var(--danger); }
+.storage-usage-bar.is-stale i,.storage-usage-bar.is-unobserved i { background: var(--info); }
+.storage-usage-bar.is-unavailable i,.storage-usage-bar.is-unobserved i,.storage-usage-bar.is-error i,.storage-usage-bar.is-safety-error i { width: 0 !important; }
+.storage-threshold-marker { position: absolute; top: -2px; bottom: -2px; z-index: 2; width: 2px; transform: translateX(-50%); pointer-events: none; }
+.storage-threshold-marker.is-warning { background: #e2a62d; }
+.storage-threshold-marker.is-low { z-index: 3; background: #cf5653; }
+.storage-threshold-marker.is-warning.is-close { transform: translateX(calc(-50% - 2px)); }
+.storage-threshold-marker.is-low.is-close { transform: translateX(calc(-50% + 2px)); }
+.storage-values { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.storage-values div { display: flex; align-items: baseline; gap: 7px; min-width: 0; white-space: nowrap; }
+.storage-values div:last-child { justify-content: flex-end; }
+.storage-values span { color: var(--muted); font-size: 10px; }
+.storage-values strong { font-size: 13px; font-weight: var(--font-title-weight); font-variant-numeric: tabular-nums; }
+.storage-threshold-values { display: flex; justify-content: flex-end; gap: 6px 12px; }
+.storage-threshold-values .is-warning { color: var(--warning); }
+.storage-threshold-values .is-low { color: var(--danger); }
+.storage-threshold-values strong { color: inherit; }
+.storage-card-footer { margin-top: auto; padding-top: 13px; }
+.storage-note { display: flex; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 9px; padding: 7px 9px; border-left: 3px solid var(--warning); border-radius: 5px; background: color-mix(in srgb,var(--warning) 8%,transparent); color: var(--muted); font-size: 11px; line-height: 1.45; }
+.storage-note.is-low,.storage-note.is-unavailable,.storage-note.is-error,.storage-note.is-safety-error { border-left-color: var(--danger); background: color-mix(in srgb,var(--danger) 8%,transparent); }
+.storage-note.is-stale,.storage-note.is-unobserved { border-left-color: var(--info); background: color-mix(in srgb,var(--info) 8%,transparent); }
+.storage-note strong { color: var(--danger); font-weight: var(--font-title-weight); }
+.storage-links { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 9px; border-top: 1px solid var(--border); }
+.storage-links a { min-height: 29px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--muted); font-size: 11px; text-decoration: none; }
+.storage-links a:hover { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
+.storage-message { text-align: center; }
+.storage-message.is-embedded { grid-column: 1 / -1; padding: var(--space-6); border: 1px dashed var(--border); border-radius: var(--radius); background: transparent; }
+.storage-message h2 { margin: 0 0 6px; font-size: 18px; }
+.storage-message p { margin: 0 0 14px; color: var(--muted); }
+.storage-page-note { margin: var(--space-3) 0 0; color: var(--muted); font-size: 12px; }
+.storage-snapshot-warning { margin-bottom: var(--space-3); padding: 8px 10px; border-left: 3px solid var(--danger); border-radius: 6px; background: color-mix(in srgb,var(--danger) 8%,transparent); color: var(--muted); font-size: 12px; }
+.storage-refresh-feedback { margin: var(--space-2) 0 0; color: var(--muted); font-size: 12px; }
+@keyframes storage-refresh-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) { .storage-refresh.is-loading { animation: none; } }
+
+@media (max-width:1180px) { .storage-grid { grid-template-columns: 1fr; } }

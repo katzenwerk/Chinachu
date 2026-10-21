@@ -13,7 +13,7 @@ function fixture(options) {
 	options = options || {};
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-service-control-'));
 	const home = path.join(root, 'home');
-	const pm2Home = path.join(root, options.pm2Home || 'home/.pm2');
+	const pm2Home = path.join(root, 'home/.pm2');
 	const data = path.join(root, 'data');
 	fs.mkdirSync(pm2Home, { recursive: true });
 	fs.mkdirSync(data, { recursive: true });
@@ -21,7 +21,7 @@ function fixture(options) {
 	fs.writeFileSync(path.join(pm2Home, 'rpc.sock'), '');
 	fs.writeFileSync(path.join(root, 'app-operator.js'), '');
 	fs.writeFileSync(path.join(root, 'app-wui.js'), '');
-	fs.writeFileSync(path.join(data, 'recording.json'), options.recording === undefined ? '[]' : options.recording);
+	fs.writeFileSync(path.join(data, 'recording.json'), '[]');
 	fs.writeFileSync(path.join(data, 'chinachu-operator.pid'), '111\n');
 	fs.writeFileSync(path.join(data, 'chinachu-wui.pid'), '222\n');
 
@@ -43,11 +43,11 @@ function fixture(options) {
 			}
 		}
 	];
-	if (options.mutateList) options.mutateList(list, root);
 	const calls = [];
+	const logs = [];
 	const runtimeProcess = {
 		pid: 222,
-		env: Object.assign({ PM2_HOME: pm2Home, pm_id: '1', PATH: process.env.PATH }, options.env || {}),
+		env: { PM2_HOME: pm2Home, pm_id: '1', PATH: process.env.PATH },
 		getuid: () => process.getuid(),
 		kill: pid => {
 			if (pid !== 999 && !list.some(item => Number(item.pid) === Number(pid))) {
@@ -57,12 +57,11 @@ function fixture(options) {
 			}
 		}
 	};
-	const runtimeFs = options.fs || fs;
 	const execFile = (command, args, execOptions, callback) => {
 		calls.push({ command, args: args.slice(), options: execOptions });
-		if (options.execError) return callback(options.execError);
 		if (args[0] === 'jlist') return callback(null, JSON.stringify(list));
 		if (args[0] === 'restart') {
+			if (options.onRestart) options.onRestart();
 			if (options.restartError) return callback(options.restartError);
 			const item = list.find(candidate => candidate.pm_id === Number(args[1]));
 			if (!item) return callback(new Error('unknown id'));
@@ -80,15 +79,17 @@ function fixture(options) {
 		recordingPath: path.join(data, 'recording.json'),
 		process: runtimeProcess,
 		os: { userInfo: () => ({ username: 'fixture', homedir: home }) },
-		fs: runtimeFs,
+		fs,
 		execFile: execFile,
 		pm2Binary: '/fixture/pm2',
 		responseDelayMs: 1,
 		pollIntervalMs: 1,
 		restartTimeoutMs: 100,
-		inspectTimeoutMs: 100
+		inspectTimeoutMs: 100,
+		isShuttingDown: options.isShuttingDown,
+		log: message => logs.push(message)
 	});
-	return { root, home, pm2Home, data, list, calls, control };
+	return { root, data, calls, logs, control };
 }
 
 async function waitFor(predicate, timeout) {
@@ -104,11 +105,30 @@ async function waitFor(predicate, timeout) {
 test('rejects invalid targets, duplicate execution, and all unsafe Operator activity states', async t => {
 	const subject = fixture();
 	t.after(() => fs.rmSync(subject.root, { recursive: true, force: true }));
+	let report = await subject.control.inspect();
+	assert.strictEqual(report.targets.operator.activity, 'idle');
+	assert.strictEqual(report.targets.operator.recordingCount, 0);
+	assert.strictEqual(report.targets.operator.restartable, true);
+	assert.strictEqual(report.targets.wui.restartable, true);
 	await assert.rejects(subject.control.prepareRestart('arbitrary'), error => error.code === 'invalid_target' && error.statusCode === 400);
 
-	fs.writeFileSync(path.join(subject.data, 'recording.json'), '[{"id":"preparing-or-recording"}]');
+	fs.writeFileSync(path.join(subject.data, 'recording.json'), '[{"id":"preparing-or-recording","operatorPrepareStart":1}]');
+	report = await subject.control.inspect();
+	assert.strictEqual(report.targets.operator.activity, 'busy');
+	assert.strictEqual(report.targets.operator.activityPhase, 'preparing');
+	assert.strictEqual(report.targets.operator.recordingCount, 1);
+	assert.strictEqual(report.targets.operator.restartable, false);
 	await assert.rejects(subject.control.prepareRestart('operator'), error => error.code === 'operator_busy');
+	fs.writeFileSync(path.join(subject.data, 'recording.json'), '[{"id":"recording","operatorRecordingStart":10}]');
+	report = await subject.control.inspect();
+	assert.strictEqual(report.targets.operator.activityPhase, 'recording');
+	fs.writeFileSync(path.join(subject.data, 'recording.json'), '[{"id":"finalizing","operatorRecordingStart":10,"operatorRecordingEnd":20}]');
+	report = await subject.control.inspect();
+	assert.strictEqual(report.targets.operator.activityPhase, 'finalizing');
 	fs.writeFileSync(path.join(subject.data, 'recording.json'), '{"count":0}');
+	report = await subject.control.inspect();
+	assert.strictEqual(report.targets.operator.activity, 'unknown');
+	assert.strictEqual(report.targets.operator.restartable, false);
 	await assert.rejects(subject.control.prepareRestart('operator'), error => error.code === 'operator_state_unknown');
 	fs.writeFileSync(path.join(subject.data, 'recording.json'), 'not-json');
 	await assert.rejects(subject.control.prepareRestart('operator'), error => error.code === 'operator_state_unknown');
@@ -125,6 +145,31 @@ test('rejects invalid targets, duplicate execution, and all unsafe Operator acti
 	assert.strictEqual(completed.targets.operator.pid, 1111);
 	assert.ok(subject.calls.some(call => call.args[0] === 'restart' && call.args[1] === '0'));
 	assert.ok(!subject.calls.some(call => call.args[0] === 'restart' && call.args[1] === 'chinachu-operator'));
+	assert.ok(subject.logs.some(line => line === 'SERVICE: Restart requested target=chinachu-operator'));
+	assert.ok(subject.logs.some(line => line === 'SERVICE: Restart completed target=chinachu-operator'));
+});
+
+test('serializes concurrent requests and rechecks Operator activity immediately before restart', async t => {
+	const subject = fixture();
+	t.after(() => fs.rmSync(subject.root, { recursive: true, force: true }));
+	const simultaneous = await Promise.allSettled([
+		subject.control.prepareRestart('operator'),
+		subject.control.prepareRestart('wui')
+	]);
+	assert.strictEqual(simultaneous.filter(result => result.status === 'fulfilled').length, 1);
+	const rejected = simultaneous.find(result => result.status === 'rejected');
+	assert.strictEqual(rejected.reason.code, 'operation_in_progress');
+	const accepted = simultaneous.find(result => result.status === 'fulfilled').value;
+
+	fs.writeFileSync(path.join(subject.data, 'recording.json'), '[{"id":"started-after-acceptance"}]');
+	subject.control.startPreparedRestart(accepted.id);
+	const failed = await waitFor(async () => {
+		const report = await subject.control.inspect();
+		return report.operations[accepted.target]?.state === 'failed' ? report.operations[accepted.target] : null;
+	});
+	assert.match(failed.message, /録画中|開始準備中/);
+	assert.strictEqual(subject.calls.filter(call => call.args[0] === 'restart').length, 0);
+	assert.ok(subject.logs.some(line => /Restart rejected .*operation_in_progress/.test(line)));
 });
 
 test('accepts WUI restart before scheduling it and exposes verified recovery without resending', async t => {
@@ -151,6 +196,24 @@ test('accepts WUI restart before scheduling it and exposes verified recovery wit
 	});
 	assert.strictEqual(failed.message, 'このWUIの実行ユーザーからPM2を操作できません');
 	assert.doesNotMatch(failed.message, /private command detail/);
+
+	let shuttingDown = false;
+	const handoffSubject = fixture({
+		restartError: new Error('self restart interrupted the PM2 client'),
+		onRestart: () => { shuttingDown = true; },
+		isShuttingDown: () => shuttingDown
+	});
+	t.after(() => fs.rmSync(handoffSubject.root, { recursive: true, force: true }));
+	const handoffAccepted = await handoffSubject.control.prepareRestart('wui');
+	handoffSubject.control.startPreparedRestart(handoffAccepted.id);
+	const handedOff = await waitFor(async () => {
+		const report = await handoffSubject.control.inspect();
+		return report.operations.wui && report.operations.wui.message === 'WUI再起動後の接続確認を待っています'
+			? report.operations.wui : null;
+	});
+	assert.strictEqual(handedOff.state, 'running');
+	assert.ok(handoffSubject.logs.some(line => /Restart handoff .*self_restart_shutdown/.test(line)));
+	assert.ok(!handoffSubject.logs.some(line => /Restart failed/.test(line)));
 });
 
 test('service-control API returns status, rejects server errors safely, and sends acceptance before execution', async () => {

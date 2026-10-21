@@ -1,0 +1,7 @@
+{
+  "/": {
+    "script": "wui-config",
+    "methods": ["get", "put"],
+    "types": ["json"]
+  }
+}

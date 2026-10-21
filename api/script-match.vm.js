@@ -6,344 +6,163 @@
 	var isSummary = mode === 'summary';
 	var isItem = mode === 'item';
 	var isList = mode === 'list';
+	var isPage = mode === 'page';
+	var isRuleRecordingCounts = mode === 'rule-recording-counts';
+	var isResultCounts = mode === 'result-counts';
+	var shouldResolve = request.query && String(request.query.resolve || '') === '1';
+	var strictItemLookup = request.query && String(request.query.strict || '') === '1';
 	var limit = 16;
 	var items;
-	var now = Date.now();
+	var detailResolver = null;
 
-	function getMatchProgram(item) {
-		return item && (item.program || item.recorded || item.reserve) || {};
-	}
-
-	function getRecordingResult(item) {
-		return item && (item.recordingResult || item.recorded) || {};
-	}
-
-	function getMatchEnd(item) {
-		var program = getMatchProgram(item);
-		var start = Number(program.start || 0);
-		var seconds = Number(program.seconds || 0);
-
-		return Number(program.end || 0) || (start + (seconds * 1000));
-	}
-
-	function isPastMatch(item) {
-		var end = getMatchEnd(item);
-
-		return end > 0 && now > end;
-	}
-
-	function toFiniteNumber(value) {
-		var number = Number(value);
-
-		return isFinite(number) ? number : 0;
-	}
-
-	function isDeletedMatchItem(item) {
-		var result = getRecordingResult(item);
-		var program = getMatchProgram(item);
-
-		return (result && (result.cleanupState === 'deleted' || result.deleted === true)) ||
-			(program && (program.cleanupState === 'deleted' || program.deleted === true));
-	}
-
-	function isMissingMatchItem(item) {
-		var result = getRecordingResult(item);
-		var program = getMatchProgram(item);
-
-		return (result && (result.cleanupState === 'missing' || result.fileExists === false)) ||
-			(program && (program.cleanupState === 'missing' || program.fileExists === false));
-	}
-
-	function isDeletedOrMissingMatchItem(item) {
-		return isDeletedMatchItem(item) || isMissingMatchItem(item);
-	}
-
-	function hasRecordedResult(item) {
-		var result = getRecordingResult(item);
-		var program = getMatchProgram(item);
-		var path = result && (result.path || result.recorded) || program && program.recorded || '';
-		var actualSeconds = toFiniteNumber(result && result.operatorActualSeconds || program && program.operatorActualSeconds);
-
-		if (isDeletedOrMissingMatchItem(item)) {
-			return false;
-		}
-
-		return !!path || actualSeconds > 0 || item.status === 'RECORDED' || item.status === 'RECORDED_UNTRACKED';
-	}
-
-	function getMatchKind(item) {
-		if (hasRecordedResult(item)) {
-			if (!isPastMatch(item)) {
-				return null;
-			}
-
-			return isDeletedOrMissingMatchItem(item) ? 'DELETED' : 'RECORDED';
-		}
-
-		if (item.status === 'RECORDED') {
-			if (!isPastMatch(item)) {
-				return null;
-			}
-
-			return isDeletedOrMissingMatchItem(item) ? 'DELETED' : 'RECORDED';
-		}
-
-		if (item.status === 'SKIPPED_ONLY' || (item.recd_flg && item.recd_flg.isSkip === true)) {
-			return isPastMatch(item) ? 'SKIPPED' : null;
-		}
-
-		if (item.status === 'MISSED') {
-			return isPastMatch(item) ? 'NG' : null;
-		}
-
-		if (!isPastMatch(item)) {
-			return null;
-		}
-
-		if (item.recd_flg &&
-				item.recd_flg.hasReserve === true &&
-				item.recd_flg.hasRecorded === false &&
-				item.recd_flg.isSkip === false) {
-			return 'NG';
-		}
-
-		if (item.status && item.status !== 'RESERVED') {
-			return 'NG';
-		}
-
-		return null;
+	function addCandidate(candidates, value) {
+		if (typeof value === 'undefined' || value === null || String(value) === '') return;
+		value = String(value);
+		if (candidates.indexOf(value) === -1) candidates.push(value);
 	}
 
 	function matchItemHasId(item, id) {
-		var program = getMatchProgram(item);
-		var result = getRecordingResult(item);
-		var candidates = [
-			program.id,
-			program.origId,
-			program.programId,
-			result.id,
-			result.recordedId,
-			result.origId,
-			result.programId
-		];
-		var i;
+		var program = item && (item.program || item.reserve) || {};
+		var result = item && (item.recordingResult || item.recorded) || {};
+		var snapshot = result && result.snapshot || {};
+		var recording = item && item.recording || {};
+		var candidates = [];
 
-		if (!id) {
-			return false;
-		}
-
-		for (i = 0; i < candidates.length; i++) {
-			if (typeof candidates[i] !== 'undefined' && candidates[i] !== null && String(candidates[i]) === id) {
-				return true;
-			}
-		}
-
-		return false;
+		addCandidate(candidates, recording.recordedId);
+		[program, result, snapshot].forEach(function(value) {
+			addCandidate(candidates, value && value.id);
+			addCandidate(candidates, value && value.recordedId);
+			addCandidate(candidates, value && value.origId);
+			addCandidate(candidates, value && value.programId);
+		});
+		return !!id && candidates.indexOf(String(id)) !== -1;
 	}
 
-	function makeRecordedIndexes() {
-		var recorded = data && Array.isArray(data.recorded) ? data.recorded : [];
-		var byId = {};
-		var bySignature = {};
+	function readOptionalArray(filePath) {
+		var value;
+		if (!filePath || !fs.existsSync(filePath)) return [];
+		try {
+			value = JSON.parse(fs.readFileSync(filePath, { encoding: 'utf8' }).replace(/^\uFEFF/, '') || '[]');
+		} catch (e) {
+			return [];
+		}
+		return Array.isArray(value) ? value : [];
+	}
 
-		recorded.forEach(function (program) {
-			var channel = program && program.channel || {};
-			var id = program && program.id;
-			var start = Number(program && program.start || 0);
-			var seconds = Number(program && program.seconds || 0);
-			var channelId = channel.id || '';
-			var signature;
+	function getDetailResolver() {
+		if (detailResolver !== null) return detailResolver;
+		if (typeof matchDetailResolver === 'undefined' || !matchDetailResolver ||
+				typeof matchDetailResolver.createDetailResolver !== 'function') return null;
+		var reserves2Source = Number(matchDetailResolver.PAGE_FILTER_VERSION) >= 2 ?
+			function() { return readOptionalArray(define.RESERVES2_DATA_FILE); } :
+			readOptionalArray(define.RESERVES2_DATA_FILE);
+		detailResolver = matchDetailResolver.createDetailResolver({
+			recorded: data && Array.isArray(data.recorded) ? data.recorded : [],
+			reserves2: reserves2Source,
+			reserves: data && Array.isArray(data.reserves) ? data.reserves : [],
+			schedule: data && Array.isArray(data.schedule) ? data.schedule : []
+		});
+		return detailResolver;
+	}
 
-			if (typeof id !== 'undefined' && id !== null && id !== '') {
-				byId[String(id)] = program;
-			}
-
-			if (start > 0 && channelId) {
-				signature = [start, seconds, channelId].join('|');
-				bySignature[signature] = program;
+	function buildResultCounts(items) {
+		if (typeof matchDetailResolver.buildResultCounts === 'function') {
+			return matchDetailResolver.buildResultCounts(items, { now: Date.now() });
+		}
+		var counts = { recorded: 0, deleted: 0, missed: 0, skipped: 0 };
+		var now = Date.now();
+		items.forEach(function(entry) {
+			var normalized = matchDetailResolver.normalizeMatchEntry(entry || {});
+			if (!normalized.end || now <= normalized.end || normalized.status === 'RESERVED') return;
+			if (normalized.status === 'MISSED') counts.missed++;
+			else if (normalized.status === 'SKIPPED_ONLY') counts.skipped++;
+			else if (normalized.status === 'RECORDED' || normalized.status === 'RECORDED_UNTRACKED') {
+				if (normalized.deletion && normalized.deletion.reason !== 'recorded-missing') counts.deleted++;
+				else counts.recorded++;
 			}
 		});
-
-		return {
-			byId: byId,
-			bySignature: bySignature
-		};
+		return counts;
 	}
 
-	function findRecordedProgram(item, indexes) {
-		var program = getMatchProgram(item);
-		var result = getRecordingResult(item);
-		var id = result.id || result.recordedId || result.origId || program.id || program.origId || null;
-		var start = Number(result.start || program.start || 0);
-		var seconds = Number(result.seconds || program.seconds || 0);
-		var channel = result.channel || program.channel || item.channel || {};
-		var signature;
-
-		if (id && indexes.byId[String(id)]) {
-			return indexes.byId[String(id)];
+	function buildRuleRecordingCounts(items, resolver) {
+		if (typeof matchDetailResolver.buildRuleRecordingCounts === 'function') {
+			return matchDetailResolver.buildRuleRecordingCounts(items, resolver, { now: Date.now() });
 		}
 
-		if (start > 0 && channel.id) {
-			signature = [start, seconds, channel.id].join('|');
-			if (indexes.bySignature[signature]) {
-				return indexes.bySignature[signature];
+		// Keep the VM script usable until a later WUI restart refreshes the required module cache.
+		var counts = {};
+		var seenKeys = {};
+		var counted = 0;
+		var withoutRuleUid = 0;
+		var now = Date.now();
+		items.forEach(function(entry, index) {
+			var normalized = matchDetailResolver.normalizeMatchEntry(entry || {});
+			if (normalized.status !== 'RECORDED' && normalized.status !== 'RECORDED_UNTRACKED') return;
+			if (!normalized.end || now <= normalized.end) return;
+			var key = normalized.key || 'item-' + index;
+			if (seenKeys[key]) return;
+			seenKeys[key] = true;
+			var resolved = resolver.resolve(entry || {});
+			var ruleUid = resolved && resolved.program && resolved.program.ruleUid;
+			ruleUid = typeof ruleUid === 'undefined' || ruleUid === null ? '' : String(ruleUid).trim();
+			if (!ruleUid) {
+				withoutRuleUid++;
+				return;
 			}
-		}
-
-		return null;
-	}
-
-	function pickOperatorValue(source, result, key, fallback) {
-		if (source && typeof source[key] !== 'undefined' && source[key] !== null && source[key] !== '') {
-			return source[key];
-		}
-
-		if (result && typeof result[key] !== 'undefined' && result[key] !== null && result[key] !== '') {
-			return result[key];
-		}
-
-		if (fallback && typeof fallback[key] !== 'undefined' && fallback[key] !== null && fallback[key] !== '') {
-			return fallback[key];
-		}
-
-		return 0;
-	}
-
-	function getMirakurunDropTotal(drop) {
-		var total;
-		var pidMap;
-
-		if (!drop || typeof drop !== 'object') {
-			return null;
-		}
-
-		if (typeof drop.dropTotal !== 'undefined' && drop.dropTotal !== null && drop.dropTotal !== '') {
-			total = Number(drop.dropTotal);
-			return isFinite(total) ? total : null;
-		}
-
-		if (Array.isArray(drop.pids)) {
-			total = 0;
-			drop.pids.forEach(function (pid) {
-				total += Number(pid && pid.drop || 0) || 0;
-			});
-			return total;
-		}
-
-		pidMap = drop.pidDrops || drop.dropsByPid || drop.dropPids;
-		if (pidMap && typeof pidMap === 'object') {
-			total = 0;
-			Object.keys(pidMap).forEach(function (pid) {
-				total += Number(pidMap[pid]) || 0;
-			});
-			return total;
-		}
-
-		return null;
-	}
-
-	function compactMirakurunDrop(source, result, fallback) {
-		var drop = null;
-		var total;
-
-		if (source && source.mirakurunDrop && typeof source.mirakurunDrop === 'object') {
-			drop = source.mirakurunDrop;
-		} else if (result && result.mirakurunDrop && typeof result.mirakurunDrop === 'object') {
-			drop = result.mirakurunDrop;
-		} else if (fallback && fallback.mirakurunDrop && typeof fallback.mirakurunDrop === 'object') {
-			drop = fallback.mirakurunDrop;
-		}
-
-		if (!drop) {
-			return null;
-		}
-
-		total = getMirakurunDropTotal(drop);
-
-		return {
-			dropTotal: total,
-			packetTotal: drop.packetTotal,
-			tunerName: drop.tunerName,
-			checkedAt: drop.checkedAt
-		};
-	}
-
-	function buildListItem(item, kind, indexes) {
-		var source = getMatchProgram(item);
-		var result = getRecordingResult(item);
-		var recordedProgram = kind === 'RECORDED' ? findRecordedProgram(item, indexes) : null;
-		var channel = item.channel || source.channel || result.channel || {};
-		var end = getMatchEnd(item);
-		var id = source.id || source.origId || source.programId || result.id || result.recordedId || result.origId || null;
-		var recordedId = result.id || result.recordedId || result.origId || (recordedProgram && recordedProgram.id) || null;
-		var seconds = Number(source.seconds || result.seconds || 0);
-
-		if (!seconds && source.start && end) {
-			seconds = Math.floor((end - Number(source.start)) / 1000);
-		}
-
-		return {
-			_listSlim: true,
-			_matchItem: {
-				key: item.key || ''
-			},
-			_matchKind: kind,
-			id: id,
-			_recordedId: recordedId,
-			start: Number(source.start || result.start || 0),
-			seconds: seconds,
-			operatorRecordingStart: pickOperatorValue(source, result, 'operatorRecordingStart', recordedProgram),
-			operatorRecordingEnd: pickOperatorValue(source, result, 'operatorRecordingEnd', recordedProgram),
-			operatorActualSeconds: pickOperatorValue(source, result, 'operatorActualSeconds', recordedProgram),
-			recordedDurationSeconds: pickOperatorValue(source, result, 'recordedDurationSeconds', recordedProgram),
-			operatorAbort: source.operatorAbort === true || result.operatorAbort === true || !!(recordedProgram && recordedProgram.operatorAbort === true),
-			operatorEndLack: source.operatorEndLack === true || result.operatorEndLack === true || !!(recordedProgram && recordedProgram.operatorEndLack === true),
-			mirakurunDrop: compactMirakurunDrop(source, result, recordedProgram),
-			title: source.title || result.title || '-',
-			fullTitle: source.fullTitle || source.title || result.fullTitle || result.title || '-',
-			detail: source.detail || result.detail || result.description || '',
-			flags: Array.isArray(source.flags) ? source.flags : [],
-			subTitle: source.subTitle,
-			episode: source.episode,
-			channel: {
-				id: channel.id || '-',
-				name: channel.name || '-',
-				type: channel.type || '-'
-			},
-			isManualReserved: source.isManualReserved === true
-		};
+			counts[ruleUid] = (counts[ruleUid] || 0) + 1;
+			counted++;
+		});
+		return { counts: counts, counted: counted, withoutRuleUid: withoutRuleUid, total: counted + withoutRuleUid };
 	}
 
 	if (isSummary && request.query && typeof request.query.limit !== 'undefined') {
 		limit = parseInt(request.query.limit, 10);
-		if (isNaN(limit)) {
-			limit = 16;
-		}
+		if (isNaN(limit)) limit = 16;
 		limit = Math.max(0, Math.min(limit, 16));
 	}
 
 	if (!fs.existsSync(file)) {
-		if (isSummary) {
+		if (isRuleRecordingCounts) {
 			response.head(200);
-			response.end(JSON.stringify({
-				counts: { recorded: 0, ng: 0 },
-				items: [],
-				hasMore: false
-			}));
+			response.end(JSON.stringify({ counts: {}, counted: 0, withoutRuleUid: 0, total: 0 }));
 			return;
 		}
-
+		if (isResultCounts) {
+			response.head(200);
+			response.end(JSON.stringify({ counts: { recorded: 0, deleted: 0, missed: 0, skipped: 0 } }));
+			return;
+		}
+		if (isSummary) {
+			response.head(200);
+			response.end(JSON.stringify({ counts: { recorded: 0, ng: 0 }, items: [], hasMore: false }));
+			return;
+		}
 		if (isList || mode === '') {
 			response.head(200);
 			response.end('[]');
 			return;
 		}
-
+		if (isPage) {
+			try {
+				var emptyPage = matchDetailResolver.buildPage([], null, {
+					page: request.query && request.query.page,
+					limit: request.query && request.query.limit,
+					search: request.query && request.query.search,
+					status: request.query && request.query.status,
+					results: request.query && request.query.results,
+					ruleUid: request.query && request.query.ruleUid
+				});
+				response.head(200);
+				response.end(JSON.stringify(emptyPage));
+			} catch (e) {
+				response.error(e && e.name === 'RangeError' ? 400 : 500);
+			}
+			return;
+		}
 		if (isItem) {
 			response.error(404);
 			return;
 		}
-
 		response.error(400);
 		return;
 	}
@@ -354,7 +173,7 @@
 		return;
 	}
 
-	if (!isSummary && !isItem && !isList) {
+	if (!isSummary && !isItem && !isList && !isPage && !isRuleRecordingCounts && !isResultCounts) {
 		response.error(400);
 		return;
 	}
@@ -363,7 +182,6 @@
 		if (typeof matchCache !== 'undefined' && matchCache && typeof matchCache.getItems === 'function') {
 			items = matchCache.getItems();
 		} else {
-			// 旧 app-wui.js との一時的な組み合わせでも動作できるよう、従来読み込みをfallbackとして残す。
 			items = JSON.parse(fs.readFileSync(file, { encoding: 'utf8' }).replace(/^\uFEFF/, '') || '[]');
 		}
 	} catch (e) {
@@ -380,129 +198,99 @@
 		var requestedKey = request.query && request.query.key ? String(request.query.key) : '';
 		var requestedId = request.query && request.query.id ? String(request.query.id) : '';
 		var found = null;
-		var i;
-
-		try {
-			requestedKey = decodeURIComponent(requestedKey);
-		} catch (e) {}
-
-		try {
-			requestedId = decodeURIComponent(requestedId);
-		} catch (e) {}
-
+		var idMatches = [];
+		try { requestedKey = decodeURIComponent(requestedKey); } catch (e) {}
+		try { requestedId = decodeURIComponent(requestedId); } catch (e) {}
 		if (!requestedKey && !requestedId) {
 			response.error(400);
 			return;
 		}
-
-		for (i = 0; i < items.length; i++) {
-			if (requestedKey && items[i] && items[i].key === requestedKey) {
-				found = items[i];
-				break;
-			}
-		}
-
+		found = items.find(function(item) { return requestedKey && item && item.key === requestedKey; }) || null;
 		if (!found && requestedId) {
-			for (i = 0; i < items.length; i++) {
-				if (matchItemHasId(items[i] || {}, requestedId)) {
-					found = items[i];
-					break;
+			idMatches = items.filter(function(item) { return matchItemHasId(item || {}, requestedId); });
+			if (strictItemLookup) {
+				var distinctKeys = [];
+				idMatches.forEach(function(item) {
+					var key = item && item.key || '';
+					if (distinctKeys.indexOf(key) === -1) distinctKeys.push(key);
+				});
+				if (distinctKeys.length > 1) {
+					response.head(409);
+					response.end(JSON.stringify({ code: 'ambiguous-history', keys: distinctKeys }));
+					return;
 				}
 			}
+			found = idMatches[0] || null;
 		}
-
 		if (!found) {
 			response.error(404);
 			return;
 		}
-
+		if (shouldResolve) {
+			var itemResolver = getDetailResolver();
+			if (itemResolver === null) {
+				response.error(501);
+				return;
+			}
+			response.head(200);
+			response.end(JSON.stringify(itemResolver.resolve(found)));
+			return;
+		}
 		response.head(200);
 		response.end(JSON.stringify(found));
 		return;
 	}
 
-	if (isList) {
-		var indexes = makeRecordedIndexes();
-		var listItems = [];
-
-		items.forEach(function (item) {
-			var kind = getMatchKind(item || {});
-
-			if (kind === null) {
-				return;
-			}
-
-			listItems.push(buildListItem(item, kind, indexes));
-		});
-
+	if (isResultCounts) {
 		response.head(200);
-		response.end(JSON.stringify(listItems));
+		response.end(JSON.stringify({ counts: buildResultCounts(items) }));
 		return;
 	}
 
-	var counts = { recorded: 0, ng: 0 };
-	var history = [];
+	var resolver = getDetailResolver();
+	if (resolver === null) {
+		response.error(501);
+		return;
+	}
 
-	items.forEach(function (item) {
-		var program = getMatchProgram(item);
-		var start = Number(program.start || 0);
-		var seconds = Number(program.seconds || 0);
-		var end = Number(program.end || 0) || (start + (seconds * 1000));
+	if (isRuleRecordingCounts) {
+		response.head(200);
+		response.end(JSON.stringify(buildRuleRecordingCounts(items, resolver)));
+		return;
+	}
 
-		if (end <= 0 || now <= end) {
-			return;
+	if (isList) {
+		response.head(200);
+		response.end(JSON.stringify(matchDetailResolver.buildList(items, resolver, { now: Date.now() })));
+		return;
+	}
+
+	if (isPage) {
+		try {
+			var pageResult = matchDetailResolver.buildPage(items, resolver, {
+				now: Date.now(),
+				page: request.query && request.query.page,
+				limit: request.query && request.query.limit,
+				search: request.query && request.query.search,
+				status: request.query && request.query.status,
+				results: request.query && request.query.results,
+				ruleUid: request.query && request.query.ruleUid
+			});
+			response.head(200);
+			response.end(JSON.stringify(pageResult));
+		} catch (e) {
+			if (e && e.name === 'RangeError') {
+				response.error(400);
+				return;
+			}
+			response.error(500);
 		}
-
-		if (item.status === 'RECORDED') {
-			counts.recorded++;
-		} else if (item.status === 'MISSED') {
-			counts.ng++;
-		} else {
-			return;
-		}
-
-		if (limit > 0) {
-			history.push(item);
-		}
-	});
-
-	if (limit > 0) {
-		history.sort(function (a, b) {
-			var pa = getMatchProgram(a);
-			var pb = getMatchProgram(b);
-			return Number(pb.start || 0) - Number(pa.start || 0);
-		});
-		history = history.slice(0, limit).map(function (item) {
-			var program = getMatchProgram(item);
-			var channel = item.channel || program.channel || {};
-
-			return {
-				key: item.key,
-				status: item.status,
-				channel: {
-					id: channel.id || '-',
-					name: channel.name || '-',
-					type: channel.type || '-'
-				},
-				program: {
-					start: program.start || 0,
-					end: program.end || 0,
-					seconds: program.seconds || 0,
-					title: program.title || '-',
-					fullTitle: program.fullTitle || program.title || '-',
-					detail: program.detail || '',
-					flags: Array.isArray(program.flags) ? program.flags : [],
-					episode: program.episode,
-					category: program.category || 'etc'
-				}
-			};
-		});
+		return;
 	}
 
 	response.head(200);
-	response.end(JSON.stringify({
-		counts: counts,
-		items: history,
-		hasMore: (counts.recorded + counts.ng) > history.length
-	}));
+	response.end(JSON.stringify(matchDetailResolver.buildSummary(items, resolver, {
+		now: Date.now(),
+		limit: limit
+	})));
 }());

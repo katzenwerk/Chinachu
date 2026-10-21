@@ -77,6 +77,17 @@ function processHasOpenPath(pid, targetPath) {
 	});
 }
 
+function createFfmpegFixture(temporaryDir) {
+	const fixturePath = path.join(temporaryDir, 'ffmpeg');
+	fs.writeFileSync(fixturePath, [
+		'#!/usr/bin/env node',
+		"const fs = require('fs');",
+		"fs.appendFileSync(process.env.CHINACHU_TEST_FFMPEG_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');",
+		"fs.writeFileSync(process.argv[process.argv.length - 1], Buffer.from([0xff, 0xd8, 0xff, 0xd9]));"
+	].join('\n') + '\n');
+	fs.chmodSync(fixturePath, 0o755);
+}
+
 function createMirakurunStub(streamHandler) {
 	const sockets = new Set();
 	const docs = {
@@ -135,6 +146,9 @@ describe('Operator recording stream termination', function() {
 		const logDir = path.join(temporaryDir, 'log');
 		const recordedDir = path.join(temporaryDir, 'recorded');
 		const recordedPath = path.join(recordedDir, '1.m2ts');
+		const ffprobePath = path.join(temporaryDir, 'ffprobe-fixture.js');
+		const ffmpegLog = path.join(temporaryDir, 'ffmpeg.log');
+		const thumbnailPath = path.join(dataDir, 'thumbnails', '1.jpg');
 		let streamResponse = null;
 		const { server, sockets } = createMirakurunStub((req, res) => {
 			streamResponse = res;
@@ -165,6 +179,7 @@ describe('Operator recording stream termination', function() {
 					id: 'test-channel',
 					type: 'GR',
 					channel: 'test',
+					nid: 10,
 					sid: 1,
 					name: 'Test Channel'
 				},
@@ -175,9 +190,11 @@ describe('Operator recording stream termination', function() {
 			fs.mkdirSync(logDir);
 			fs.symlinkSync(path.join(repositoryRoot, 'lib'), path.join(temporaryDir, 'lib'), 'dir');
 			fs.symlinkSync(path.join(repositoryRoot, 'node_modules'), path.join(temporaryDir, 'node_modules'), 'dir');
-			fs.symlinkSync(path.join(repositoryRoot, 'web'), path.join(temporaryDir, 'web'), 'dir');
 			fs.copyFileSync(path.join(repositoryRoot, 'app-operator.js'), path.join(temporaryDir, 'app-operator.js'));
 			fs.copyFileSync(path.join(repositoryRoot, 'package.json'), path.join(temporaryDir, 'package.json'));
+			fs.writeFileSync(ffprobePath, '#!/usr/bin/env node\nprocess.stdout.write("120\\n");\n');
+			fs.chmodSync(ffprobePath, 0o755);
+			createFfmpegFixture(temporaryDir);
 			fs.writeFileSync(path.join(temporaryDir, 'config.json'), JSON.stringify({
 				mirakurunPath: 'http://127.0.0.1:' + server.address().port + '/',
 				recordedDir: recordedDir,
@@ -186,6 +203,7 @@ describe('Operator recording stream termination', function() {
 				operatorReserveCheckIntervalSec: 1,
 				operatorPrepReserveCheckIntervalSec: 1,
 				mirakurunDropCheckIntervalSec: 0,
+				ffprobeCommand: ffprobePath,
 				storageLowSpaceAction: 'none'
 			}));
 			fs.writeFileSync(path.join(dataDir, 'reserves.json'), JSON.stringify([ program ]));
@@ -195,7 +213,12 @@ describe('Operator recording stream termination', function() {
 
 			child = childProcess.spawn(process.execPath, [ 'app-operator.js' ], {
 				cwd: temporaryDir,
-				stdio: [ 'ignore', 'pipe', 'pipe' ]
+				stdio: [ 'ignore', 'pipe', 'pipe' ],
+					env: Object.assign({}, process.env, {
+						PATH: temporaryDir + path.delimiter + process.env.PATH,
+						CHINACHU_TEST_FFMPEG_LOG: ffmpegLog,
+						CHINACHU_RUNTIME_DIR: path.join(temporaryDir, 'runtime')
+					})
 			});
 			child.stdout.on('data', chunk => { output += chunk.toString(); });
 			child.stderr.on('data', chunk => { output += chunk.toString(); });
@@ -213,6 +236,8 @@ describe('Operator recording stream termination', function() {
 			assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'recorded.json'), 'utf8')), []);
 			assert.strictEqual(fs.readFileSync(recordedPath, 'utf8'), 'PART1');
 			assert.strictEqual(processHasOpenPath(child.pid, recordedPath), true);
+			assert.strictEqual(fs.existsSync(thumbnailPath), false);
+			assert.strictEqual(fs.existsSync(ffmpegLog), false);
 			assert.doesNotMatch(output, /NG RECORDING/);
 
 			assert.ok(streamResponse);
@@ -231,11 +256,21 @@ describe('Operator recording stream termination', function() {
 				'Recovered recording resources remained open',
 				3000
 			);
+			await waitForCondition(
+				() => fs.existsSync(path.join(dataDir, 'bitrate-stats.json')) &&
+					fs.existsSync(thumbnailPath) &&
+					JSON.parse(fs.readFileSync(path.join(dataDir, 'recorded.json'), 'utf8'))[0].recordedDurationSeconds === 120,
+				'Normal recording did not update duration and bitrate statistics. Output:\n' + output,
+				3000
+			);
 
 			const recorded = JSON.parse(fs.readFileSync(path.join(dataDir, 'recorded.json'), 'utf8'));
 			assert.strictEqual(recorded.length, 1);
 			assert.strictEqual(recorded[0].recorded, recordedPath);
+			assert.strictEqual(recorded[0].recordedDurationSeconds, 120);
 			assert.strictEqual(fs.readFileSync(recordedPath, 'utf8'), 'PART1PART2');
+			assert.deepStrictEqual(fs.readFileSync(thumbnailPath), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+			assert.strictEqual(fs.readFileSync(ffmpegLog, 'utf8').trim().split('\n').length, 1);
 			assert.doesNotMatch(output, /NG RECORDING/);
 			assert.doesNotMatch(output, /uncaughtException/);
 
@@ -265,6 +300,8 @@ describe('Operator recording stream termination', function() {
 		const logDir = path.join(temporaryDir, 'log');
 		const recordedDir = path.join(temporaryDir, 'recorded');
 		const recordedPath = path.join(recordedDir, '1.m2ts');
+		const ffmpegLog = path.join(temporaryDir, 'ffmpeg.log');
+		const thumbnailPath = path.join(dataDir, 'thumbnails', '1.jpg');
 		const { server, sockets } = createMirakurunStub();
 		let child = null;
 		let output = '';
@@ -297,9 +334,9 @@ describe('Operator recording stream termination', function() {
 			fs.mkdirSync(logDir);
 			fs.symlinkSync(path.join(repositoryRoot, 'lib'), path.join(temporaryDir, 'lib'), 'dir');
 			fs.symlinkSync(path.join(repositoryRoot, 'node_modules'), path.join(temporaryDir, 'node_modules'), 'dir');
-			fs.symlinkSync(path.join(repositoryRoot, 'web'), path.join(temporaryDir, 'web'), 'dir');
 			fs.copyFileSync(path.join(repositoryRoot, 'app-operator.js'), path.join(temporaryDir, 'app-operator.js'));
 			fs.copyFileSync(path.join(repositoryRoot, 'package.json'), path.join(temporaryDir, 'package.json'));
+			createFfmpegFixture(temporaryDir);
 			fs.writeFileSync(path.join(temporaryDir, 'config.json'), JSON.stringify({
 				mirakurunPath: 'http://127.0.0.1:' + server.address().port + '/',
 				recordedDir: recordedDir,
@@ -317,7 +354,12 @@ describe('Operator recording stream termination', function() {
 
 			child = childProcess.spawn(process.execPath, [ 'app-operator.js' ], {
 				cwd: temporaryDir,
-				stdio: [ 'ignore', 'pipe', 'pipe' ]
+				stdio: [ 'ignore', 'pipe', 'pipe' ],
+					env: Object.assign({}, process.env, {
+						PATH: temporaryDir + path.delimiter + process.env.PATH,
+						CHINACHU_TEST_FFMPEG_LOG: ffmpegLog,
+						CHINACHU_RUNTIME_DIR: path.join(temporaryDir, 'runtime')
+					})
 			});
 			child.stdout.on('data', chunk => { output += chunk.toString(); });
 			child.stderr.on('data', chunk => { output += chunk.toString(); });
@@ -359,6 +401,9 @@ describe('Operator recording stream termination', function() {
 
 			assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'recording.json'), 'utf8')), []);
 			assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'recorded.json'), 'utf8')), []);
+			assert.strictEqual(fs.existsSync(path.join(dataDir, 'bitrate-stats.json')), false);
+			assert.strictEqual(fs.existsSync(thumbnailPath), false);
+			assert.strictEqual(fs.existsSync(ffmpegLog), false);
 			assert.strictEqual((output.match(/NG RECORDING: INPUT STREAM (?:ABORTED|ERROR|CLOSED PREMATURELY)/g) || []).length, 1);
 			assert.doesNotMatch(output, /WRITE: .*recorded\.json/);
 			assert.doesNotMatch(output, /uncaughtException/);

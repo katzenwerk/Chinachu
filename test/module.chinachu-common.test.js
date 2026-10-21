@@ -40,6 +40,30 @@ describe("formatRecordedName", function() {
 	});
 });
 
+describe("programMatchesRule title conditions", function() {
+	it("keeps absent/OR behavior and requires every title condition only in AND mode", function() {
+		var program = {
+			fullTitle: "新番組　ドラマ Special",
+			detail: "",
+			start: 0,
+			end: 1800000,
+			seconds: 1800,
+			category: "drama",
+			flags: [],
+			channel: { id: "channel-a", channel: "27", type: "GR", sid: 1 }
+		};
+
+		assert.strictEqual(chinachu.programMatchesRule({ reserve_titles: ["存在しない", "ドラマ"] }, program), true);
+		assert.strictEqual(chinachu.programMatchesRule({ reserve_titles_mode: "or", reserve_titles: ["存在しない", "ドラマ"] }, program), true);
+		assert.strictEqual(chinachu.programMatchesRule({ reserve_titles_mode: "and", reserve_titles: ["新番組", "ドラマ"] }, program), true);
+		assert.strictEqual(chinachu.programMatchesRule({ reserve_titles_mode: "and", reserve_titles: ["新番組", "存在しない"] }, program), false);
+		assert.strictEqual(chinachu.programMatchesRule({ reserve_titles: [] }, program), false);
+		assert.strictEqual(chinachu.programMatchesRule({ reserve_titles_mode: "or", reserve_titles: [] }, program), false);
+		assert.strictEqual(chinachu.programMatchesRule({ reserve_titles_mode: "and", reserve_titles: [] }, program), false);
+		assert.strictEqual(chinachu.programMatchesRule({ reserve_titles_mode: "and", reserve_titles: ["新番組", "Special"] }, program, "NFKC"), true);
+	});
+});
+
 describe("jsonWatcher", function() {
 	it("reads initial JSON data and keeps reporting atomic replacements", { timeout: 5000 }, async function() {
 		var temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "chinachu-json-watcher-"));
@@ -73,7 +97,7 @@ describe("jsonWatcher", function() {
 				}, 3000);
 				var received = [];
 				watcher.close();
-				watcher = chinachu.jsonWatcher(temporaryFile, function(err, data, message) {
+				watcher = chinachu.jsonWatcher(temporaryFile, function(err, data) {
 					if (err) {
 						clearTimeout(timeout);
 						reject(new Error(err));
@@ -82,7 +106,7 @@ describe("jsonWatcher", function() {
 					if (!data.updated) {
 						return;
 					}
-					received.push({ data: data, message: message });
+					received.push(data);
 					if (data.value === updatedData1.value) {
 						replaceAtomically(updatedData2, "second");
 					} else if (data.value === updatedData2.value) {
@@ -93,10 +117,7 @@ describe("jsonWatcher", function() {
 				replaceAtomically(updatedData1, "first");
 			});
 			var receivedUpdates = await updates;
-			assert.deepStrictEqual(receivedUpdates.map(function(entry) { return entry.data; }), [updatedData1, updatedData2]);
-			receivedUpdates.forEach(function(entry) {
-				assert.strictEqual(entry.message, "READ: `" + temporaryFile + "` is updated.");
-			});
+			assert.deepStrictEqual(receivedUpdates, [updatedData1, updatedData2]);
 		} finally {
 			if (watcher && typeof watcher.close === "function") watcher.close();
 			fs.rmSync(temporaryDirectory, { recursive: true, force: true });

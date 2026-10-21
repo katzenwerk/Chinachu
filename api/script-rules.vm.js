@@ -2,8 +2,14 @@
 	
 	switch (request.method) {
 		case 'GET':
-			response.head(200);
-			response.end(JSON.stringify(data.rules, null, '  '));
+			try {
+				var currentRules = ruleStore.readRules(define.RULES_FILE);
+				ruleStore.replaceMemory(data.rules, currentRules);
+				response.head(200);
+				response.end(JSON.stringify(currentRules, null, '  '));
+			} catch (error) {
+				response.error(ruleStore.httpStatus(error));
+			}
 			return;
 		
 		case 'POST':
@@ -18,18 +24,23 @@
 			if (JSON.stringify(newRule) === '{}') {
 				response.error(400);
 			} else {
+				if (typeof newRule.reserve_titles_mode !== 'undefined' &&
+						newRule.reserve_titles_mode !== 'or' && newRule.reserve_titles_mode !== 'and') {
+					return response.error(400);
+				}
 				if (newRule.isEnabled === false) {
 					newRule.isDisabled = true;
 				}
 				delete newRule.isEnabled;
 
 				try {
-					var updatedRules = data.rules.concat([ newRule ]);
-					ruleUid.ensureRuleUids(updatedRules);
-					data.rules.push(newRule);
-					fs.writeFileSync(define.RULES_FILE, JSON.stringify(data.rules, null, '  '));
+					var result = ruleStore.updateRules(define.RULES_FILE, function(updatedRules) {
+						updatedRules.push(newRule);
+						return newRule;
+					});
+					ruleStore.replaceMemory(data.rules, result.rules);
 				} catch (error) {
-					return response.error(error.code === 'RULE_UID_DUPLICATE' ? 409 : error.code === 'RULE_UID_INVALID' ? 400 : 500);
+					return response.error(ruleStore.httpStatus(error));
 				}
 				
 				response.head(201);

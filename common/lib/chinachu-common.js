@@ -450,18 +450,22 @@ exports.programMatchesRule = function (rule, program, nf, fullTitle_norm, detail
 
 	// reserve_titles
 	if (rule.reserve_titles) {
-		isFound = false;
+		var requireAllTitles = rule.reserve_titles_mode === 'and';
+		isFound = requireAllTitles && rule.reserve_titles.length > 0;
 
 		for (i = 0; i < rule.reserve_titles.length; i++) {
 			if (fullTitle_norm === null) {
 				console.log("program: " + JSON.stringify(program));
 			}
+			var titleMatched = false;
 			if (nf) {
-				if (fullTitle_norm.match(rule.reserve_titles[i].normalize(nf)) !== null) { isFound = true; }
+				titleMatched = fullTitle_norm.match(rule.reserve_titles[i].normalize(nf)) !== null;
 			}
 			else {
-				if (program.fullTitle.match(rule.reserve_titles[i]) !== null) { isFound = true; }
+				titleMatched = program.fullTitle.match(rule.reserve_titles[i]) !== null;
 			}
+			if (requireAllTitles && !titleMatched) { isFound = false; break; }
+			if (!requireAllTitles && titleMatched) { isFound = true; break; }
 		}
 
 		if (!isFound) { return false; }

@@ -11,12 +11,14 @@ process.env.PATH = `${__dirname}/usr/bin:${process.env.PATH}`;
 const CONFIG_FILE = __dirname + '/config.json';
 const RULES_FILE = __dirname + '/rules.json';
 const RESERVES_DATA_FILE = __dirname + '/data/reserves.json';
+const RESERVES2_DATA_FILE = __dirname + '/data/reserves2.json';
 const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
 const RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 const RECORDED_DATA_FILE = __dirname + '/data/recorded.json';
 const MATCH_DATA_FILE = __dirname + '/data/match.json';
+const WUI_CONFIG_FILE = __dirname + '/data/wui-config.json';
 const STORAGE_STATE_FILE = __dirname + '/data/storage-state.json';
-const STORAGE_REFRESH_SOCKET = __dirname + '/data/storage-refresh.sock';
+const RECORDED_THUMBNAIL_DIR = __dirname + '/data/thumbnails';
 const SCHEDULER_STATE_FILE = __dirname + '/data/scheduler-state.json';
 const SCHEDULER_LOG_FILE = __dirname + '/log/scheduler';
 
@@ -28,6 +30,19 @@ const config = require(CONFIG_FILE);
 const path = require('path');
 const fs = require('fs');
 const util = require('util');
+
+const NEXT_WEB_ROOT = path.resolve(__dirname, 'next-web');
+
+function resolveStaticFilename(root, requestPath) {
+	const relative = requestPath.replace(/^\/+/, '');
+	const filename = path.resolve(root, relative);
+
+	if (filename !== root && !filename.startsWith(root + path.sep)) {
+		return null;
+	}
+
+	return filename;
+}
 
 function formatJstLogTime() {
 	const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
@@ -60,8 +75,10 @@ const chinachu = require('chinachu-common');
 const mirakurun = new (require("mirakurun").default)();
 const openHost = require('./lib/wui-open-host');
 const runtimePrivileges = require('./lib/runtime-privileges');
+const runtimePathsModule = require('./lib/runtime-paths');
 const mirakurunConnection = require('./lib/mirakurun-connection');
 const ruleUid = require('./lib/rule-uid');
+const ruleStore = require('./lib/rule-store');
 const healthDiagnosticsModule = require('./lib/health-diagnostics');
 const serviceControlModule = require('./lib/service-control');
 const mediaDeliveryModule = require('./lib/media-delivery');
@@ -69,9 +86,24 @@ const storageHealth = require('./lib/storage-health');
 const storageLow = require('./lib/storage-low');
 const storageRuntimeState = require('./lib/storage-runtime-state');
 const storageRefreshIpc = require('./lib/storage-refresh-ipc');
+const recordedThumbnail = require('./lib/recorded-thumbnail');
+const matchDetailResolver = require('./lib/match-detail-resolver');
+const matchDeletionHistory = require('./lib/match-deletion-history');
+const reservationStore = require('./lib/reservation-store');
+const logHistory = require('./lib/log-history');
+const ledgerCleaner = require('./lib/ledger-cleaner');
+const ledgerCleanerJobsModule = require('./lib/ledger-cleaner-jobs');
+const wuiConfigStore = require('./lib/wui-config');
+const wuiRuntime = Object.freeze({
+	instanceId: Date.now().toString(36) + '-' + process.pid.toString(36) + '-' + Math.random().toString(36).slice(2, 10),
+	startedAt: Date.now()
+});
 
 // Directory Checking
-if (!fs.existsSync('./data/') || !fs.existsSync('./log/') || !fs.existsSync('./web/')) {
+if (!fs.existsSync('./data/') ||
+	!fs.existsSync('./log/') ||
+	!fs.existsSync(path.join(NEXT_WEB_ROOT, 'index.html')) ||
+	!fs.existsSync(path.join(NEXT_WEB_ROOT, 'app.js'))) {
 	console.error('FATAL: Current working directory is invalid.');
 	process.exit(1);
 }
@@ -80,6 +112,8 @@ const apps = require("./processes.json").apps;
 
 const WUI_LOG_FILE = !!process.env.pm_id ? apps[0].out_file : (__dirname + '/log/wui');
 const OPERATOR_LOG_FILE = !!process.env.pm_id ? apps[1].out_file : (__dirname + '/log/operator');
+const WUI_ERROR_LOG_FILE = path.resolve(__dirname, apps[0].error_file);
+const OPERATOR_ERROR_LOG_FILE = path.resolve(__dirname, apps[1].error_file);
 const OPERATOR_PID_FILE = (() => {
 	if (process.env.pm_id) {
 		try {
@@ -118,6 +152,16 @@ try {
 	process.exit(1);
 }
 
+let runtimePaths;
+try {
+	runtimePaths = runtimePathsModule.resolveRuntimePaths(__dirname);
+} catch (error) {
+	console.error('[fatal] failed to prepare runtime directory: ' + error.message);
+	process.exit(1);
+}
+const STORAGE_REFRESH_SOCKET = runtimePaths.storageRefreshSocket;
+const RECORDED_THUMBNAIL_SOCKET = runtimePaths.recordedThumbnailSocket;
+
 // Mirakurun Client
 const mirakurunPath = mirakurunConnection.configureClient(mirakurun, config);
 
@@ -142,8 +186,11 @@ const healthDiagnostics = healthDiagnosticsModule.createHealthDiagnostics({
 });
 const serviceControl = serviceControlModule.createServiceControl({
 	rootDir: __dirname,
-	recordingPath: RECORDING_DATA_FILE
+	recordingPath: RECORDING_DATA_FILE,
+	isShuttingDown: () => shutdownStarted,
+	log: util.log
 });
+const ledgerCleanerJobs = ledgerCleanerJobsModule.createLedgerCleanerJobs({ rootDir: __dirname });
 const mediaDelivery = mediaDeliveryModule.createMediaDelivery({
 	mirakurun: mirakurun,
 	log: util.log
@@ -187,14 +234,9 @@ var recorded  = [];
 
 if (fs.existsSync(RULES_FILE)) {
 	try {
-		const loadedRules = JSON.parse(fs.readFileSync(RULES_FILE, 'utf8'));
-		if (!Array.isArray(loadedRules)) {
-			throw new TypeError('rules.json must contain an array');
-		}
-		rules = loadedRules;
-		const result = ruleUid.ensureRuleUids(loadedRules);
+		const result = ruleStore.ensureRuleFile(RULES_FILE);
+		rules = result.rules;
 		if (result.assigned > 0) {
-			fs.writeFileSync(RULES_FILE, JSON.stringify(loadedRules, null, '  '));
 			util.log('RULE UID BACKFILL: assigned=' + result.assigned + ' existing=' + result.existing);
 		}
 	} catch (error) {
@@ -521,7 +563,29 @@ function httpServerMain(req, res, query) {
 	// serve static file
 	var location = req.url;
 	if (location.match(/(\?.*)$/) !== null) { location = location.match(/^(.+)\?.*$/)[1]; }
-	if (location.match(/\/$/) !== null) { location += 'index.html'; }
+	var isApiRequest = location.match(/^\/api\/.*$/) !== null;
+	var staticRoot = NEXT_WEB_ROOT;
+	var staticLocation = location;
+	if (!isApiRequest) {
+		try {
+			staticLocation = decodeURIComponent(staticLocation);
+		} catch (e) {
+			staticLocation = null;
+		}
+
+		if (staticLocation === null || staticLocation.indexOf('\0') !== -1) {
+			res.writeHead(400, {'content-type': 'text/plain'});
+			res.end('400 Bad Request\n');
+			log(400);
+			return;
+		}
+
+		if (staticLocation.indexOf('/next/') === 0) {
+			staticRoot = NEXT_WEB_ROOT;
+			staticLocation = staticLocation.slice('/next'.length);
+		}
+		if (staticLocation.match(/\/$/) !== null) { staticLocation += 'index.html'; }
+	}
 
 	// HTTPメソッド指定を上書き
 	if (query.method) {
@@ -534,10 +598,10 @@ function httpServerMain(req, res, query) {
 		delete query._method;
 	}
 
-	var filename = path.join('./web/', location);
+	var filename = resolveStaticFilename(staticRoot, staticLocation);
 
 	var ext = null;
-	if (filename.match(/[^\/]+\..+$/) !== null) {
+	if (filename !== null && filename.match(/[^\/]+\..+$/) !== null) {
 		ext = filename.split('.').pop();
 	}
 
@@ -652,6 +716,9 @@ function httpServerMain(req, res, query) {
 		if (ext === 'xspf') { type = 'application/xspf+xml'; }
 		if (ext === 'm3u8') { type = 'application/vnd.apple.mpegurl'; }
 		if (ext === 'm4s') { type = 'video/iso.segment'; }
+		if (ext === 'svg') { type = 'image/svg+xml'; }
+		if (ext === 'woff2') { type = 'font/woff2'; }
+		if (ext === 'ttf') { type = 'font/ttf'; }
 
 		var head = {
 			'Content-Type'             : type,
@@ -808,28 +875,47 @@ function httpServerMain(req, res, query) {
 				zlib         : zlib,
 				chinachu     : chinachu,
 				ruleUid      : ruleUid,
+				ruleStore    : ruleStore,
 				mirakurun    : mirakurun,
 				config       : config,
 				matchCache   : matchCache,
 				healthDiagnostics: healthDiagnostics,
 				serviceControl: serviceControl,
+				wuiRuntime   : wuiRuntime,
 				mediaDelivery: mediaDelivery,
 				storageHealth: storageHealth,
 				storageLow   : storageLow,
 				storageRuntimeState: storageRuntimeState,
 				storageRefreshIpc: storageRefreshIpc,
+				recordedThumbnail: recordedThumbnail,
+					matchDetailResolver: matchDetailResolver,
+					matchDeletionHistory: matchDeletionHistory,
+					reservationStore: reservationStore,
+				logHistory    : logHistory,
+				ledgerCleaner : ledgerCleaner,
+					ledgerCleanerJobs: ledgerCleanerJobs,
+					wuiConfigStore: wuiConfigStore,
 				define: {
+					REPOSITORY_ROOT   : __dirname,
+					NODE_EXECUTABLE    : process.execPath,
+					LOG_DIR            : path.resolve(__dirname, 'log'),
 					CONFIG_FILE        : CONFIG_FILE,
 					RULES_FILE         : RULES_FILE,
 					RESERVES_DATA_FILE : RESERVES_DATA_FILE,
+					RESERVES2_DATA_FILE: RESERVES2_DATA_FILE,
 					SCHEDULE_DATA_FILE : SCHEDULE_DATA_FILE,
 					RECORDING_DATA_FILE: RECORDING_DATA_FILE,
 					RECORDED_DATA_FILE : RECORDED_DATA_FILE,
-					MATCH_DATA_FILE    : MATCH_DATA_FILE,
+						MATCH_DATA_FILE    : MATCH_DATA_FILE,
+						WUI_CONFIG_FILE    : WUI_CONFIG_FILE,
 					STORAGE_STATE_FILE : STORAGE_STATE_FILE,
 					STORAGE_REFRESH_SOCKET: STORAGE_REFRESH_SOCKET,
+					RECORDED_THUMBNAIL_DIR: RECORDED_THUMBNAIL_DIR,
+					RECORDED_THUMBNAIL_SOCKET: RECORDED_THUMBNAIL_SOCKET,
 					OPERATOR_LOG_FILE  : OPERATOR_LOG_FILE,
+					OPERATOR_ERROR_LOG_FILE: OPERATOR_ERROR_LOG_FILE,
 					WUI_LOG_FILE       : WUI_LOG_FILE,
+					WUI_ERROR_LOG_FILE : WUI_ERROR_LOG_FILE,
 					SCHEDULER_LOG_FILE : SCHEDULER_LOG_FILE,
 					OPERATOR_PID_FILE  : OPERATOR_PID_FILE
 				},
@@ -933,8 +1019,14 @@ function httpServerMain(req, res, query) {
 	};
 
 	// 静的ファイルまたはAPIレスポンスの分岐
-	if (req.url.match(/^\/api\/.*$/) === null) {
-		if (/^web\//.test(filename) === false) { return resErr(400); }
+	if (!isApiRequest) {
+		if (staticLocation === '/next') {
+			res.setHeader('Location', '/next/');
+			writeHead(302);
+			log(302);
+			return res.end();
+		}
+		if (filename === null) { return resErr(403); }
 		if (fs.existsSync(filename) === false) { return resErr(404); }
 
 		responseStatic();
@@ -975,6 +1067,7 @@ function ioAddListener(server) {
 	iosAddEventListner(io, 'notify-reserves');
 	iosAddEventListner(io, 'notify-recording');
 	iosAddEventListner(io, 'notify-recorded');
+	iosAddEventListner(io, 'notify-match');
 	iosAddEventListner(io, 'notify-schedule');
 
 	return io;
@@ -1014,12 +1107,11 @@ chinachu.jsonWatcher(
 		}
 
 		try {
-			const result = ruleUid.ensureRuleUids(data);
+			const result = ruleStore.ensureRuleFile(RULES_FILE);
 			if (result.assigned > 0) {
-				fs.writeFileSync(RULES_FILE, JSON.stringify(data, null, '  '));
 				util.log('RULE UID BACKFILL: assigned=' + result.assigned + ' existing=' + result.existing);
 			}
-			rules = data;
+			rules = result.rules;
 		} catch (error) {
 			console.error('ERROR: rules.json update rejected: ' + error.message);
 			return;
@@ -1092,6 +1184,22 @@ chinachu.jsonWatcher(
 		util.log(mes);
 	},
 	{ create: [], now: true }
+);
+
+// ファイル更新監視: ./data/match.json
+// recorded.json の通知より後に確定する録画結果一覧を、書き込み完了後に更新する。
+chinachu.jsonWatcher(
+	MATCH_DATA_FILE,
+	function _onUpdated(err, data, mes) {
+		if (err) {
+			console.error(err);
+			return;
+		}
+
+		ios.emit('notify-match');
+		util.log(mes);
+	},
+	{ create: [], now: false }
 );
 
 // プロセス監視

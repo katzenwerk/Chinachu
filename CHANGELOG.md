@@ -322,3 +322,132 @@ This release improves reservation reliability, filesystem-aware storage manageme
 - Improved Storage WUI layout, status indicators, and mobile responsiveness.
 - Updated Mirakurun client to 4.1.5 and Socket.IO to 4.8.4.
 - Consolidated permanent regression tests and removed redundant test cases.
+
+# Chinachu 0.10.7-thorn.30
+
+This planned release replaces the legacy WUI with the Next WUI, introduces the
+compact match v2 history format, and expands recording, storage, and ledger
+maintenance while preserving the existing recording and reservation workflows.
+
+## Highlights
+
+- Replaced the legacy `web/` application with the Next WUI as the default WUI.
+- Added match v2 history, recorded-result reconciliation, and guarded ledger cleanup.
+- Expanded filesystem-aware storage protection and Low Storage handling.
+- Added recording thumbnails, result history, bitrate statistics, and optional
+  monthly CSV output.
+
+## Next WUI
+
+- Added Home, programme guide, search, reservations, recording, recorded results,
+  rules, Storage, logs, settings, and Cleaner views with responsive layouts.
+- Added shared programme details, recording and history states, rule and
+  reservation associations, and context-sensitive actions.
+- Uses Socket.IO 4 notifications with connection monitoring and recovery status.
+- Integrated the existing guarded service controls into the Next WUI. They remain
+  limited to the Chinachu Operator and WUI and do not operate on Mirakurun or
+  unrelated PM2 applications.
+
+## Recording, Reservations, and Match History
+
+- Added match v2 with the canonical `channel.id|start|seconds` key and compact
+  programme, reservation, recording, and deletion summaries.
+- Added `recorded-missing` reconciliation, including safe recovery when the same
+  recording returns to `recorded.json` and Cleaner handling based on inspected
+  recording locations.
+- Added collision-resistant recorded IDs while retaining programme identity and
+  recording-path compatibility.
+- Preserved stable `ruleUid` associations and strengthened rule and reservation
+  locking, atomic persistence, conflict handling, and action validation.
+- Added queued recorded-thumbnail generation and best-effort bitrate statistics
+  after completed recordings, and improved Next WUI use of existing
+  recorded-duration metadata.
+- Added optional immutable monthly recording-result CSV files for finalized
+  recorded, missed, skipped, and interrupted outcomes.
+
+## Storage and Cleaner
+
+- Monitors configured recording destinations by filesystem and keeps ordinary
+  WUI reads snapshot-based instead of scanning recording disks.
+- Added opt-in protection against creating recordings on the system root
+  filesystem, alongside existing expected-mount checks.
+- Low Storage now supports `stop-new`, `stop`, and `remove`. Recursive removal is
+  restricted to eligible TS files on the affected filesystem and revalidates
+  symlinks, mount boundaries, active outputs, and file identity before deletion.
+- Added Cleaner preview and apply workflows for recording-path repair and
+  approved history cleanup, with source revalidation, ledger locking, atomic
+  writes, a transaction manifest, and rollback for catchable partial failures.
+- Cleaner ledger cleanup does not delete or move recording files. It treats
+  ledger history, stored thumbnails, and recording files as separate resources.
+
+## Maintenance
+
+- Added Next WUI configuration persistence, historical log viewing, and runtime
+  connection diagnostics.
+- Rejects unsupported rule and reservation actions before invoking their CLI paths.
+- Moved transient PID and IPC files into a private runtime directory and removed
+  obsolete startup and compatibility code.
+- Extended `npm run check` to syntax-check first-party Next WUI ES modules while
+  excluding vendored and sample code.
+- Consolidated duplicate and obsolete permanent tests. The current suite passes
+  155 tests with no failures or skips.
+
+## Upgrade Notes
+
+### WUI paths
+
+- The legacy `web/` WUI has been removed. `/` now serves the Next WUI.
+- `/next/` remains available and serves the same Next WUI, not a parallel legacy
+  or preview application.
+
+### Match v2 conversion
+
+- Operator startup validates `data/match.json` and converts legacy match entries
+  to v2 before normal recording operation begins.
+- When conversion is required, the original file is preserved as
+  `data/match.json.v1-backup`. An existing backup is reused only when it matches
+  the current legacy source.
+- Conversion, validation, backup, or write failure is fatal and stops Operator
+  startup instead of continuing with an uncertain match ledger.
+- V2 removes legacy duplicate metadata and snapshots while retaining canonical
+  identity, status, dates, recording IDs and paths, and deletion history needed
+  by current consumers.
+
+### Runtime directory
+
+- Scheduler PID and local IPC sockets now use `.runtime/` below the Chinachu root
+  by default. The directory is created for the runtime user with mode `0700`.
+- `CHINACHU_RUNTIME_DIR` can select another location. Its value must be an
+  absolute path owned by the runtime user and must permit creation of the required
+  PID and Unix-socket paths.
+
+### Configuration defaults
+
+- `recordedStorage.protectRootFilesystem` and each additional destination's
+  `storage.protectRootFilesystem` default to `false` for upgrade compatibility.
+  Enabling the option makes unverifiable or root-filesystem destinations fail closed.
+- `recordingResultCsvEnabled` defaults to `false`; existing history is not exported
+  retroactively merely by upgrading.
+- Valid `storageLowSpaceAction` values are `stop-new`, `stop`, and `remove`.
+  Missing values, the legacy `none` value, and unknown values use the safe `stop`
+  behavior without rewriting `config.json`. Existing valid `stop` and `remove`
+  settings remain valid after the upgrade.
+
+### Data cleanup and file deletion
+
+- Cleaner removes or repairs approved ledger history and may remove associated
+  generated thumbnails, but it does not delete, move, or rename TS recording files.
+- Low Storage `remove` and an explicit recorded-file deletion can delete the
+  physical recording file and then reconcile the related ledgers.
+- `recorded-missing` means that recorded history currently lacks a matching
+  `recorded.json` entry. It is not, by itself, proof that no physical file exists.
+  With location checking enabled, Cleaner retains the history when the exact file
+  is found; disabling location checking skips that rescue and follows the selected
+  history-cleanup policy.
+
+### Verification limits
+
+- Automated syntax checks and the 155-test suite have completed successfully.
+- Real Multi-HDD and Docker mount-failure scenarios, read-only filesystems, real
+  PM2 service-control acceptance, Android / Fire TV / TV-class browsers, and
+  long-duration or concurrent playback still require environment-specific testing.

@@ -1,0 +1,32 @@
+/* Local comparison fonts used by the PC home sample. */
+@font-face {
+  font-family: "Noto Sans JP";
+  font-style: normal;
+  font-weight: 100;
+  font-display: swap;
+  src: url("./NotoSansJP-Thin.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Noto Sans JP";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url("./NotoSansJP-Light.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Noto Sans JP";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./NotoSansJP-Regular.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "BIZ UDPGothic";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./BIZUDPGothic-Regular.ttf") format("truetype");
+}

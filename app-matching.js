@@ -3,6 +3,10 @@
 
 var fs = require("fs");
 var path = require("path");
+var reservationStore = require("./lib/reservation-store");
+var matchDetailResolver = require("./lib/match-detail-resolver");
+var matchV2 = require("./lib/match-v2");
+var recordingHistoryCsv = require("./lib/recording-history-csv");
 var MS_PER_DAY = 24 * 60 * 60 * 1000;
 var JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 var DEFAULT_KEEP_MONTHS = 3;
@@ -62,6 +66,10 @@ function getRetentionDays(config, name, defaultDays) {
 
 function shouldKeepRecordedSnapshot(config) {
 	return !config || config.matchKeepRecordedSnapshot !== false;
+}
+
+function getMatchSchemaVersion(config) {
+	return config && Number(config.matchSchemaVersion) === matchV2.SCHEMA_VERSION ? matchV2.SCHEMA_VERSION : 1;
 }
 
 function isTemporaryRecordingPath(filePath, config) {
@@ -300,6 +308,11 @@ function getMatchEntryStartMs(entry) {
 	var reserve = entry && entry.reserve;
 	var start;
 
+	start = safeInt(entry && entry.start, 0);
+	if (start > 0) {
+		return start;
+	}
+
 	if (program && typeof program === "object") {
 		start = safeInt(program.start, 0);
 		if (start > 0) {
@@ -383,6 +396,13 @@ function withCanonicalMatchKey(entry, key) {
 function hasRecordedEvidence(entry) {
 	var recorded = entry && entry.recorded;
 	var recordingResult = entry && entry.recordingResult;
+	var recording = entry && entry.recording;
+
+	if (recording && typeof recording === "object") {
+		if (!!recording.path || !!recording.recordedId) {
+			return true;
+		}
+	}
 
 	if (recorded && typeof recorded === "object") {
 		if (!!recorded.path || !!recorded.recorded || safeInt(recorded.start, 0) > 0) {
@@ -412,6 +432,11 @@ function buildRecdFlg(hasRecorded, hasReserve, isSkip, exactMatch, nearMatch) {
 function getRecordingPath(entry) {
 	var recordingResult = entry && entry.recordingResult;
 	var recorded = entry && entry.recorded;
+	var recording = entry && entry.recording;
+
+	if (recording && typeof recording === "object") {
+		return recording.path || "";
+	}
 
 	if (recordingResult && typeof recordingResult === "object") {
 		return recordingResult.path || recordingResult.recorded || "";
@@ -424,20 +449,70 @@ function getRecordingPath(entry) {
 	return "";
 }
 
-function mergeOldNew(oldEntry, newEntry, logger, config) {
+function isRecordedStatus(status) {
+	return status === "RECORDED" || status === "RECORDED_UNTRACKED";
+}
+
+function isClearlyDifferentRecording(oldEntry, newEntry) {
+	var oldValue = matchDetailResolver.normalizeMatchEntry(oldEntry);
+	var newValue = matchDetailResolver.normalizeMatchEntry(newEntry);
+	var oldId = oldValue.recording && oldValue.recording.recordedId;
+	var newId = newValue.recording && newValue.recording.recordedId;
+
+	return !!(oldId && newId && oldId !== newId);
+}
+
+function isSameRecordedEntry(oldEntry, newEntry) {
+	var oldValue = matchDetailResolver.normalizeMatchEntry(oldEntry);
+	var newValue = matchDetailResolver.normalizeMatchEntry(newEntry);
+	var oldId = oldValue.recording && oldValue.recording.recordedId;
+	var newId = newValue.recording && newValue.recording.recordedId;
+
+	return !!(oldValue.key && newValue.key && oldValue.key === newValue.key && oldId && newId && oldId === newId);
+}
+
+function canRecoverRecordedMissing(oldEntry, newEntry, options) {
+	var oldValue = matchDetailResolver.normalizeMatchEntry(oldEntry);
+	return !!(oldValue.deletion && oldValue.deletion.reason === "recorded-missing" &&
+		options && options.recordedReadOk === true && isSameRecordedEntry(oldEntry, newEntry));
+}
+
+function preserveDeletion(oldEntry, newEntry, options) {
+	var oldValue = matchDetailResolver.normalizeMatchEntry(oldEntry);
+	var output;
+
+	if (!oldValue.deletion || Number(newEntry && newEntry.schemaVersion) !== matchV2.SCHEMA_VERSION) {
+		return newEntry;
+	}
+	if (canRecoverRecordedMissing(oldEntry, newEntry, options)) {
+		return newEntry;
+	}
+
+	output = Object.assign({}, newEntry);
+	output.deletion = cloneJson(oldValue.deletion);
+	return output;
+}
+
+function mergeOldNew(oldEntry, newEntry, logger, config, options) {
 	// No reservation in this input does not invalidate a previously saved snapshot.
 	// Keep current-input flags/sources/status; never fill gaps in an actual new reserve.
 	if (oldEntry.reservationMeta && newEntry.reservationMeta && !newEntry.reservationMeta.hasReserve) {
 		var reservationMeta = Object.assign({}, newEntry.reservationMeta);
-		["ruleId", "ruleIdSource", "ruleUid", "recordedDirId", "recordedDir", "reserveSnapshotAt", "reserveUpdatedAt"].forEach(function (field) {
+		["ruleId", "ruleIdSource", "ruleUid", "recordedDirId", "recordedDir", "isManualReserved", "allowEndLack", "reserveSnapshotAt", "reserveUpdatedAt"].forEach(function (field) {
 			if (typeof oldEntry.reservationMeta[field] !== "undefined") {
 				reservationMeta[field] = oldEntry.reservationMeta[field];
 			}
 		});
 		newEntry = Object.assign({}, newEntry, { reservationMeta: reservationMeta });
 	}
+	var oldRuleUid = matchDetailResolver.normalizeMatchEntry(oldEntry).ruleUid;
+	if (Number(newEntry && newEntry.schemaVersion) === matchV2.SCHEMA_VERSION &&
+		!newEntry.ruleUid && oldRuleUid) {
+		newEntry = Object.assign({}, newEntry, { ruleUid: oldRuleUid });
+	}
 
-	if (oldEntry.status === "RECORDED" && newEntry.status === "RECORDED") {
+	if (isRecordedStatus(oldEntry.status) && isRecordedStatus(newEntry.status)) {
+		var oldNormalized = matchDetailResolver.normalizeMatchEntry(oldEntry);
 		var oldPath = getRecordingPath(oldEntry);
 		var newPath = getRecordingPath(newEntry);
 		var oldIsTemp = isTemporaryRecordingPath(oldPath, config);
@@ -449,6 +524,9 @@ function mergeOldNew(oldEntry, newEntry, logger, config) {
 			if (logger) {
 				logger("KEEP_FINAL_RECORDED_PATH: " + oldPath + " over " + newPath);
 			}
+			if (canRecoverRecordedMissing(oldEntry, newEntry, options)) {
+				return Object.assign({}, oldEntry, { deletion: null });
+			}
 			return oldEntry;
 		}
 
@@ -456,10 +534,28 @@ function mergeOldNew(oldEntry, newEntry, logger, config) {
 			logger("UPDATE_RECORDED_PATH: " + oldPath + " -> " + newPath);
 		}
 
+		if (oldNormalized.deletion && oldNormalized.deletion.reason === "recorded-missing" &&
+			isClearlyDifferentRecording(oldEntry, newEntry)) {
+			return oldEntry;
+		}
+
+		if (!isClearlyDifferentRecording(oldEntry, newEntry)) {
+			var continuedEntry = preserveDeletion(oldEntry, newEntry, options);
+			if (Number(continuedEntry.schemaVersion) === matchV2.SCHEMA_VERSION &&
+				oldEntry.status === "RECORDED" && continuedEntry.status === "RECORDED_UNTRACKED") {
+				continuedEntry = Object.assign({}, continuedEntry, { status: "RECORDED" });
+			}
+			return continuedEntry;
+		}
+
+		if (logger) {
+			logger("NEW_RECORDED_EVENT: " + (matchDetailResolver.normalizeMatchEntry(oldEntry).recording || {}).recordedId +
+				" -> " + (matchDetailResolver.normalizeMatchEntry(newEntry).recording || {}).recordedId);
+		}
 		return newEntry;
 	}
 
-	if (oldEntry.status === "RECORDED" && !hasRecordedEvidence(newEntry)) {
+	if (isRecordedStatus(oldEntry.status) && !hasRecordedEvidence(newEntry)) {
 		if (logger) {
 			logger("KEEP_RECORDED_STATUS: " + oldEntry.status + " over " + newEntry.status);
 		}
@@ -595,6 +691,8 @@ function buildReservationMeta(reserve, hasReserve) {
 			recordedDirId: null,
 			recordedDir: null,
 			recordedFormat: "",
+			isManualReserved: false,
+			allowEndLack: false,
 			isSkip: false,
 			isConflict: false,
 			source: null,
@@ -611,6 +709,8 @@ function buildReservationMeta(reserve, hasReserve) {
 		recordedDirId: typeof reserve.recordedDirId === "undefined" ? null : reserve.recordedDirId,
 		recordedDir: typeof reserve.recordedDir === "undefined" ? null : reserve.recordedDir,
 		recordedFormat: reserve.recordedFormat || "",
+		isManualReserved: safeBool(reserve.isManualReserved),
+		allowEndLack: safeBool(reserve.allowEndLack),
 		isSkip: safeBool(reserve.isSkip),
 		isConflict: safeBool(reserve.isConflict),
 		source: reserve.source || null,
@@ -834,6 +934,37 @@ function buildSources(programSource, hasReserve, hasRecorded) {
 }
 
 function buildMatchItem(status, key, recorded, reserve, channel, hasRecorded, hasReserve, isSkip, exactMatch, nearMatch, nowMs, keepRecordedSnapshot, config) {
+	var schemaVersion = arguments.length > 13 ? arguments[13] : 1;
+	var startSource;
+	var start;
+	var seconds;
+	var end;
+	var recording;
+
+	if (schemaVersion === matchV2.SCHEMA_VERSION) {
+		startSource = recorded && typeof recorded === "object" ? recorded : reserve || {};
+		start = safeInt(startSource.start, 0);
+		seconds = safeInt(startSource.seconds, 0);
+		end = safeInt(startSource.end, 0) || (start && seconds ? start + seconds * 1000 : 0);
+		recording = hasRecorded ? {
+			recordedId: recorded && (recorded.id || recorded.recordedId || recorded.origId || recorded.programId) || null,
+			path: recorded && (recorded.recorded || recorded.path) || null
+		} : null;
+
+		return {
+			schemaVersion: matchV2.SCHEMA_VERSION,
+			key: key,
+			status: status,
+			start: start,
+			end: end,
+			fullTitle: recorded && (recorded.fullTitle || recorded.title) ||
+				reserve && (reserve.fullTitle || reserve.title) || "",
+			ruleUid: reserve && reserve.ruleUid || recorded && recorded.ruleUid || null,
+			recording: recording,
+			deletion: null
+		};
+	}
+
 	var preferRecorded = !!hasRecorded;
 	var programSource = hasRecorded && hasReserve ? "recorded+reserves2" : hasRecorded ? "recorded" : "reserves2";
 	var program = mergeProgram(recorded, reserve, preferRecorded, channel);
@@ -866,6 +997,7 @@ function buildMatchLedger(options) {
 	var keepMonths = safeInt(options.keepMonths, DEFAULT_KEEP_MONTHS);
 	var readDays = safeInt(options.readDays, DEFAULT_READ_DAYS);
 	var keepRecordedSnapshot = options.keepRecordedSnapshot !== false;
+	var schemaVersion = safeInt(options.schemaVersion, 1) === matchV2.SCHEMA_VERSION ? matchV2.SCHEMA_VERSION : 1;
 	var config = options.config || {};
 	var initialBuild = !!options.initialBuild;
 	var logger = options.logger || null;
@@ -962,7 +1094,8 @@ function buildMatchLedger(options) {
 				false,
 				nowMs,
 				keepRecordedSnapshot,
-				config
+				config,
+				schemaVersion
 			);
 
 			return;
@@ -981,7 +1114,8 @@ function buildMatchLedger(options) {
 			false,
 			nowMs,
 			keepRecordedSnapshot,
-			config
+			config,
+			schemaVersion
 		);
 	});
 
@@ -1019,7 +1153,8 @@ function buildMatchLedger(options) {
 			false,
 			nowMs,
 			keepRecordedSnapshot,
-			config
+			config,
+			schemaVersion
 		);
 	});
 
@@ -1051,7 +1186,7 @@ function buildMatchLedger(options) {
 			var oldStart = getMatchEntryStartMs(oldEntry);
 			var oldProgram = oldEntry.program || oldEntry.reserve || oldEntry.recorded || {};
 			var oldSeconds = safeInt(oldProgram && oldProgram.seconds, 0);
-			var oldEnd = safeInt(oldProgram && oldProgram.end, 0) ||
+			var oldEnd = safeInt(oldEntry && oldEntry.end, 0) || safeInt(oldProgram && oldProgram.end, 0) ||
 				(oldStart > 0 && oldSeconds > 0 ? oldStart + oldSeconds * 1000 : 0);
 			var isFutureOrCurrentReserved = oldStatus === "RESERVED" && oldEnd > 0 && oldEnd >= nowMs;
 			var shouldPrune = oldStart > 0 &&
@@ -1068,7 +1203,7 @@ function buildMatchLedger(options) {
 						key: key,
 						status: oldStatus,
 						start: oldStart,
-						title: oldProgram && typeof oldProgram === "object" ? oldProgram.title || "" : ""
+						title: oldEntry.fullTitle || (oldProgram && typeof oldProgram === "object" ? oldProgram.title || "" : "")
 					};
 				}
 
@@ -1085,7 +1220,9 @@ function buildMatchLedger(options) {
 		var oldEntry = prunedOldByKey[key];
 		var newEntry = windowByKey[key];
 
-		mergedByKey[key] = oldEntry ? mergeOldNew(oldEntry, newEntry, logger, config) : newEntry;
+		mergedByKey[key] = oldEntry ? mergeOldNew(oldEntry, newEntry, logger, config, {
+			recordedReadOk: options.recordedReadOk === true
+		}) : newEntry;
 	});
 
 	var results = Object.keys(mergedByKey).map(function (key) {
@@ -1095,6 +1232,15 @@ function buildMatchLedger(options) {
 	}).sort(function (a, b) {
 		return getMatchEntryStartMs(a) - getMatchEntryStartMs(b);
 	});
+
+	if (schemaVersion === matchV2.SCHEMA_VERSION) {
+		results = matchV2.markRecordedMissing(results, recordedAll, {
+			recordedReadOk: options.recordedReadOk === true,
+			recordingList: options.recordingList,
+			nowMs: nowMs,
+			graceMs: options.recordedMissingGraceMs
+		});
+	}
 
 	return {
 		results: results,
@@ -1196,6 +1342,7 @@ function usage() {
 		"",
 		"Options:",
 		"  --recorded <path>    recorded.json path (default: ./data/recorded.json)",
+		"  --recording <path>   recording.json path used to guard recorded-missing",
 		"  --reserves2 <path>   reserves2.json path (default: ./data/reserves2.json)",
 		"  --old-match <path>   existing match.json path used as the merge base",
 		"  --output <path>      comparison output path; required",
@@ -1213,6 +1360,7 @@ function usage() {
 function parseArgs(argv) {
 	var options = {
 		recorded: path.join(__dirname, "data", "recorded.json"),
+		recording: path.join(__dirname, "data", "recording.json"),
 		reserves2: path.join(__dirname, "data", "reserves2.json"),
 		oldMatch: null,
 		output: null,
@@ -1255,6 +1403,9 @@ function parseArgs(argv) {
 		switch (name) {
 		case "--recorded":
 			options.recorded = value;
+			break;
+		case "--recording":
+			options.recording = value;
 			break;
 		case "--reserves2":
 			options.reserves2 = value;
@@ -1376,6 +1527,55 @@ function writeJsonAtomic(file, data) {
 	}
 }
 
+function writeMatchLedgerLocked(options) {
+	var store = options.reservationStore || reservationStore;
+	var oldMatchPath = options.oldMatchPath || options.output;
+
+	return store.withLock(options.output, function () {
+		var latestOldResults;
+		var schemaVersion = options.schemaVersion;
+		var latestRecordedList = options.recordedPath ? store.readArray(options.recordedPath) : options.recordedList;
+		var latestReserves2List = options.reserves2Path ? store.readArray(options.reserves2Path) : options.reserves2List;
+		if (oldMatchPath === options.output) {
+			latestOldResults = options.schemaVersion === matchV2.SCHEMA_VERSION ?
+				store.readArray(oldMatchPath) :
+				readJsonArray(oldMatchPath, { allowInvalid: true });
+		} else {
+			latestOldResults = readJsonArray(oldMatchPath, {
+				createIfMissing: true,
+				allowInvalid: options.schemaVersion !== matchV2.SCHEMA_VERSION
+			});
+		}
+
+		// Operator起動時にv2へ移行済みなら、旧configでも後続更新でv1へ戻さない。
+		if (matchV2.isAllV2(latestOldResults)) schemaVersion = matchV2.SCHEMA_VERSION;
+		matchV2.assertWriterReady(latestOldResults, schemaVersion);
+		if (schemaVersion === matchV2.SCHEMA_VERSION && options.initialBuild && latestOldResults.length > 0) {
+			throw new Error("match v2 initial-build cannot replace existing history");
+		}
+		var ledger = buildMatchLedger({
+			oldResults: options.initialBuild ? [] : latestOldResults,
+			recordedList: latestRecordedList,
+			recordingList: options.recordingList,
+			recordedReadOk: true,
+			reserves2List: latestReserves2List,
+			nowMs: options.nowMs,
+			keepDays: options.keepDays,
+			keepMonths: options.keepMonths,
+			readDays: options.readDays,
+			keepRecordedSnapshot: options.keepRecordedSnapshot,
+			config: options.config,
+			schemaVersion: schemaVersion,
+			initialBuild: options.initialBuild,
+			logger: options.logger
+		});
+		store.writeArrayAtomic(options.output, ledger.results);
+		ledger.sourceRecordedList = latestRecordedList;
+		ledger.sourceReserves2List = latestReserves2List;
+		return ledger;
+	});
+}
+
 function printSummary(summary, output) {
 	console.log("---- match summary ----");
 	console.log("initial_build: " + (summary.initialBuild ? "true" : "false"));
@@ -1419,13 +1619,14 @@ function printSummary(summary, output) {
 
 function main() {
 	var options;
-	var oldResults;
 	var oldMatchPath;
 	var recordedList;
 	var reserves2List;
 	var ledger;
 	var config;
 	var cleanup;
+	var recordingList;
+	var schemaVersion;
 
 	try {
 		options = parseArgs(process.argv);
@@ -1446,15 +1647,21 @@ function main() {
 		if (options.recordedHistoryDays === null) {
 			options.recordedHistoryDays = getRetentionDays(config, "recordedHistoryRetentionDays", DEFAULT_RETENTION_DAYS);
 		}
+		schemaVersion = getMatchSchemaVersion(config);
 
 		oldMatchPath = options.oldMatch || options.output;
-		oldResults = options.initialBuild ? [] : readJsonArray(oldMatchPath, { createIfMissing: true, allowInvalid: true });
 		recordedList = readJsonArray(options.recorded, { createIfMissing: true });
+		recordingList = readJsonArray(options.recording, { allowMissing: true });
 		reserves2List = readJsonArray(options.reserves2, { createIfMissing: true });
-
-		ledger = buildMatchLedger({
-			oldResults: oldResults,
+		ensureParentDirectory(options.output);
+		reservationStore.ensureArrayFile(options.output);
+		ledger = writeMatchLedgerLocked({
+			oldMatchPath: oldMatchPath,
+			output: options.output,
+			recordedPath: options.recorded,
 			recordedList: recordedList,
+			recordingList: recordingList,
+			reserves2Path: options.reserves2,
 			reserves2List: reserves2List,
 			nowMs: options.nowMs,
 			keepDays: options.keepDays,
@@ -1462,16 +1669,37 @@ function main() {
 			readDays: options.readDays,
 			keepRecordedSnapshot: shouldKeepRecordedSnapshot(config),
 			config: config,
+			schemaVersion: schemaVersion,
 			initialBuild: options.initialBuild,
-			logger: console.log
+			logger: console.log,
+			reservationStore: reservationStore
 		});
-
-		ensureParentDirectory(options.output);
-		writeJsonAtomic(options.output, ledger.results);
+		recordedList = ledger.sourceRecordedList;
+		reserves2List = ledger.sourceReserves2List;
 
 		cleanup = cleanupRecordedHistory(recordedList, options.recordedHistoryDays, options.nowMs);
 		if (cleanup.enabled && cleanup.removedCount > 0) {
 			writeJsonAtomic(options.recorded, cleanup.kept);
+		}
+
+		try {
+			var historyResult = recordingHistoryCsv.exportHistory({
+				enabled: config.recordingResultCsvEnabled === true,
+				outputDir: path.join(path.dirname(options.config), "data", "csv"),
+				stateFile: path.join(path.dirname(options.config), "data", "recording-history-csv-state.json"),
+				nowMs: options.nowMs,
+				recordedList: recordedList,
+				recordingList: recordingList,
+				reserves2List: reserves2List,
+				matchList: ledger.results
+			});
+			if (historyResult.initialized) {
+				console.log("RECORDING_HISTORY_CSV initialized enabled_at=" + historyResult.enabledAt);
+			} else if (historyResult.appended > 0) {
+				console.log("RECORDING_HISTORY_CSV appended=" + historyResult.appended + " files=" + historyResult.files.length);
+			}
+		} catch (historyError) {
+			console.error("WARNING: recording history CSV update failed: " + historyError.message);
 		}
 
 		printSummary(ledger.summary, options.output);
@@ -1500,6 +1728,7 @@ module.exports = {
 	readConfigFile: readConfigFile,
 	getRetentionDays: getRetentionDays,
 	shouldKeepRecordedSnapshot: shouldKeepRecordedSnapshot,
+	getMatchSchemaVersion: getMatchSchemaVersion,
 	makeCanonicalKeyFromFields: makeCanonicalKeyFromFields,
 	makeCanonicalKey: makeCanonicalKey,
 	makeKeyFromRecorded: makeKeyFromRecorded,
@@ -1522,5 +1751,6 @@ module.exports = {
 	parseArgs: parseArgs,
 	cleanupRecordedHistory: cleanupRecordedHistory,
 	readJsonArray: readJsonArray,
-	writeJsonAtomic: writeJsonAtomic
+	writeJsonAtomic: writeJsonAtomic,
+	writeMatchLedgerLocked: writeMatchLedgerLocked
 };

@@ -9,5 +9,11 @@
     "script" : "log-stream",
     "methods": ["get"],
     "types"  : ["txt"]
+  },
+
+  "/history": {
+    "script" : "log-history",
+    "methods": ["get"],
+    "types"  : ["json"]
   }
 }

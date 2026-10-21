@@ -263,7 +263,10 @@ service_setup_known_log_files () {
 }
 
 service_setup_known_pid_files () {
-  printf '%s\n' "$CHINACHU_DIR/data/chinachu-operator.pid" "$CHINACHU_DIR/data/chinachu-wui.pid"
+  find "$CHINACHU_DIR/data" -maxdepth 1 -type f \( \
+    -name 'chinachu-operator.pid' -o -name 'chinachu-operator-[0-9]*.pid' -o \
+    -name 'chinachu-wui.pid' -o -name 'chinachu-wui-[0-9]*.pid' \
+  \) -print 2>/dev/null
 }
 
 service_setup_count_artifacts () {
@@ -601,7 +604,8 @@ service_setup_validate_processes () {
     for (const name of ["chinachu-operator", "chinachu-wui"]) {
       const app = apps.find(x => x.name === name);
       if (!app || app.cwd !== "." || app.exec_interpreter !== ".nave/node" || app.autorestart !== true || app.treekill !== true || app.kill_timeout !== 12000) process.exit(1);
-      for (const key of ["out_file", "error_file", "pid_file"]) if (path.isAbsolute(app[key])) process.exit(1);
+      for (const key of ["out_file", "error_file"]) if (path.isAbsolute(app[key])) process.exit(1);
+      if (typeof app.pid_file !== "undefined" && path.isAbsolute(app.pid_file)) process.exit(1);
     }
   ' "$CHINACHU_DIR/processes.json"
 }
@@ -872,6 +876,7 @@ service_setup_restore_logs () {
 service_setup_pid_is_stale () {
   local file="$1" name pid
   name=$(basename "$file"); name=${name#chinachu-}; name=${name%.pid}
+  name=$(printf '%s' "$name" | sed 's/-[0-9][0-9]*$//')
   read -r pid < "$file" || return 1
   [ -n "$pid" ] || return 0
   if kill -0 "$pid" 2>/dev/null; then
