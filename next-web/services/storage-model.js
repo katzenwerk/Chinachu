@@ -118,20 +118,20 @@ function noteFor(storage, state, thresholds, now) {
     return ['録画先のファイルシステムを安全に確認できないため、録画を禁止しています。', '録画禁止中'];
   }
   if (state.stale && state.key === 'warning') {
-    return ['空き容量が警告閾値を下回っている可能性があります。', referenceCheckedText(storage, state, now)];
+    return ['空き容量に注意してください。', referenceCheckedText(storage, state, now)];
   }
   if (state.stale && state.key === 'low') {
-    return ['空き容量がLow閾値を下回っている可能性があります。', referenceCheckedText(storage, state, now)];
+    return ['空き容量に注意してください。', referenceCheckedText(storage, state, now)];
   }
-  if (state.key === 'warning') return ['空き容量が減少しています。容量不足に注意してください。'];
+  if (state.key === 'warning') return ['空き容量に注意してください。'];
   if (state.key === 'low') {
-    const notes = ['空き容量が不足しています。空き容量を確保しない場合、録画が停止する可能性があります。'];
+    const notes = ['空き容量に注意してください。'];
     notes.push(thresholds.action === 'remove'
       ? storage.cleanupFallbackStopAll === true
         ? '削除できる録画ファイルがないため、対象filesystemの録画中番組も停止しています。'
         : '容量不足時は古い録画ファイルを削除する設定です。削除できない場合は録画中も停止します。'
       : thresholds.action === 'stop-new'
-        ? '新規録画の開始を停止中です。録画中の番組は継続しますが、容量枯渇で失敗する可能性があります。'
+        ? '新規録画の開始を停止中です。録画中の番組は継続します。'
         : '対象filesystemの新規録画と録画中番組を停止する設定です。');
     if (storage.lowSpaceCurrent === true && storage.stopNewRecordings === true) {
       notes.push('容量不足により新規録画の開始を停止中');

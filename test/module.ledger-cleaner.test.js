@@ -161,9 +161,8 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		assert.strictEqual(fs.readFileSync(path.join(fixture.data, 'csv', 'recording-history_2026-10.csv'), 'utf8'), 'sentinel');
 		[fixture.paths.normal, fixture.paths.relocatedNew, fixture.paths.ambiguousA, fixture.paths.ambiguousB]
 			.forEach(file => assert.strictEqual(fs.existsSync(file), true));
-			assert.strictEqual(fs.existsSync(path.join(outcome.backupDirectory, 'manifest.json')), true);
-				assert.strictEqual(JSON.parse(fs.readFileSync(path.join(outcome.backupDirectory, 'manifest.json'), 'utf8')).status, 'complete');
-				assert.strictEqual(fs.existsSync(path.join(outcome.backupDirectory, 'match.json')), false);
+		assert.strictEqual(Object.prototype.hasOwnProperty.call(outcome, 'backupDirectory'), false);
+		assert.strictEqual(fs.existsSync(path.join(fixture.data, 'ledger-cleaner-backups')), false);
 	} finally {
 		fixture.close();
 	}
@@ -228,7 +227,7 @@ test('deleted and recorded-missing history is removed without a location scan an
 		assert.strictEqual(outcome.thumbnailErrors[0].id, 'thumbnail-failure');
 		assert.strictEqual(fs.existsSync(path.join(thumbnailDir, 'deleted-only.jpg')), false);
 		assert.strictEqual(fs.existsSync(path.join(thumbnailDir, 'shared.jpg')), true);
-		assert.strictEqual(fs.existsSync(path.join(outcome.backupDirectory, 'match.json')), false);
+		assert.strictEqual(fs.existsSync(path.join(fixture.data, 'ledger-cleaner-backups')), false);
 
 		const matchItems = JSON.parse(fs.readFileSync(fixture.files.match, 'utf8'));
 		const reserves2Items = JSON.parse(fs.readFileSync(fixture.files.reserves2, 'utf8'));
@@ -381,7 +380,7 @@ test('apply rejects stale ledgers and an incomplete root without changing data',
 	}
 });
 
-test('apply restores every ledger and records rollback when an atomic write fails', function () {
+test('apply restores every ledger without persistent backups when an atomic write fails', function () {
 	const fixture = createFixture();
 	const originalWrite = reservationStore.writeArrayAtomic;
 	try {
@@ -398,10 +397,7 @@ test('apply restores every ledger and records rollback when an atomic write fail
 		Object.entries(before).forEach(([name, value]) => {
 			assert.deepStrictEqual(JSON.parse(fs.readFileSync(fixture.files[name], 'utf8')), JSON.parse(value));
 		});
-		const backupRoot = path.join(fixture.data, 'ledger-cleaner-backups');
-		const transaction = fs.readdirSync(backupRoot)[0];
-		const manifest = JSON.parse(fs.readFileSync(path.join(backupRoot, transaction, 'manifest.json'), 'utf8'));
-		assert.strictEqual(manifest.status, 'rolled-back');
+		assert.strictEqual(fs.existsSync(path.join(fixture.data, 'ledger-cleaner-backups')), false);
 	} finally {
 		reservationStore.writeArrayAtomic = originalWrite;
 		fixture.close();

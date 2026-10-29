@@ -80,10 +80,22 @@ export function openCleanerDialog() {
     const apply = job?.type === 'apply';
     return `<div class="cleaner-dialog-body cleaner-dialog-progress" aria-live="polite">
       <div class="cleaner-progress-spinner" aria-hidden="true"></div>
-      <h3>${apply ? '台帳を再確認して整理しています' : '録画フォルダを列挙しています'}</h3>
-      <p>${escapeHtml(job?.progress?.phase || 'queued')} / ${Number(job?.progress?.files || 0).toLocaleString('ja-JP')}ファイル / ${Number(job?.progress?.visitedDirectories || 0).toLocaleString('ja-JP')}ディレクトリ</p>
+      <h3 data-cleaner-progress-title>${apply ? '台帳を再確認して整理しています' : '録画フォルダを列挙しています'}</h3>
+      <p data-cleaner-progress-detail>${escapeHtml(job?.progress?.phase || 'queued')} / ${Number(job?.progress?.files || 0).toLocaleString('ja-JP')}ファイル / ${Number(job?.progress?.visitedDirectories || 0).toLocaleString('ja-JP')}ディレクトリ</p>
       <small>モーダルを閉じても処理は継続します。多重起動はバックエンドで拒否されます。</small>
     </div><footer class="cleaner-dialog-footer"><button class="button" data-cleaner-close type="button">閉じる</button></footer>`;
+  }
+
+  function updateProgress(job) {
+    const progress = dialog.querySelector('.cleaner-dialog-progress');
+    const title = progress?.querySelector('[data-cleaner-progress-title]');
+    const detail = progress?.querySelector('[data-cleaner-progress-detail]');
+    if (!title || !detail) return false;
+    title.textContent = job?.type === 'apply'
+      ? '台帳を再確認して整理しています'
+      : '録画フォルダを列挙しています';
+    detail.textContent = `${job?.progress?.phase || 'queued'} / ${Number(job?.progress?.files || 0).toLocaleString('ja-JP')}ファイル / ${Number(job?.progress?.visitedDirectories || 0).toLocaleString('ja-JP')}ディレクトリ`;
+    return true;
   }
 
   function previewBody(job) {
@@ -141,6 +153,7 @@ export function openCleanerDialog() {
   function render() {
     if (!dialog.isConnected) return;
     const job = state?.job;
+    if (!loading && !error && job?.status === 'running' && updateProgress(job)) return;
     let body;
     if (loading) body = '<div class="cleaner-dialog-body cleaner-dialog-progress"><p>台帳整理の状態を読み込んでいます…</p></div>';
     else if (error) body = `<div class="cleaner-dialog-body"><h3>台帳整理を利用できません</h3><p class="cleaner-dialog-danger">${escapeHtml(error.message || error)}</p></div><footer class="cleaner-dialog-footer"><button class="button" data-cleaner-retry type="button">再試行</button></footer>`;
