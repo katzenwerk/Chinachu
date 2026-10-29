@@ -1,327 +1,70 @@
-# Chinachu 0.10.7-thorn.21
+# Chinachu 0.10.7-thorn.31
 
-This release focuses on compatibility with current Node.js and Mirakurun environments,
-service management, WUI modernization, and recording reliability.
+This release introduces experimental Series management, optional WUI authentication, broadcast clock observation and adjustment support, and improvements to recording diagnostics, maintenance, and usability.
 
-## Highlights
+## Series (Beta)
 
-- Updated the runtime baseline for Node.js 24.
-- Updated Mirakurun compatibility to 4.1.3.
-- Improved installer and PM2 service setup for both current-user and legacy root-managed environments.
-- Modernized the WUI server and Socket.IO integration.
-- Improved recording recovery and shutdown behavior.
-- Added a generic external notification command interface.
-- Migrated CI from Travis CI to GitHub Actions.
+- Added an experimental Series view that associates recordings and reservations by series and episode.
+- Uses information from **しょぼいカレンダー** to assist title and episode matching. Results may be incomplete or require manual correction.
+- Uses a local SQLite dictionary for external reference data alongside the existing JSON-based data. This integration remains experimental and can be disabled in Settings.
 
-## Installer / PM2
+## Cleaner
 
-- Added a guided PM2 Service Setup flow.
-- Added current-user PM2 operation as the recommended mode.
-- Kept the legacy root-managed mode for existing environments.
-- Added safer PM2 persistence handling and cleanup.
-- Preserved unrelated PM2 applications, including existing Mirakurun processes.
-- Added PM2 log rotation setup support.
-- Improved runtime privilege handling and supplementary group initialization.
+- Improved Cleaner performance when processing large recording histories.
+- Removed persistent backups created during Cleaner execution. If cleanup is interrupted by a process or system failure, history data may require manual recovery.
 
-## WUI
+## WUI Authentication
 
-- Consolidated WUI access around `wuiOpenServer`, `wuiOpenHost`, and `wuiOpenPort`.
-- Updated Socket.IO support for the current 4.x release.
-- Added safer automatic private IPv4 selection for the Open Server.
-- Removed the built-in Basic authentication, TLS/mTLS, GeoIP/XFF access control,
-  and mDNS advertisement paths.
-- For remote exposure, authentication and transport security should be provided externally,
-  such as through a VPN or reverse proxy.
+- Added optional administrator password authentication for the WUI and related API and media endpoints, disabled by default.
+- Added optional TOTP-based two-factor authentication (2FA), with QR code setup for authenticator apps such as Google Authenticator.
+- Authentication and 2FA do not guarantee security. Direct Internet exposure is not recommended.
+- Legacy `config.json` authentication settings are not migrated and require reconfiguration.
+- External media clients without the WUI session cookie may not work while authentication is enabled.
 
-## Mirakurun
+To configure administrator authentication, run as the Linux user running the WUI:
 
-- Updated Mirakurun to 4.1.3.
-- Centralized Mirakurun endpoint handling for TCP and Unix socket configurations.
-- Fixed DROP WATCH transport selection when using TCP endpoints.
-- Preserved support for standard and legacy Unix socket endpoint formats.
+```sh
+./chinachu auth setup
+```
 
-## Recording
+Then enable login authentication and optionally configure 2FA under **設定 → ログイン認証**.
 
-- Fixed a thorn.20 regression that prevented in-progress rule-based recordings
-  from resuming after an operator restart.
-- Preserved the recording path across graceful restart recovery.
-- Improved handling of aborted preparations, interrupted streams, and recording retries.
-- Improved recorded ID collision handling.
-- Improved low-storage handling for active recordings and restart-pending recordings.
+To disable 2FA or login authentication locally:
 
-## Notifications
+```sh
+./chinachu auth disable-totp
+./chinachu auth disable-auth
+```
 
-- Added `notificationCommand` as the preferred external notification interface.
-- Notification events are passed as structured UTF-8 JSON through standard input.
-- Added timeout and single-flight protection for notification processes.
-- `storageLowSpaceCommand` remains available as a compatibility fallback.
+## Installer / Upgrade / PM2
 
-## Compatibility / Maintenance
+- Added `./chinachu upgrade` for thorn.31 and later. It updates the repository, installs required components, and restarts Chinachu PM2 services when necessary. Manual `git pull` is not required.
+- Upgrade checks for active recordings and upcoming reservations before interrupting services. It requires a clean Git working tree and a configured upstream branch.
+- Improved the installer to reuse existing Node.js and dependencies when possible, reducing unnecessary installation work.
+- Upgrading from `gamma` or thorn.30 and earlier requires a one-time manual Git update and `./chinachu installer full`.
+- Removed legacy SysV init-script support. PM2 service setup is available through `./chinachu service setup`. If an upgrade fails, manual recovery may be required.
 
-- Updated `dateformat` while preserving legacy recorded filename behavior.
-- Consolidated dependency management around the root lockfile.
-- Migrated tests to the built-in Node.js test runner.
-- Replaced Travis CI with GitHub Actions.
+## Recording / DROP Diagnostics
 
+- Improved recording recovery so eligible manual reservations can resume after a graceful Operator restart.
+- Added `dropDetectionMode` to select DROP detection using Mirakurun's DROP WATCH, direct TS stream analysis, both, or neither (`mirakurun`, `ts`, `both`, `off`). The default remains `mirakurun`.
+- Direct TS stream analysis is experimental. Its continuity-counter results have not matched `tsDropChkx64.exe` in testing, so they should be treated as diagnostic information rather than definitive DROP counts.
+- Added recording-result details for TS stream analysis and detected errors.
 
-# Chinachu 0.10.7-thorn.22
+## Broadcast Clock
 
-This release improves recorded-duration handling and PM2 service persistence.
+- Added an optional feature to compare broadcast TDT/TOT time with the Chinachu server clock and display the time difference.
+- Supports clock checking and optional adjustment through chrony. Adjustment requires manual configuration and authorization, including root crontab setup for scheduled execution when needed.
+- Clock observation prioritizes recording activity and does not modify the system clock. Actual clock adjustment requires separate configuration.
+- Primarily intended for offline environments where Internet time synchronization is unavailable. When clock adjustment is configured, it can help reduce recording timing errors caused by clock drift.
+- Broadcast time may vary slightly between channels and is not necessarily more accurate than Internet-based NTP services such as those provided by NICT.
 
-## Highlights
+## Next WUI / Access
 
-- Added ffprobe-based recorded duration detection.
-- Improved recorded duration display in the WUI.
-- Fixed Local PM2 startup configuration so Chinachu can be restored automatically after an OS reboot.
-
-## Installer / PM2
-
-- Added verification and configuration of the Local PM2 systemd startup service.
-- Fixed a case where `pm2 save` succeeded but Chinachu was not automatically restored after an OS reboot.
-- Preserved the existing PM2 startup service during Chinachu cleanup so unrelated PM2 applications remain unaffected.
-
-## Recording
-
-- Added asynchronous ffprobe duration detection after recording completion.
-- Stores measured duration as `recordedDurationSeconds`.
-- ffprobe failures and timeouts do not prevent recording finalization.
-- Recording completion commands are not delayed by duration probing.
-- Improved handling of measured duration for uninterrupted and resumed recordings.
-
-## WUI
-
-- Recorded program details now prefer the measured file duration when available.
-- Recorded lists now prefer the measured file duration over the scheduled recording duration.
-- Head-cut estimation uses measured duration only for uninterrupted recordings.
-- Existing recordings without measured duration retain the previous fallback behavior.
-- Waits for private IPv4 availability during startup before starting the Open Server.
-- Exits with an error if automatic host detection still fails after the startup wait, allowing PM2 to recover the service.
-
-
-# Chinachu 0.10.7-thorn.23
-
-This release improves WUI performance when handling large match histories.
-
-## Highlights
-
-- Optimized match history loading for large `match.json` files.
-- Added lightweight summary, list, and item access for match history.
-- Added an in-memory WUI cache for parsed match history data.
-- Reduced unnecessary transfer and parsing of the full match history.
-- Stabilized asynchronous runtime tests.
-
-## Match History / WUI
-
-- Added summary mode for retrieving match status counts and recent completed entries without transferring the full history.
-- Added list mode for loading a reduced representation of completed match history.
-- Added item mode for retrieving a single full match record when opening program details.
-- Updated the dashboard, recorded history list, and program detail views to use the lighter match APIs where appropriate.
-- Added a process-local parsed `match.json` cache in the WUI.
-- The cache is automatically reloaded when the source `match.json` changes.
-- A previously valid cache is retained if a reload encounters invalid JSON.
-- The original full `/api/match.json` response remains available for compatibility.
-
-## Performance / Maintenance
-
-- Large match histories no longer need to be fully transferred and parsed by the browser for routine dashboard, list, and detail operations.
-- Approximately 4,000 match-history entries have been verified in the current production environment without issue.
-- Around 6,000 entries may be used as a provisional maintenance guideline, but this is not a tested upper limit.
-- WUI memory usage still increases as the match history grows because the parsed history is cached in memory.
-
-## Testing
-
-- Reduced timing dependencies in external notification process tests.
-- Improved readiness handling for notification worker tests.
-- Made temporary operator test cleanup more tolerant of short-lived filesystem races.
-- Made recording-state polling tolerant of transient partial JSON reads during test execution.
-
-# Chinachu 0.10.7-thorn.24
-
-This release removes the bundled FFmpeg 4.1.4 dependency and improves preview
-stream selection for current system FFmpeg environments.
-
-## Highlights
-
-- Removed the bundled FFmpeg 4.1.4 download and installation path.
-- Updated the installer to use system-provided `ffmpeg` and `ffprobe`.
-- Fixed preview generation when input stream index 0 is not a video stream.
-- Added safer handling for legacy and unknown repository-local FFmpeg binaries.
-- Expanded installer verification and regression coverage for FFmpeg handling.
-
-## Preview
-
-- Recording and recorded-program previews now select the first video stream
-  with `0:v:0` instead of assuming that input stream index `0:0` is video.
-- Fixed preview generation for transport streams where data, audio, or other
-  non-video streams appear before the video stream.
-- The change is compatible with both the previous bundled FFmpeg 4.1.4 and
-  current system FFmpeg versions.
-- This fixes a latent stream-selection assumption that became visible while
-  validating migration away from the bundled FFmpeg 4.1.4.
-
-## Installer / FFmpeg
-
-- Removed the legacy FFmpeg 4.1.4 static archive download, architecture-specific
-  archive selection, extraction, and repository-local installation path.
-- Removed creation of the legacy `avconv` and `avprobe` compatibility aliases.
-- Existing working system `ffmpeg` and `ffprobe` commands are used without
-  modifying system packages.
-- On Ubuntu and Linux Mint systems, the installer can offer to install the
-  `ffmpeg` package when the required commands are missing.
-- System package installation requires explicit user confirmation.
-- The installer does not run `apt update`, upgrade, or autoremove operations as
-  part of FFmpeg setup.
-- Recognized legacy repository-local FFmpeg 4.1.4 binaries are removed only
-  after system FFmpeg has been verified and the user explicitly confirms the
-  migration.
-- Unknown repository-local FFmpeg binaries are left unchanged and cause the
-  installer stage to stop safely.
-- Legacy cleanup is limited to `ffmpeg`, `ffprobe`, `avconv`, and `avprobe`;
-  other files from the old static archive are not modified.
-
-## Verification
-
-- Installer verification now checks the resolved `ffmpeg` and `ffprobe`
-  commands.
-- Both commands must be executable and successfully return version information.
-- Verification reports the resolved command paths and version information.
-- Repository-local overrides are detected so they cannot silently shadow the
-  intended system FFmpeg environment.
-
-## Testing
-
-- Added regression coverage for preview video-stream selection.
-- Added installer coverage for existing system FFmpeg detection.
-- Added coverage for package-installation decisions without invoking real APT,
-  sudo, or network operations.
-- Added coverage for legacy FFmpeg migration and unknown local binary protection.
-- Added verification coverage for resolved `ffmpeg` and `ffprobe` commands.
-
-# Chinachu 0.10.7-thorn.25
-
-This release improves scheduler synchronization with Mirakurun EPG updates
-and reduces unnecessary periodic scheduler runs.
-
-## Highlights
-
-- Added scheduler synchronization with settled Mirakurun EPG gathering cycles.
-- Added recovery for missed EPG cycle notifications.
-- Added scheduler state and lightweight periodic preflight checks.
-- Reduced unnecessary full scheduler runs while retaining the periodic path as a fallback.
-
-# Chinachu 0.10.7-thorn.26
-
-This release improves episode and subtitle parsing in the scheduler.
-
-## Highlights
-
-- Improved episode detection for single, multi-episode, and range notation.
-- Improved subtitle extraction from program titles and descriptions.
-- Reduced false episode detection from season numbers and similar title text.
-- Preserved the original `fullTitle` for compatibility.
-- Improved low-storage handling and related notification/history processing.
-
-# Chinachu 0.10.7-thorn.27
-
-This release adds stable rule identity and preserves reservation-time rule and
-recording destination metadata.
-
-## Highlights
-
-- Added stable `ruleUid` values that remain associated with rules across edits,
-  deletion of other rules, and rule index changes, while retaining compatibility
-  with legacy `ruleId` and index references.
-- Reservations now carry rule identity and recording destination metadata through
-  `reserves`, `reserves2`, and match history. Historical values are preserved
-  instead of being inferred from current rules or recording destination mappings.
-- Updated WUI rule and reservation associations to use stable rule identity,
-  preventing legacy index-based reservations from being counted for an unrelated
-  current rule. Index fallback remains available for legacy rules without a UID.
-- Consolidated permanent tests by behavior and moved temporary rule UID migration
-  tests out of the regular suite. The regular suite passed 137 tests across 30
-  suites; the temporary migration tests passed 3/3.
-
-# Chinachu 0.10.7-thorn.28
-
-This release adds browser playback for live and recorded MPEG-2 transport
-streams, Safari-compatible FFmpeg HLS delivery, operational diagnostics, and
-stable reservation-rule navigation.
-
-## Highlights
-
-- Added read-only Health diagnostics and a Status dashboard for Chinachu,
-  runtime, PM2, Mirakurun, scheduler, recording, and data-file state.
-- Added guarded PM2 service controls for the Chinachu Operator and WUI.
-- Added `mpeg2toh264` browser playback for live and recorded MPEG-2 TS content.
-- Added FFmpeg fMP4 HLS compatibility playback for Safari while retaining
-  `mpeg2toh264` as the standard path on desktop non-Safari browsers.
-- Added HTTP byte Range support for recorded files.
-- Linked programmes and reservations to their source rules through stable
-  `ruleUid` values and improved rule labels in programme views.
-
-## Health / Service Control
-
-- Added a read-only diagnostics API with a short process-local cache and manual
-  refresh support in the Status dashboard.
-- Reports observable runtime, PM2, Mirakurun, scheduler, recording, ffprobe,
-  configuration, rule, and scheduler-state information without treating
-  unavailable observations as healthy.
-- Added guarded restart controls limited to `chinachu-operator` and
-  `chinachu-wui`, with process-identity and active-recording safeguards.
-- Service controls do not operate on Mirakurun or unrelated PM2 applications.
-
-## Browser Playback
-
-- Added vendored `mpeg2toh264` playback adapters for live and recorded MPEG-2
-  TS streams, including ARIB caption rendering and recorded-file seeking.
-- Added recorded-file HEAD and single byte Range handling with 206 and 416
-  responses for browser playback.
-- Added isolated FFmpeg fMP4 HLS sessions for live and recorded compatibility
-  playback, including playlist, initialization segment, media segment, process,
-  and cleanup lifecycle management.
-- Safari can use FFmpeg HLS compatibility playback. Desktop non-Safari browsers
-  keep `mpeg2toh264` as the standard path and do not normally offer FFmpeg HLS.
-- Android, Fire TV, and TV-class browsers are not excluded solely because their
-  platform is Linux-based.
-- The completed MP4, faststart, and Range delivery path remains available as a
-  compatibility and verification fallback rather than the primary initial
-  playback path.
-
-## Reservation Rules / WUI
-
-- Programme and reservation views now resolve source rules by stable `ruleUid`
-  instead of using a mutable rule-array index as identity.
-- Added source-rule navigation and editing from programme views.
-- Rule labels now show a one-based display number and a concise primary
-  condition, while continuing to use `ruleUid` for identity after reordering.
-
-## Maintenance
-
-- Added a maintenance background document describing the thorn branch and its
-  modernization context.
-
-## Known Limitations
-
-- Recorded FFmpeg HLS playback currently starts from the beginning and does not
-  yet support seeking or restart from an arbitrary position.
-- Android, Fire TV, and TV-class browser playback still requires device testing.
-- Long recordings and multiple concurrent playback sessions still require
-  performance and resource-usage evaluation.
-
-# Chinachu 0.10.7-thorn.29
-
-This release improves reservation reliability, filesystem-aware storage management, and WUI usability while updating runtime dependencies.
-
-## Highlights
-
-- Added atomic reservation persistence and ownership-aware locking to prevent concurrent update conflicts.
-- Improved scheduler conflict detection and retry handling for reservation updates.
-- Added filesystem-aware storage monitoring with per-filesystem Warning and Low protection.
-- Reduced unnecessary HDD access during idle operation and WUI browsing.
-- Added persistent storage snapshots, last-checked timestamps, and manual capacity refresh controls.
-- Improved Storage WUI layout, status indicators, and mobile responsiveness.
-- Updated Mirakurun client to 4.1.5 and Socket.IO to 4.8.4.
-- Consolidated permanent regression tests and removed redundant test cases.
+- Improved responsive layouts and navigation for smartphones and tablets.
+- Added `wuiBlockGlobalAccess`, enabled by default, to restrict WUI access from global IP addresses. This does not replace proper network protection, and reverse proxies may affect source IP detection.
+- Improved programme details, title and episode display, search behavior, and Settings organization.
+- Restored the "Record Now" action for programmes already on air.
 
 # Chinachu 0.10.7-thorn.30
 
@@ -451,3 +194,326 @@ maintenance while preserving the existing recording and reservation workflows.
 - Real Multi-HDD and Docker mount-failure scenarios, read-only filesystems, real
   PM2 service-control acceptance, Android / Fire TV / TV-class browsers, and
   long-duration or concurrent playback still require environment-specific testing.
+
+# Chinachu 0.10.7-thorn.29
+
+This release improves reservation reliability, filesystem-aware storage management, and WUI usability while updating runtime dependencies.
+
+## Highlights
+
+- Added atomic reservation persistence and ownership-aware locking to prevent concurrent update conflicts.
+- Improved scheduler conflict detection and retry handling for reservation updates.
+- Added filesystem-aware storage monitoring with per-filesystem Warning and Low protection.
+- Reduced unnecessary HDD access during idle operation and WUI browsing.
+- Added persistent storage snapshots, last-checked timestamps, and manual capacity refresh controls.
+- Improved Storage WUI layout, status indicators, and mobile responsiveness.
+- Updated Mirakurun client to 4.1.5 and Socket.IO to 4.8.4.
+- Consolidated permanent regression tests and removed redundant test cases.
+
+# Chinachu 0.10.7-thorn.28
+
+This release adds browser playback for live and recorded MPEG-2 transport
+streams, Safari-compatible FFmpeg HLS delivery, operational diagnostics, and
+stable reservation-rule navigation.
+
+## Highlights
+
+- Added read-only Health diagnostics and a Status dashboard for Chinachu,
+  runtime, PM2, Mirakurun, scheduler, recording, and data-file state.
+- Added guarded PM2 service controls for the Chinachu Operator and WUI.
+- Added `mpeg2toh264` browser playback for live and recorded MPEG-2 TS content.
+- Added FFmpeg fMP4 HLS compatibility playback for Safari while retaining
+  `mpeg2toh264` as the standard path on desktop non-Safari browsers.
+- Added HTTP byte Range support for recorded files.
+- Linked programmes and reservations to their source rules through stable
+  `ruleUid` values and improved rule labels in programme views.
+
+## Health / Service Control
+
+- Added a read-only diagnostics API with a short process-local cache and manual
+  refresh support in the Status dashboard.
+- Reports observable runtime, PM2, Mirakurun, scheduler, recording, ffprobe,
+  configuration, rule, and scheduler-state information without treating
+  unavailable observations as healthy.
+- Added guarded restart controls limited to `chinachu-operator` and
+  `chinachu-wui`, with process-identity and active-recording safeguards.
+- Service controls do not operate on Mirakurun or unrelated PM2 applications.
+
+## Browser Playback
+
+- Added vendored `mpeg2toh264` playback adapters for live and recorded MPEG-2
+  TS streams, including ARIB caption rendering and recorded-file seeking.
+- Added recorded-file HEAD and single byte Range handling with 206 and 416
+  responses for browser playback.
+- Added isolated FFmpeg fMP4 HLS sessions for live and recorded compatibility
+  playback, including playlist, initialization segment, media segment, process,
+  and cleanup lifecycle management.
+- Safari can use FFmpeg HLS compatibility playback. Desktop non-Safari browsers
+  keep `mpeg2toh264` as the standard path and do not normally offer FFmpeg HLS.
+- Android, Fire TV, and TV-class browsers are not excluded solely because their
+  platform is Linux-based.
+- The completed MP4, faststart, and Range delivery path remains available as a
+  compatibility and verification fallback rather than the primary initial
+  playback path.
+
+## Reservation Rules / WUI
+
+- Programme and reservation views now resolve source rules by stable `ruleUid`
+  instead of using a mutable rule-array index as identity.
+- Added source-rule navigation and editing from programme views.
+- Rule labels now show a one-based display number and a concise primary
+  condition, while continuing to use `ruleUid` for identity after reordering.
+
+## Maintenance
+
+- Added a maintenance background document describing the thorn branch and its
+  modernization context.
+
+## Known Limitations
+
+- Recorded FFmpeg HLS playback currently starts from the beginning and does not
+  yet support seeking or restart from an arbitrary position.
+- Android, Fire TV, and TV-class browser playback still requires device testing.
+- Long recordings and multiple concurrent playback sessions still require
+  performance and resource-usage evaluation.
+
+# Chinachu 0.10.7-thorn.27
+
+This release adds stable rule identity and preserves reservation-time rule and
+recording destination metadata.
+
+## Highlights
+
+- Added stable `ruleUid` values that remain associated with rules across edits,
+  deletion of other rules, and rule index changes, while retaining compatibility
+  with legacy `ruleId` and index references.
+- Reservations now carry rule identity and recording destination metadata through
+  `reserves`, `reserves2`, and match history. Historical values are preserved
+  instead of being inferred from current rules or recording destination mappings.
+- Updated WUI rule and reservation associations to use stable rule identity,
+  preventing legacy index-based reservations from being counted for an unrelated
+  current rule. Index fallback remains available for legacy rules without a UID.
+- Consolidated permanent tests by behavior and moved temporary rule UID migration
+  tests out of the regular suite. The regular suite passed 137 tests across 30
+  suites; the temporary migration tests passed 3/3.
+
+# Chinachu 0.10.7-thorn.26
+
+This release improves episode and subtitle parsing in the scheduler.
+
+## Highlights
+
+- Improved episode detection for single, multi-episode, and range notation.
+- Improved subtitle extraction from program titles and descriptions.
+- Reduced false episode detection from season numbers and similar title text.
+- Preserved the original `fullTitle` for compatibility.
+- Improved low-storage handling and related notification/history processing.
+
+# Chinachu 0.10.7-thorn.25
+
+This release improves scheduler synchronization with Mirakurun EPG updates
+and reduces unnecessary periodic scheduler runs.
+
+## Highlights
+
+- Added scheduler synchronization with settled Mirakurun EPG gathering cycles.
+- Added recovery for missed EPG cycle notifications.
+- Added scheduler state and lightweight periodic preflight checks.
+- Reduced unnecessary full scheduler runs while retaining the periodic path as a fallback.
+
+# Chinachu 0.10.7-thorn.24
+
+This release removes the bundled FFmpeg 4.1.4 dependency and improves preview
+stream selection for current system FFmpeg environments.
+
+## Highlights
+
+- Removed the bundled FFmpeg 4.1.4 download and installation path.
+- Updated the installer to use system-provided `ffmpeg` and `ffprobe`.
+- Fixed preview generation when input stream index 0 is not a video stream.
+- Added safer handling for legacy and unknown repository-local FFmpeg binaries.
+- Expanded installer verification and regression coverage for FFmpeg handling.
+
+## Preview
+
+- Recording and recorded-program previews now select the first video stream
+  with `0:v:0` instead of assuming that input stream index `0:0` is video.
+- Fixed preview generation for transport streams where data, audio, or other
+  non-video streams appear before the video stream.
+- The change is compatible with both the previous bundled FFmpeg 4.1.4 and
+  current system FFmpeg versions.
+- This fixes a latent stream-selection assumption that became visible while
+  validating migration away from the bundled FFmpeg 4.1.4.
+
+## Installer / FFmpeg
+
+- Removed the legacy FFmpeg 4.1.4 static archive download, architecture-specific
+  archive selection, extraction, and repository-local installation path.
+- Removed creation of the legacy `avconv` and `avprobe` compatibility aliases.
+- Existing working system `ffmpeg` and `ffprobe` commands are used without
+  modifying system packages.
+- On Ubuntu and Linux Mint systems, the installer can offer to install the
+  `ffmpeg` package when the required commands are missing.
+- System package installation requires explicit user confirmation.
+- The installer does not run `apt update`, upgrade, or autoremove operations as
+  part of FFmpeg setup.
+- Recognized legacy repository-local FFmpeg 4.1.4 binaries are removed only
+  after system FFmpeg has been verified and the user explicitly confirms the
+  migration.
+- Unknown repository-local FFmpeg binaries are left unchanged and cause the
+  installer stage to stop safely.
+- Legacy cleanup is limited to `ffmpeg`, `ffprobe`, `avconv`, and `avprobe`;
+  other files from the old static archive are not modified.
+
+## Verification
+
+- Installer verification now checks the resolved `ffmpeg` and `ffprobe`
+  commands.
+- Both commands must be executable and successfully return version information.
+- Verification reports the resolved command paths and version information.
+- Repository-local overrides are detected so they cannot silently shadow the
+  intended system FFmpeg environment.
+
+## Testing
+
+- Added regression coverage for preview video-stream selection.
+- Added installer coverage for existing system FFmpeg detection.
+- Added coverage for package-installation decisions without invoking real APT,
+  sudo, or network operations.
+- Added coverage for legacy FFmpeg migration and unknown local binary protection.
+- Added verification coverage for resolved `ffmpeg` and `ffprobe` commands.
+
+# Chinachu 0.10.7-thorn.23
+
+This release improves WUI performance when handling large match histories.
+
+## Highlights
+
+- Optimized match history loading for large `match.json` files.
+- Added lightweight summary, list, and item access for match history.
+- Added an in-memory WUI cache for parsed match history data.
+- Reduced unnecessary transfer and parsing of the full match history.
+- Stabilized asynchronous runtime tests.
+
+## Match History / WUI
+
+- Added summary mode for retrieving match status counts and recent completed entries without transferring the full history.
+- Added list mode for loading a reduced representation of completed match history.
+- Added item mode for retrieving a single full match record when opening program details.
+- Updated the dashboard, recorded history list, and program detail views to use the lighter match APIs where appropriate.
+- Added a process-local parsed `match.json` cache in the WUI.
+- The cache is automatically reloaded when the source `match.json` changes.
+- A previously valid cache is retained if a reload encounters invalid JSON.
+- The original full `/api/match.json` response remains available for compatibility.
+
+## Performance / Maintenance
+
+- Large match histories no longer need to be fully transferred and parsed by the browser for routine dashboard, list, and detail operations.
+- Approximately 4,000 match-history entries have been verified in the current production environment without issue.
+- Around 6,000 entries may be used as a provisional maintenance guideline, but this is not a tested upper limit.
+- WUI memory usage still increases as the match history grows because the parsed history is cached in memory.
+
+## Testing
+
+- Reduced timing dependencies in external notification process tests.
+- Improved readiness handling for notification worker tests.
+- Made temporary operator test cleanup more tolerant of short-lived filesystem races.
+- Made recording-state polling tolerant of transient partial JSON reads during test execution.
+
+# Chinachu 0.10.7-thorn.22
+
+This release improves recorded-duration handling and PM2 service persistence.
+
+## Highlights
+
+- Added ffprobe-based recorded duration detection.
+- Improved recorded duration display in the WUI.
+- Fixed Local PM2 startup configuration so Chinachu can be restored automatically after an OS reboot.
+
+## Installer / PM2
+
+- Added verification and configuration of the Local PM2 systemd startup service.
+- Fixed a case where `pm2 save` succeeded but Chinachu was not automatically restored after an OS reboot.
+- Preserved the existing PM2 startup service during Chinachu cleanup so unrelated PM2 applications remain unaffected.
+
+## Recording
+
+- Added asynchronous ffprobe duration detection after recording completion.
+- Stores measured duration as `recordedDurationSeconds`.
+- ffprobe failures and timeouts do not prevent recording finalization.
+- Recording completion commands are not delayed by duration probing.
+- Improved handling of measured duration for uninterrupted and resumed recordings.
+
+## WUI
+
+- Recorded program details now prefer the measured file duration when available.
+- Recorded lists now prefer the measured file duration over the scheduled recording duration.
+- Head-cut estimation uses measured duration only for uninterrupted recordings.
+- Existing recordings without measured duration retain the previous fallback behavior.
+- Waits for private IPv4 availability during startup before starting the Open Server.
+- Exits with an error if automatic host detection still fails after the startup wait, allowing PM2 to recover the service.
+
+# Chinachu 0.10.7-thorn.21
+
+This release focuses on compatibility with current Node.js and Mirakurun environments,
+service management, WUI modernization, and recording reliability.
+
+## Highlights
+
+- Updated the runtime baseline for Node.js 24.
+- Updated Mirakurun compatibility to 4.1.3.
+- Improved installer and PM2 service setup for both current-user and legacy root-managed environments.
+- Modernized the WUI server and Socket.IO integration.
+- Improved recording recovery and shutdown behavior.
+- Added a generic external notification command interface.
+- Migrated CI from Travis CI to GitHub Actions.
+
+## Installer / PM2
+
+- Added a guided PM2 Service Setup flow.
+- Added current-user PM2 operation as the recommended mode.
+- Kept the legacy root-managed mode for existing environments.
+- Added safer PM2 persistence handling and cleanup.
+- Preserved unrelated PM2 applications, including existing Mirakurun processes.
+- Added PM2 log rotation setup support.
+- Improved runtime privilege handling and supplementary group initialization.
+
+## WUI
+
+- Consolidated WUI access around `wuiOpenServer`, `wuiOpenHost`, and `wuiOpenPort`.
+- Updated Socket.IO support for the current 4.x release.
+- Added safer automatic private IPv4 selection for the Open Server.
+- Removed the built-in Basic authentication, TLS/mTLS, GeoIP/XFF access control,
+  and mDNS advertisement paths.
+- For remote exposure, authentication and transport security should be provided externally,
+  such as through a VPN or reverse proxy.
+
+## Mirakurun
+
+- Updated Mirakurun to 4.1.3.
+- Centralized Mirakurun endpoint handling for TCP and Unix socket configurations.
+- Fixed DROP WATCH transport selection when using TCP endpoints.
+- Preserved support for standard and legacy Unix socket endpoint formats.
+
+## Recording
+
+- Fixed a thorn.20 regression that prevented in-progress rule-based recordings
+  from resuming after an operator restart.
+- Preserved the recording path across graceful restart recovery.
+- Improved handling of aborted preparations, interrupted streams, and recording retries.
+- Improved recorded ID collision handling.
+- Improved low-storage handling for active recordings and restart-pending recordings.
+
+## Notifications
+
+- Added `notificationCommand` as the preferred external notification interface.
+- Notification events are passed as structured UTF-8 JSON through standard input.
+- Added timeout and single-flight protection for notification processes.
+- `storageLowSpaceCommand` remains available as a compatibility fallback.
+
+## Compatibility / Maintenance
+
+- Updated `dateformat` while preserving legacy recorded filename behavior.
+- Consolidated dependency management around the root lockfile.
+- Migrated tests to the built-in Node.js test runner.
+- Replaced Travis CI with GitHub Actions.
