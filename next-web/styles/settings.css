@@ -84,6 +84,24 @@ textarea.settings-input { min-height: 86px; resize: vertical; font-family: ui-mo
 .settings-service-row small { color: var(--muted); font-size: 10px; }
 .settings-service-row label { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
 .settings-service-row label input { width: 62px; min-height: 32px; }
+.settings-clock .settings-field { padding: 11px 0; }
+.settings-clock .settings-field-title { flex-wrap: wrap; }
+.settings-clock .settings-field-title code { min-width: 0; overflow-wrap: anywhere; }
+.settings-clock .settings-field-help { min-height: 0; }
+.settings-clock .settings-field.is-wide .settings-field-control { min-width: 0; max-width: 100%; }
+.settings-clock-channel-controls { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.settings-clock-channel-controls .settings-input { flex: 1 1 0; width: 0; max-width: 100%; text-overflow: ellipsis; }
+.settings-clock-channel-controls .button { flex: 0 0 auto; white-space: nowrap; }
+.settings-clock-channel-controls + .settings-muted { display: block; margin-top: 7px; }
+.settings-clock-channel-description { display: block; margin-top: 5px; overflow-wrap: anywhere; }
+.settings-clock-channel-description[hidden] { display: none; }
+.settings-clock-guide { grid-column: 1/-1; padding-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.65; }
+.settings-clock-guide summary { cursor: pointer; color: var(--brand-strong); font-weight: var(--font-title-weight); }
+.settings-clock-guide > :first-child { margin-top: 0; }
+.settings-clock-guide h3 { margin: 16px 0 6px; color: var(--text); font-size: 13px; }
+.settings-clock-guide p { margin: 7px 0; }
+.settings-clock-guide pre { min-width: 0; max-width: 100%; margin: 0; padding: 11px 12px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-subtle); color: var(--text); font: 11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.settings-clock-guide .settings-clock-caution { margin-top: 15px; padding: 10px 11px; border: 1px solid color-mix(in srgb,var(--warning) 45%,var(--border)); border-radius: var(--radius-sm); background: color-mix(in srgb,var(--warning) 7%,var(--panel)); color: var(--text); }
 .settings-json-preview { grid-column: 1/-1; margin-top: 12px; }
 .settings-json-preview summary { cursor: pointer; color: var(--brand-strong); font-size: 12px; }
 .settings-json-preview pre { max-height: 460px; margin: 10px 0 0; padding: 12px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-subtle); color: var(--text); font: 11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -165,4 +183,6 @@ textarea.settings-input { min-height: 86px; resize: vertical; font-family: ui-mo
   .settings-change-list > div > span[aria-hidden] { display: none; }
   .settings-auth-copy { align-items: stretch; flex-direction: column; }
   .settings-auth-copy .button { width: 100%; }
+  .settings-clock-channel-controls { align-items: stretch; flex-direction: column; }
+  .settings-clock-channel-controls .settings-input,.settings-clock-channel-controls .button { width: 100%; flex-basis: auto; }
 }

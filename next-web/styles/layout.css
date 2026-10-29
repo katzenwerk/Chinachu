@@ -7,6 +7,8 @@
 .brand { position: relative; display: inline-flex; align-items: center; padding-right: 10px; color: inherit; font-size: 22px; font-weight: var(--font-logo-weight); letter-spacing: -.04em; line-height: 1; text-decoration: none; transform: translateY(-1px); }
 .brand:focus-visible { outline: 2px solid #d8f4e5; outline-offset: 4px; border-radius: 2px; }
 .brand-thorn { position: absolute; top: -4px; right: 0; width: 9px; height: 14px; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: square; stroke-linejoin: miter; }
+.server-clock { flex: 0 0 70px; width: 70px; color: rgba(255,255,255,.78); font-family: ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace; font-size: 14px; font-variant-numeric: tabular-nums; font-weight: var(--font-body-weight); letter-spacing: .01em; text-align: center; white-space: nowrap; }
+.server-clock.is-unsynchronized { color: rgba(255,255,255,.48); }
 .icon-button { position: relative; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; cursor: pointer; }
 .icon-button:hover { background: rgba(255,255,255,.16); }
 .header-page-title { display: flex; align-items: center; flex: 0 1 auto; min-width: 80px; max-width: 220px; height: 28px; padding-left: 18px; border-left: 1px solid rgba(255,255,255,.34); }
@@ -225,6 +227,10 @@
 
 @media (max-width:960px) {
   :root { --layout-page-inline: var(--space-5); }
+}
+
+@media (max-width:800px) {
+  .server-clock { display: none; }
 }
 
 @media (max-width:720px) {

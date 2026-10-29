@@ -81,6 +81,7 @@ export function createAppShell(root) {
             <path d="M2 1V17M2 4.5L10 9 2 13.5"/>
           </svg>
         </a>
+        <time class="server-clock is-unsynchronized" aria-label="サーバー時刻を取得中" title="サーバー時刻を取得中&#10;放送波時刻情報を取得中">--:--:--</time>
         <div class="header-page-title"><h1 id="page-title">ストレージ</h1></div>
       </div>
       <div class="header-page-actions" id="header-page-actions"></div>
@@ -378,6 +379,80 @@ export function createAppShell(root) {
   let currentNotificationIssues = [];
   let currentConnectionState = null;
   let currentRestartState = null;
+  const serverClock = root.querySelector('.server-clock');
+  let serverClockSync = null;
+  let serverClockTimer = null;
+
+  function formatServerClock(at, timeZone, timezoneOffsetMinutes) {
+    if (timeZone) {
+      try {
+        return new Intl.DateTimeFormat('ja-JP', {
+          timeZone, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+        }).format(new Date(at));
+      } catch (_) {}
+    }
+    const offset = Number.isFinite(timezoneOffsetMinutes) ? timezoneOffsetMinutes : 0;
+    const local = new Date(at - offset * 60000);
+    return [local.getUTCHours(), local.getUTCMinutes(), local.getUTCSeconds()]
+      .map(value => String(value).padStart(2, '0')).join(':');
+  }
+
+  function formatBroadcastClockObservedAt(value) {
+    const observedAt = new Date(value);
+    if (Number.isNaN(observedAt.getTime())) return null;
+    return observedAt.toLocaleString('ja-JP', {
+      timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    });
+  }
+
+  function describeBroadcastClock(clockState) {
+    if (clockState?.status === 'loading') {
+      return 'サーバー時刻を取得中\n放送波時刻情報を取得中';
+    }
+    if (clockState?.status !== 'ready') {
+      return 'サーバー時刻を同期できません\n放送波時刻情報を取得できません';
+    }
+    const clock = clockState.data?.broadcastClock;
+    if (!clock || clock.available !== true) {
+      return clock?.status === 'unobserved' ? '放送波時刻は未観測' : '放送波時刻情報を取得できません';
+    }
+    const success = clock?.lastSuccess;
+    const diffMs = success?.diffMs;
+    const observedAt = formatBroadcastClockObservedAt(success?.observedAt);
+    if (!Number.isFinite(diffMs) || observedAt === null) {
+      return `放送波時刻は未観測${clock?.status === 'disabled' ? '\n定期観測は無効です' : clock?.status === 'failed' ? '\n直近の観測に失敗しています' : ''}`;
+    }
+    const diffSeconds = diffMs / 1000;
+    const signedDifference = `${diffSeconds > 0 ? '+' : ''}${diffSeconds.toFixed(3)}秒`;
+    const direction = diffMs < 0 ? 'サーバーが遅い' : diffMs > 0 ? 'サーバーが進んでいる' : '差なし';
+    return [
+      '放送波との時刻差（最終成功観測値）',
+      `${signedDifference}（${direction}）`,
+      `最終観測：${observedAt}`,
+      ...(clock.status === 'disabled' ? ['定期観測は無効です'] : []),
+      ...(clock.status === 'failed' ? ['直近の観測に失敗しています'] : [])
+    ].join('\n');
+  }
+
+  function renderServerClock() {
+    clearTimeout(serverClockTimer);
+    serverClockTimer = null;
+    if (!serverClockSync) {
+      serverClock.textContent = '--:--:--';
+      serverClock.classList.add('is-unsynchronized');
+      serverClock.setAttribute('aria-label', 'サーバー時刻を同期できません');
+      serverClock.removeAttribute('datetime');
+      return;
+    }
+    const elapsed = performance.now() - serverClockSync.synchronizedAtPerformanceMs;
+    const serverNow = serverClockSync.synchronizedServerTimeMs + elapsed;
+    serverClock.textContent = formatServerClock(serverNow, serverClockSync.timeZone, serverClockSync.timezoneOffsetMinutes);
+    serverClock.classList.remove('is-unsynchronized');
+    serverClock.dateTime = new Date(serverNow).toISOString();
+    serverClock.setAttribute('aria-label', `サーバー時刻 ${serverClock.textContent}`);
+    serverClockTimer = setTimeout(renderServerClock, Math.max(100, 1020 - (serverNow % 1000)));
+  }
 
   fetch('/api/diagnostics.json', {
     headers: { Accept: 'application/json' }
@@ -690,6 +765,13 @@ export function createAppShell(root) {
         });
       } : null;
     },
+    setServerClockState(clockState) {
+      serverClock.title = describeBroadcastClock(clockState);
+      const data = clockState?.status === 'ready' ? clockState.data : null;
+      serverClockSync = data && Number.isFinite(data.synchronizedServerTimeMs) &&
+        Number.isFinite(data.synchronizedAtPerformanceMs) ? data : null;
+      renderServerClock();
+    },
     setPageActions(element = null) {
       const host = root.querySelector('#header-page-actions');
       host.replaceChildren(...(element ? [element] : []));
@@ -700,6 +782,11 @@ export function createAppShell(root) {
     },
     setConnectionState(connectionState) {
       currentConnectionState = connectionState;
+      if (connectionState?.status === 'offline') {
+        serverClockSync = null;
+        serverClock.title = 'サーバー時刻を同期できません\n放送波時刻情報を取得できません';
+        renderServerClock();
+      }
       renderConnectionOverlay();
     },
     setServiceRestartState(restartState) {

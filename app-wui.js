@@ -23,6 +23,7 @@ const SERIES_PROGLOOKUP_CACHE_FILE = __dirname + '/data/proglookup-cache-indepen
 const SERIES_MANUAL_OVERRIDE_FILE = __dirname + '/data/series-overrides.json';
 const WUI_CONFIG_FILE = __dirname + '/data/wui-config.json';
 const STORAGE_STATE_FILE = __dirname + '/data/storage-state.json';
+const BROADCAST_CLOCK_STATE_FILE = __dirname + '/data/broadcast-clock-state.json';
 const RECORDED_THUMBNAIL_DIR = __dirname + '/data/thumbnails';
 const SCHEDULER_STATE_FILE = __dirname + '/data/scheduler-state.json';
 const SCHEDULER_LOG_FILE = __dirname + '/log/scheduler';
@@ -1102,7 +1103,8 @@ function httpServerMain(req, res, query) {
 					RECORDED_DATA_FILE : RECORDED_DATA_FILE,
 						MATCH_DATA_FILE    : MATCH_DATA_FILE,
 						WUI_CONFIG_FILE    : WUI_CONFIG_FILE,
-					STORAGE_STATE_FILE : STORAGE_STATE_FILE,
+						STORAGE_STATE_FILE : STORAGE_STATE_FILE,
+						BROADCAST_CLOCK_STATE_FILE: BROADCAST_CLOCK_STATE_FILE,
 					STORAGE_REFRESH_SOCKET: STORAGE_REFRESH_SOCKET,
 					RECORDED_THUMBNAIL_DIR: RECORDED_THUMBNAIL_DIR,
 					RECORDED_THUMBNAIL_SOCKET: RECORDED_THUMBNAIL_SOCKET,

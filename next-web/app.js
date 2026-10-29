@@ -30,11 +30,13 @@ import { loadServiceControl } from './services/service-control-client.js';
 import { serviceGeneration, serviceGenerationChanged } from './services/service-restart-model.js';
 import { completePendingRestart, subscribePendingRestart } from './services/service-restart-store.js';
 import { initializeAuthentication, logout } from './services/auth-client.js';
+import { refreshBroadcastClock, subscribeBroadcastClock } from './services/broadcast-clock-store.js';
 
 const appRoot = document.querySelector('#app');
 const authentication = await initializeAuthentication(appRoot);
 const shell = createAppShell(appRoot);
 shell.setAuthentication(authentication.enabled === true, logout);
+const unsubscribeBroadcastClock = subscribeBroadcastClock(state => shell.setServerClockState(state));
 window.addEventListener('chinachu-auth-state', event => shell.setAuthentication(event.detail?.enabled === true, logout));
 const uninstallProgramDetailDialogLinks = installProgramDetailDialogLinks();
 setWuiConnectionSocketSubscriber(subscribeRealtimeConnection);
@@ -192,6 +194,7 @@ const unsubscribeRestartState = subscribePendingRestart(restartState => {
 shell.setConnectionRetryHandler(checkWuiConnectionNow);
 const unsubscribeWuiConnection = subscribeWuiConnection(connectionState => {
   shell.setConnectionState(connectionState);
+  if (connectionState.status === 'connected') refreshBroadcastClock();
   const event = connectionState.transition;
   if (!event || event.id === lastConnectionTransition) return;
   lastConnectionTransition = event.id;
@@ -294,6 +297,7 @@ window.addEventListener('pagehide', event => {
   unsubscribeNotifications();
   unsubscribeWuiConnection();
   unsubscribeRestartState();
+  unsubscribeBroadcastClock();
   uninstallProgramDetailDialogLinks();
   clearTimeout(restartPollTimer);
 });

@@ -1,4 +1,4 @@
-import { loadConfig, loadMirakurunServices, loadRuntimeMode, saveConfig } from '../services/config-client.js';
+import { loadClockRuntime, loadConfig, loadMirakurunServices, loadRuntimeMode, saveConfig } from '../services/config-client.js';
 import {
   beginTotpSetup,
   changeAdminPassword,
@@ -24,7 +24,8 @@ import QrCreator from '../vendor/qr-creator.es6.min.js';
 
 const TABS = [
   ['basic', '基本設定'], ['recording', '録画設定'], ['storage', 'Storage'],
-  ['history', '履歴管理'], ['services', 'サービス'], ['series', 'シリーズ'], ['auth', 'ログイン認証'], ['advanced', '詳細設定']
+  ['history', '履歴管理'], ['services', 'サービス'], ['series', 'シリーズ'], ['auth', 'ログイン認証'],
+  ['clock', '時計'], ['advanced', '詳細設定']
 ];
 
 const FIELD = {
@@ -50,6 +51,10 @@ const FIELD = {
   matchRetentionDays: { label: '予約・録画照合履歴の保持期間', type: 'number', integer: true, min: 0 },
   reserves2RetentionDays: { label: '予約履歴の保持期間', type: 'number', integer: true, min: 0 },
   recordedHistoryRetentionDays: { label: '録画済み履歴の保持期間', type: 'number', integer: true, min: 0 },
+  broadcastClockIntervalHours: {
+    label: '確認間隔', type: 'number', integer: true,
+    select: [3, 6, 12, 24].map(value => ({ value: String(value), label: `${value}時間ごと` }))
+  },
   wuiOpenHost: { label: '接続を受け付けるIPアドレス', type: 'text', empty: 'null' },
   wuiOpenPort: { label: 'ポート番号', type: 'number', integer: true, min: 1 }
 };
@@ -58,6 +63,22 @@ function valueText(value) {
   if (value === undefined || value === null) return '';
   if (typeof value === 'object') return JSON.stringify(value, null, 2);
   return String(value);
+}
+
+function shellQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
+function broadcastClockMirakurunArgument(value) {
+  const configured = String(value || '').trim();
+  if (/^https?:\/\//.test(configured)) return '--mirakurun-url ' + shellQuote(configured);
+  const socket = configured.match(/^http\+unix:\/\/([^/]+)\/?$/);
+  if (!socket) return null;
+  try {
+    return '--mirakurun-socket ' + shellQuote(decodeURIComponent(socket[1]));
+  } catch (_) {
+    return null;
+  }
 }
 
 function card(title, description) {
@@ -135,9 +156,12 @@ export function renderSettingsPage(container) {
   let original = null;
   let draft = null;
   let runtimeMode = null;
+  let clockRuntime = {};
   let authSettings = null;
   let activeTab = 'basic';
   let services = null;
+  let broadcastClockChannels = null;
+  let broadcastClockChannelsRequest = null;
   const fieldErrors = new Map();
   const dependentUpdates = [];
 
@@ -150,11 +174,16 @@ export function renderSettingsPage(container) {
       return { error };
     }
   );
-  Promise.all([loadConfig(controller.signal), loadRuntimeMode(controller.signal), authenticationRequest]).then(([config, mode, authentication]) => {
+  const clockRuntimeRequest = loadClockRuntime(controller.signal).catch(error => {
+    if (error?.name === 'AbortError') throw error;
+    return {};
+  });
+  Promise.all([loadConfig(controller.signal), loadRuntimeMode(controller.signal), clockRuntimeRequest, authenticationRequest]).then(([config, mode, clock, authentication]) => {
     if (disposed) return;
     original = cloneConfig(config);
     draft = cloneConfig(config);
     runtimeMode = mode;
+    clockRuntime = clock;
     authSettings = authentication.value || { loadError: authentication.error?.message || '認証状態を取得できませんでした。' };
     render();
   }).catch(error => {
@@ -620,6 +649,171 @@ export function renderSettingsPage(container) {
     return tab;
   }
 
+  function normalizeBroadcastClockChannels(raw) {
+    const channels = new Map();
+    raw.forEach(service => {
+      const channel = service?.channel;
+      if (!channel || channel.type !== 'GR' || (typeof channel.channel !== 'string' && typeof channel.channel !== 'number')) return;
+      const key = String(channel.channel);
+      const names = channels.get(key)?.names || new Set();
+      const name = String(channel.name || service.name || '').trim();
+      if (name) names.add(name);
+      channels.set(key, { channel: key, names });
+    });
+    return [...channels.values()].sort((left, right) => left.channel.localeCompare(right.channel, 'ja', { numeric: true }));
+  }
+
+  function drawBroadcastClockChannels(select, status) {
+    const selected = typeof draft.broadcastClockGrChannel === 'string' ? draft.broadcastClockGrChannel : '';
+    select.replaceChildren();
+    const automatic = document.createElement('option');
+    automatic.value = '';
+    automatic.textContent = '自動（空きチューナーで受信可能な最初のGR局）';
+    select.append(automatic);
+    if (broadcastClockChannels) {
+      broadcastClockChannels.forEach(item => {
+        const option = document.createElement('option');
+        option.value = item.channel;
+        const names = [...item.names];
+        option.textContent = `GR/${item.channel}${names.length ? ` — ${names[0]}${names.length > 1 ? ` ほか${names.length - 1}局` : ''}` : ''}`;
+        option.title = `GR/${item.channel}${names.length ? ` — ${names.join(' / ')}` : ''}`;
+        select.append(option);
+      });
+    }
+    if (selected && ![...select.options].some(option => option.value === selected)) {
+      const current = document.createElement('option');
+      current.value = selected;
+      current.textContent = `GR/${selected}（現在の設定・一覧では未確認）`;
+      select.append(current);
+    }
+    select.value = selected;
+    updateBroadcastClockChannelDescription(select);
+    if (broadcastClockChannels) status.textContent = `MirakurunからGR物理チャンネル ${broadcastClockChannels.length}件を読み込みました。`;
+  }
+
+  function updateBroadcastClockChannelDescription(select) {
+    const description = select.closest('.settings-field-control').querySelector('.settings-clock-channel-description');
+    const channel = broadcastClockChannels?.find(item => item.channel === select.value);
+    description.textContent = channel && channel.names.size ? `GR/${channel.channel}: ${[...channel.names].join(' / ')}` : '';
+    description.hidden = !description.textContent;
+    select.title = select.selectedOptions[0]?.title || select.selectedOptions[0]?.textContent || '';
+  }
+
+  async function loadBroadcastClockChannels(select, status, button) {
+    if (broadcastClockChannelsRequest) return broadcastClockChannelsRequest;
+    button.disabled = true;
+    status.textContent = 'MirakurunからGRチャンネル一覧を読み込んでいます…';
+    broadcastClockChannelsRequest = loadMirakurunServices(draft.mirakurunPath, controller.signal).then(raw => {
+      broadcastClockChannels = normalizeBroadcastClockChannels(raw);
+      if (!disposed && select.isConnected) drawBroadcastClockChannels(select, status);
+    }).catch(error => {
+      if (error?.name === 'AbortError') return;
+      if (!disposed && status.isConnected) status.textContent = `${error.message}。自動選択または現在保存されている物理チャンネルはそのまま利用できます。`;
+    }).finally(() => {
+      broadcastClockChannelsRequest = null;
+      if (!disposed && button.isConnected) button.disabled = draft.broadcastClockEnabled !== true;
+    });
+    return broadcastClockChannelsRequest;
+  }
+
+  function createClockTab() {
+    const tab = sectionFor('clock');
+    tab.classList.add('settings-clock');
+    const monitor = card('放送波との時刻差を確認', '放送波の時刻とサーバー時刻の差を確認する機能です。ONにしてもOSの時刻は自動補正しません。NTPを利用できる環境では通常OFFのままで構いません。');
+    const enabled = bindBoolean('broadcastClockEnabled', '定期的に時刻差を確認', '録画や直近予約、チューナーの空き状況を確認し、安全条件を満たす場合だけ観測します。初期状態はOFFです。');
+    const interval = bindValueField('broadcastClockIntervalHours', '日本時間の02:40を基準に、この間隔で確認します。録画などで実行できない場合は見送ります。', { compact: true });
+    if (draft.broadcastClockIntervalHours === undefined) interval.input.value = '3';
+
+    const channel = fieldShell('基準GRチャンネル', 'broadcastClockGrChannel', '自動では空きチューナーで受信可能な最初のGR局を使用します。局ごとの差を避けたい場合は、同じ物理チャンネルを固定してください。', { wide: true });
+    const channelSelect = document.createElement('select');
+    channelSelect.className = 'settings-input';
+    channelSelect.dataset.broadcastClockChannel = 'true';
+    const channelControls = document.createElement('div');
+    channelControls.className = 'settings-clock-channel-controls';
+    const load = document.createElement('button');
+    load.className = 'button';
+    load.type = 'button';
+    load.textContent = 'GRチャンネル一覧を読み込む';
+    const channelStatus = document.createElement('span');
+    channelStatus.className = 'settings-muted';
+    channelStatus.textContent = '未読込です。自動選択は一覧を読み込まなくても利用できます。';
+    const channelDescription = document.createElement('span');
+    channelDescription.className = 'settings-muted settings-clock-channel-description';
+    channelSelect.addEventListener('change', () => {
+      setConfigValue(draft, 'broadcastClockGrChannel', channelSelect.value, { remove: channelSelect.value === '' });
+      updateBroadcastClockChannelDescription(channelSelect);
+      markChanged();
+    });
+    load.addEventListener('click', () => loadBroadcastClockChannels(channelSelect, channelStatus, load));
+    channelControls.append(channelSelect, load);
+    channel.control.append(channelControls, channelStatus, channelDescription);
+    drawBroadcastClockChannels(channelSelect, channelStatus);
+    dependentUpdates.push(() => {
+      const disabled = draft.broadcastClockEnabled !== true;
+      [interval, channel].forEach(field => field.wrap.classList.toggle('is-disabled', disabled));
+      interval.input.disabled = disabled;
+      channelSelect.disabled = disabled;
+      load.disabled = disabled || broadcastClockChannelsRequest !== null;
+    });
+    monitor.body.append(enabled.wrap, interval.wrap, channel.wrap);
+
+    const adjustment = card('手動操作', '確認コマンドは時刻差の確認だけを行い、補正コマンドはOSの時刻を変更します。必要な場合だけLinux端末から実行してください。');
+    const notes = document.createElement('details');
+    notes.className = 'settings-clock-guide';
+    const summary = document.createElement('summary');
+    summary.textContent = '手動で時刻を確認・補正する';
+    const intro = document.createElement('p');
+    intro.textContent = '補正を使う前にchronyを導入し、/etc/chrony/chrony.confへ manual を追加してchronyを再起動してください。必要に応じて sudo chronyc manual on で手動補正を有効にします。';
+    const thresholdNote = document.createElement('p');
+    thresholdNote.textContent = '--min-adjust-sec 1 は、サーバー時刻と放送波時刻の差の絶対値が1秒以上の場合だけ補正し、1秒未満の場合は補正せず確認のみで終了する指定です。';
+    const checkTitle = document.createElement('h3');
+    checkTitle.textContent = '確認のみ（GRチャンネル自動選択）';
+    const check = document.createElement('pre');
+    const adjustTitle = document.createElement('h3');
+    adjustTitle.textContent = '時刻補正（GR/13を指定）';
+    const adjust = document.createElement('pre');
+    const cronTitle = document.createElement('h3');
+    cronTitle.textContent = 'sudo crontabへの登録例（6時間ごと・自動選択）';
+    const cronLead = document.createElement('p');
+    cronLead.textContent = 'これはWUIの定期観測とは別に、OS時刻の補正を定期実行する設定です。必要な場合だけ sudo crontab -e を実行し、次のどちらか1行を追加します。表示中の例には、このChinachuとMirakurunの実際のパスを反映しています。';
+    const cron = document.createElement('pre');
+    const fixedCronTitle = document.createElement('h3');
+    fixedCronTitle.textContent = 'sudo crontabへの登録例（6時間ごと・GR/13指定）';
+    const fixedCron = document.createElement('pre');
+    const warning = document.createElement('p');
+    warning.className = 'settings-clock-caution';
+    warning.textContent = '安全確認：録画中、または次の予約が近い場合（目安10分）は、確認・補正を行わず終了します。MirakurunのGR対応チューナーに空きがない場合や、状態を確認できない場合も実行しません。';
+    const updateExamples = () => {
+      const root = typeof clockRuntime.chinachuRoot === 'string' ? clockRuntime.chinachuRoot : '';
+      const node = typeof clockRuntime.nodeExecutable === 'string' ? clockRuntime.nodeExecutable : '';
+      const mirakurunArgument = broadcastClockMirakurunArgument(draft.mirakurunPath);
+      if (!root || !node || !mirakurunArgument) {
+        const unavailable = '実行環境のパスを取得できないため、コマンド例を生成できません。WUIの再起動後に再確認してください。';
+        check.textContent = unavailable;
+        adjust.textContent = unavailable;
+        cron.textContent = unavailable;
+        fixedCron.textContent = unavailable;
+        return;
+      }
+      const executable = shellQuote(node) + ' ' + shellQuote(root + '/tools/mirakurun-broadcast-clock.js');
+      const common = mirakurunArgument + ' --priority 0 --chinachu-guard-dir ' + shellQuote(root);
+      const adjustOptions = '--use-chrony --adjust --min-adjust-sec 1 --plain';
+      check.textContent = executable + ' ' + common + ' --plain';
+      adjust.textContent = 'sudo ' + executable + ' ' + common + ' --gr-channel 13 ' + adjustOptions;
+      cron.textContent = '17 */6 * * * cd ' + shellQuote(root) + ' && ' + executable + ' ' + common + ' ' + adjustOptions + ' >> /var/log/chinachu-broadcast-clock.log 2>&1';
+      fixedCron.textContent = '17 */6 * * * cd ' + shellQuote(root) + ' && ' + executable + ' ' + common + ' --gr-channel 13 ' + adjustOptions + ' >> /var/log/chinachu-broadcast-clock.log 2>&1';
+    };
+    dependentUpdates.push(updateExamples);
+    const cronExamples = document.createElement('details');
+    const cronSummary = document.createElement('summary');
+    cronSummary.textContent = '管理者向け：補正を定期実行する例';
+    cronExamples.append(cronSummary, cronLead, cronTitle, cron, fixedCronTitle, fixedCron);
+    notes.append(summary, intro, thresholdNote, checkTitle, check, adjustTitle, adjust, warning, cronExamples);
+    adjustment.body.append(notes);
+    tab.append(monitor.section, adjustment.section);
+    return tab;
+  }
+
   function createAdvancedTab() {
     const tab = sectionFor('advanced');
     const preview = card('保存内容の確認', '保存前の設定全体を確認できます。画面に入力欄がない設定は、ここで内容を確認できます。');
@@ -973,6 +1167,7 @@ export function renderSettingsPage(container) {
       draft = cloneConfig(original);
       fieldErrors.clear();
       services = null;
+      broadcastClockChannels = null;
       dialog.close();
       render();
     });
@@ -997,10 +1192,22 @@ export function renderSettingsPage(container) {
         activeTab = key;
         tabs.querySelectorAll('[role="tab"]').forEach(item => item.setAttribute('aria-selected', String(item === button)));
         content.querySelectorAll('.settings-tab-panel').forEach(panel => { panel.hidden = panel.dataset.tab !== key; });
+        if (key === 'clock' && draft.broadcastClockEnabled === true && broadcastClockChannels === null) {
+          const select = content.querySelector('[data-broadcast-clock-channel]');
+          const loadButton = select?.parentElement?.querySelector('button');
+          const status = select?.parentElement?.nextElementSibling;
+          if (select && loadButton && status) loadBroadcastClockChannels(select, status, loadButton);
+        }
       });
       tabs.append(button);
     });
-    content.append(createBasicTab(), createRecordingTab(), createStorageTab(), createHistoryTab(), createServicesTab(), createSeriesTab(), createAuthTab(), createAdvancedTab());
+    content.append(createBasicTab(), createRecordingTab(), createStorageTab(), createHistoryTab(), createServicesTab(), createSeriesTab(), createAuthTab(), createClockTab(), createAdvancedTab());
+    if (activeTab === 'clock' && draft.broadcastClockEnabled === true) {
+      const select = content.querySelector('[data-broadcast-clock-channel]');
+      const button = select?.parentElement?.querySelector('button');
+      const status = select?.parentElement?.nextElementSibling;
+      if (select && button && status) loadBroadcastClockChannels(select, status, button);
+    }
     container.querySelector('.settings-save').addEventListener('click', openSaveDialog);
     container.querySelector('.settings-discard').addEventListener('click', openDiscardDialog);
     dependentUpdates.forEach(update => update());

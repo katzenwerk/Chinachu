@@ -3,6 +3,7 @@ import { subscribeRecordedNotifications } from './realtime-client.js';
 import { subscribeRecordingData } from './recording-store.js';
 import { buildStorageWarnings } from './storage-model.js';
 import { subscribeStorageData } from './storage-store.js';
+import { subscribeBroadcastClock } from './broadcast-clock-store.js';
 import { loadRecordedThumbnailStatus, recordedThumbnailImageUrl } from './recorded-thumbnail-client.js';
 import { programDetailUrl } from './program-detail-client.js';
 
@@ -16,7 +17,10 @@ let activitySequence = 0;
 let unsubscribeStorage = null;
 let unsubscribeRecording = null;
 let unsubscribeRecorded = null;
+let unsubscribeBroadcastClockState = null;
 let recordedRefresh = null;
+let storageIssues = [];
+let broadcastClockIssues = [];
 const completionWaits = new Map();
 const THUMBNAIL_STATUS_INTERVAL_MS = 1000;
 const THUMBNAIL_STATUS_MAX_CHECKS = 95;
@@ -37,6 +41,14 @@ function replaceIssues(issues, { track = true } = {}) {
   emit();
 }
 
+function publishIssues(options) {
+  replaceIssues(
+    [...storageIssues, ...broadcastClockIssues]
+      .sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name, 'ja')),
+    options
+  );
+}
+
 function handleStorageState(storageState) {
   if (storageState.data === null && storageState.status !== 'error') return;
   const issues = storageState.data === null ? [] : buildStorageWarnings(storageState.data, Date.now());
@@ -51,10 +63,41 @@ function handleStorageState(storageState) {
       href: '#storage'
     });
   }
-  replaceIssues(
-    issues.sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name, 'ja')),
-    { track: storageState.data !== null }
-  );
+  storageIssues = issues;
+  publishIssues({ track: storageState.data !== null });
+}
+
+function formatBroadcastObservedAt(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '不明';
+  return date.toLocaleString('ja-JP', {
+    timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+  });
+}
+
+function handleBroadcastClockState(clockState) {
+  const clock = clockState.data?.broadcastClock;
+  const success = clock?.lastSuccess;
+  const diffMs = Number(success?.diffMs);
+  if (!clock || clock.warningActive !== true || !Number.isFinite(diffMs)) {
+    broadcastClockIssues = [];
+    publishIssues({ track: clockState.status === 'ready' });
+    return;
+  }
+  const direction = diffMs < 0 ? '遅れています' : '進んでいます';
+  const seconds = Math.max(3, Math.round(Math.abs(diffMs) / 1000));
+  const failed = clock.status === 'failed';
+  broadcastClockIssues = [{
+    id: 'broadcast-clock-drift',
+    name: 'サーバー時計',
+    level: 'warning',
+    priority: 2,
+    message: '時刻ずれを検出しました',
+    detail: `サーバー時計が放送波より約${seconds}秒${direction}。録画開始時刻に影響する可能性があります。` +
+      ` 最終成功観測：${formatBroadcastObservedAt(success.observedAt)}${failed ? '（直近の観測は失敗）' : ''}`,
+    href: '#log'
+  }];
+  publishIssues({ track: clockState.status === 'ready' });
 }
 
 function programId(program) {
@@ -191,6 +234,7 @@ function start() {
   unsubscribeStorage = subscribeStorageData(handleStorageState);
   unsubscribeRecording = subscribeRecordingData(handleRecordingState);
   unsubscribeRecorded = subscribeRecordedNotifications(refreshRecorded);
+  unsubscribeBroadcastClockState = subscribeBroadcastClock(handleBroadcastClockState);
   refreshRecorded();
 }
 
@@ -199,9 +243,11 @@ function stopIfUnused() {
   unsubscribeStorage();
   unsubscribeRecording();
   unsubscribeRecorded();
+  unsubscribeBroadcastClockState();
   unsubscribeStorage = null;
   unsubscribeRecording = null;
   unsubscribeRecorded = null;
+  unsubscribeBroadcastClockState = null;
   completionWaits.forEach(({ controller }) => controller.abort());
   completionWaits.clear();
 }

@@ -16,6 +16,7 @@ const KNOWN_KEYS = new Set([
   'reserves2RetentionDays', 'recordedHistoryRetentionDays', 'recordingResultCsvEnabled',
   'excludeServices', 'serviceOrder',
   'wuiOpenServer', 'wuiOpenHost', 'wuiOpenPort', 'wuiBlockGlobalAccess',
+  'broadcastClockEnabled', 'broadcastClockIntervalHours', 'broadcastClockGrChannel',
   'seriesUseSyobocal'
 ]);
 
@@ -148,8 +149,18 @@ export function validateConfig(config) {
   if (config.storageLowSpaceAction !== undefined && !['stop-new', 'stop', 'remove'].includes(config.storageLowSpaceAction)) {
     errors.push('容量不足時の処置が不正です。');
   }
+  if (config.broadcastClockEnabled !== undefined && typeof config.broadcastClockEnabled !== 'boolean') {
+    errors.push('broadcastClockEnabledは真偽値で指定してください。');
+  }
   if (config.seriesUseSyobocal !== undefined && typeof config.seriesUseSyobocal !== 'boolean') {
     errors.push('seriesUseSyobocalは真偽値で指定してください。');
+  }
+  if (config.broadcastClockIntervalHours !== undefined && ![3, 6, 12, 24].includes(config.broadcastClockIntervalHours)) {
+    errors.push('broadcastClockIntervalHoursは3、6、12、24のいずれかで指定してください。');
+  }
+  if (config.broadcastClockGrChannel !== undefined && config.broadcastClockGrChannel !== null &&
+      (typeof config.broadcastClockGrChannel !== 'string' || config.broadcastClockGrChannel.trim() === '')) {
+    errors.push('broadcastClockGrChannelはnullまたは空でない文字列で指定してください。');
   }
   const nonNegativeIntegers = ['recordedStorageWakeupBeforeSec', 'matchRetentionDays', 'reserves2RetentionDays', 'recordedHistoryRetentionDays'];
   nonNegativeIntegers.forEach(key => {

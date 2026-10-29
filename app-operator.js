@@ -21,6 +21,8 @@ const STORAGE_STATE_FILE  = __dirname + '/data/storage-state.json';
 const RECORDED_THUMBNAIL_DIR = __dirname + '/data/thumbnails';
 const SCHEDULER_STATE_FILE = __dirname + '/data/scheduler-state.json';
 const LEGACY_SCHEDULER_STATE_FILE = __dirname + '/data/epg-scheduler-state.json';
+const BROADCAST_CLOCK_STATE_FILE = __dirname + '/data/broadcast-clock-state.json';
+const BROADCAST_CLOCK_TOOL = __dirname + '/tools/mirakurun-broadcast-clock.js';
 
 // 標準モジュールのロード
 const path = require('path');
@@ -139,6 +141,25 @@ const prepReserveCheckIntervalTime = getPrepReserveCheckIntervalTime();// 準備
 const recordedDurationProbeTimeoutMs = getRecordedDurationProbeTimeoutMs();// 録画済みTSのffprobe timeout
 const TS_DROP_LOG_INTERVAL_MS = 30 * 1000;
 const TS_DROP_OVERLOAD_RATIO = 0.25;
+const BROADCAST_CLOCK_RESERVE_GUARD_MS = 10 * 60 * 1000;
+const BROADCAST_CLOCK_TIMEOUT_MS = 60 * 1000;
+const BROADCAST_CLOCK_WARNING_MS = 3000;
+const BROADCAST_CLOCK_SAMPLES = 5;
+const BROADCAST_CLOCK_PRIORITY = 0;
+const BROADCAST_CLOCK_JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const BROADCAST_CLOCK_ENABLED = config.broadcastClockEnabled === true;
+const BROADCAST_CLOCK_INTERVAL_HOURS = [ 3, 6, 12, 24 ].includes(Number(config.broadcastClockIntervalHours))
+	? Number(config.broadcastClockIntervalHours)
+	: 3;
+const BROADCAST_CLOCK_GR_CHANNEL = typeof config.broadcastClockGrChannel === 'string' && config.broadcastClockGrChannel.trim() !== ''
+	? config.broadcastClockGrChannel.trim()
+	: null;
+const BROADCAST_CLOCK_SLOT_HOURS = (() => {
+	const hours = [];
+	for (let hour = 2; hour < 24; hour += BROADCAST_CLOCK_INTERVAL_HOURS) hours.push(hour);
+	return hours;
+})();
+const BROADCAST_CLOCK_SLOT_MINUTES = [ 40, 42, 44, 46, 48 ];
 
 
 // 録画境界の準備猶予を取得する
@@ -385,6 +406,11 @@ let reserveCheckTimer = null;
 let operatorInterval = null;
 let periodicPreflightPending = false;
 let shutdownStarted = false;
+let broadcastClockTimer = null;
+let broadcastClockProcess = null;
+let broadcastClockChecking = false;
+let broadcastClockState = null;
+let broadcastClockStateWritable = true;
 const activeRecordingOutputs = new Set();
 const activeDurationProbes = new Set();
 const recordedThumbnailGenerator = recordedThumbnail.createGenerator({
@@ -461,6 +487,7 @@ function reserveCheckLoop() {
 	}
 
 	clock = Date.now();
+	abortBroadcastClockObservationIfNeeded();
 
 	wakeReservedRecordedStorage();
 
@@ -821,6 +848,7 @@ function shutdownOperator(signal) {
 		clearInterval(operatorInterval);
 		operatorInterval = null;
 	}
+	stopBroadcastClockMonitor();
 	if (storageRefreshServer) {
 		storageRefreshServer.close();
 		storageRefreshServer = null;
@@ -1758,6 +1786,428 @@ function getMirakurunJson(endpoint, timeoutMs) {
 			});
 		}
 	});
+}
+
+function readBroadcastClockState() {
+	try {
+		const state = JSON.parse(fs.readFileSync(BROADCAST_CLOCK_STATE_FILE, 'utf8'));
+		if (!state || state.schemaVersion !== 1 || !Number.isFinite(state.nextAttemptAt) || typeof state.warningActive !== 'boolean') {
+			throw new Error('invalid state');
+		}
+		const lastSuccess = getBroadcastClockLastSuccess(state);
+		if (lastSuccess) state.lastSuccess = lastSuccess;
+		state.warningActive = lastSuccess ? isBroadcastClockWarning(lastSuccess) : false;
+		return state;
+	} catch (error) {
+		if (error.code === 'ENOENT') {
+			return null;
+		}
+		broadcastClockStateWritable = false;
+		operatorLog('[BroadcastClock] ERROR: state read failed; existing file will not be overwritten: ' + error.message);
+		return null;
+	}
+}
+
+function getBroadcastClockDiffMs(result) {
+	if (result && Number.isFinite(result.diffMs)) return Number(result.diffMs);
+	if (result && Number.isFinite(result.diffSeconds)) return Number(result.diffSeconds) * 1000;
+	return null;
+}
+
+function isBroadcastClockSuccess(result) {
+	return !!result && Number.isFinite(getBroadcastClockDiffMs(result)) &&
+		Number.isFinite(Date.parse(result.observedAt)) &&
+		['TDT', 'TOT'].includes(result.source) && Number(result.sampleCount) >= BROADCAST_CLOCK_SAMPLES;
+}
+
+function getBroadcastClockLastSuccess(state) {
+	if (isBroadcastClockSuccess(state && state.lastSuccess)) return state.lastSuccess;
+	if (isBroadcastClockSuccess(state && state.lastResult)) return state.lastResult;
+	return null;
+}
+
+function isBroadcastClockWarning(result) {
+	const diffMs = getBroadcastClockDiffMs(result);
+	return diffMs !== null && (diffMs <= -BROADCAST_CLOCK_WARNING_MS || diffMs >= BROADCAST_CLOCK_WARNING_MS);
+}
+
+function getBroadcastClockJstParts(at) {
+	const date = new Date(Number(at) + BROADCAST_CLOCK_JST_OFFSET_MS);
+	return {
+		year: date.getUTCFullYear(),
+		month: date.getUTCMonth(),
+		date: date.getUTCDate(),
+		hour: date.getUTCHours(),
+		minute: date.getUTCMinutes()
+	};
+}
+
+function getBroadcastClockSlotKey(at) {
+	const parts = getBroadcastClockJstParts(at);
+	if (!BROADCAST_CLOCK_SLOT_HOURS.includes(parts.hour) || parts.minute < 40 || parts.minute > 49) return null;
+	return [
+		parts.year,
+		String(parts.month + 1).padStart(2, '0'),
+		String(parts.date).padStart(2, '0'),
+		String(parts.hour).padStart(2, '0')
+	].join('-');
+}
+
+function getNextBroadcastClockAttempt(now, state) {
+	const parts = getBroadcastClockJstParts(now);
+	const lastSuccess = getBroadcastClockLastSuccess(state);
+	const completedSlot = lastSuccess ? getBroadcastClockSlotKey(Date.parse(lastSuccess.observedAt)) : null;
+	for (let dayOffset = 0; dayOffset < 3; dayOffset++) {
+		for (let h = 0; h < BROADCAST_CLOCK_SLOT_HOURS.length; h++) {
+			for (let m = 0; m < BROADCAST_CLOCK_SLOT_MINUTES.length; m++) {
+				const candidate = Date.UTC(
+					parts.year,
+					parts.month,
+					parts.date + dayOffset,
+					BROADCAST_CLOCK_SLOT_HOURS[h] - 9,
+					BROADCAST_CLOCK_SLOT_MINUTES[m]
+				);
+				if (candidate <= now) continue;
+				if (completedSlot && getBroadcastClockSlotKey(candidate) === completedSlot) continue;
+				return candidate;
+			}
+		}
+	}
+	throw new Error('failed to calculate next broadcast clock slot');
+}
+
+function formatBroadcastClockJst(at) {
+	const date = new Date(Number(at) + BROADCAST_CLOCK_JST_OFFSET_MS);
+	const pad = value => String(value).padStart(2, '0');
+	return date.getUTCFullYear() + '/' + pad(date.getUTCMonth() + 1) + '/' + pad(date.getUTCDate()) + ' ' +
+		pad(date.getUTCHours()) + ':' + pad(date.getUTCMinutes()) + ':' + pad(date.getUTCSeconds()) + ' JST';
+}
+
+function persistBroadcastClockState() {
+	if (!broadcastClockStateWritable || !broadcastClockState) {
+		return;
+	}
+	try {
+		storageRuntimeState.atomicWriteJson(fs, BROADCAST_CLOCK_STATE_FILE, broadcastClockState);
+	} catch (error) {
+		operatorLog('[BroadcastClock] ERROR: state write failed: ' + error.message);
+	}
+}
+
+function scheduleBroadcastClockObservation(at) {
+	if (shutdownStarted) {
+		return;
+	}
+	if (broadcastClockTimer !== null) {
+		clearTimeout(broadcastClockTimer);
+	}
+	const delay = Math.max(1000, Number(at) - Date.now());
+	broadcastClockTimer = setTimeout(() => {
+		broadcastClockTimer = null;
+		runBroadcastClockObservation();
+	}, delay);
+	broadcastClockTimer.unref?.();
+}
+
+function updateBroadcastClockState(status, result, successful) {
+	const now = Date.now();
+	broadcastClockState = Object.assign({
+		schemaVersion: 1,
+		warningActive: false
+	}, broadcastClockState || {}, {
+		status: status,
+		updatedAt: new Date(now).toISOString()
+	});
+	if (result !== undefined) {
+		broadcastClockState.lastResult = result;
+	}
+	if (successful === true) {
+		broadcastClockState.lastSuccess = result;
+	}
+	broadcastClockState.nextAttemptAt = getNextBroadcastClockAttempt(now, broadcastClockState);
+	persistBroadcastClockState();
+	scheduleBroadcastClockObservation(broadcastClockState.nextAttemptAt);
+	return broadcastClockState.nextAttemptAt;
+}
+
+function getBroadcastClockLocalDeferralReason(now, requiredRunMs) {
+	if (recording.length > 0) {
+		return 'recording-active';
+	}
+	const guardMs = BROADCAST_CLOCK_RESERVE_GUARD_MS + Math.max(0, Number(requiredRunMs) || 0);
+	for (let i = 0; i < reserves.length; i++) {
+		const program = reserves[i];
+		if (!program || program.isSkip === true || !Number.isFinite(Number(program.start)) || !Number.isFinite(Number(program.end))) {
+			continue;
+		}
+		if (Number(program.end) <= now) {
+			continue;
+		}
+		if (Number(program.start) - now < guardMs) {
+			return requiredRunMs ? 'insufficient-time-before-next-recording' : 'recording-reserved-within-10-minutes';
+		}
+	}
+	return null;
+}
+
+function selectBroadcastClockChannel(tuners, channels) {
+	if (!Array.isArray(tuners) || !Array.isArray(channels)) {
+		return null;
+	}
+	const freeTuners = tuners.filter(tuner => tuner && tuner.isAvailable === true && tuner.isFree === true &&
+		Array.isArray(tuner.users) && tuner.users.length === 0 && Array.isArray(tuner.types) && tuner.types.length > 0);
+	if (freeTuners.length === 0) {
+		return null;
+	}
+	return channels.find(channel => channel && channel.type === 'GR' &&
+		(typeof channel.channel === 'string' || typeof channel.channel === 'number') &&
+		(BROADCAST_CLOCK_GR_CHANNEL === null || String(channel.channel) === BROADCAST_CLOCK_GR_CHANNEL) &&
+		freeTuners.some(tuner => tuner.types.indexOf(channel.type) !== -1)) || null;
+}
+
+function buildBroadcastClockToolArgs(channel) {
+	const requestPath = mirakurunDropWatch.getApiRequestPath(
+		mirakurun,
+		'channels/' + encodeURIComponent(channel.type) + '/' + encodeURIComponent(String(channel.channel)) + '/stream'
+	) + '?decode=0';
+	const args = [
+		BROADCAST_CLOCK_TOOL,
+		'--samples', String(BROADCAST_CLOCK_SAMPLES),
+		'--timeout', String(BROADCAST_CLOCK_TIMEOUT_MS),
+		'--priority', String(BROADCAST_CLOCK_PRIORITY)
+	];
+	if (mirakurunDropWatch.usesUnixSocket(mirakurun)) {
+		args.push('--socket-path', mirakurun.socketPath, '--request-path', requestPath);
+	} else {
+		const streamUrl = new URL(mirakurunPath);
+		streamUrl.pathname = requestPath.split('?')[0];
+		streamUrl.search = requestPath.indexOf('?') === -1 ? '' : requestPath.slice(requestPath.indexOf('?'));
+		args.push('--url', streamUrl.toString());
+	}
+	return args;
+}
+
+function deferBroadcastClockObservation(reason) {
+	const nextAt = updateBroadcastClockState('deferred', {
+		checkedAt: new Date().toISOString(),
+		reason: reason
+	});
+	operatorLog('[BroadcastClock] DEFER: ' + reason + '; NEXT: ' + formatBroadcastClockJst(nextAt));
+}
+
+function failBroadcastClockObservation(error) {
+	const nextAt = updateBroadcastClockState('failed', {
+		checkedAt: new Date().toISOString(),
+		error: error.message
+	});
+	operatorLog('[BroadcastClock] ERROR: observation failed: ' + error.message + '; NEXT: ' + formatBroadcastClockJst(nextAt));
+}
+
+function handleBroadcastClockResult(result, channel) {
+	if (!result || result.ok !== true || !Number.isFinite(result.diffMs) ||
+		!['TDT', 'TOT'].includes(result.source) || result.sampleCount < BROADCAST_CLOCK_SAMPLES ||
+		!Number.isFinite(Date.parse(result.broadcastTimeUtc)) || !Number.isFinite(Date.parse(result.systemTime))) {
+		failBroadcastClockObservation(new Error('invalid or incomplete probe result'));
+		return;
+	}
+	const diffMs = result.diffMs;
+	const diffSeconds = diffMs / 1000;
+	const warning = diffMs <= -BROADCAST_CLOCK_WARNING_MS || diffMs >= BROADCAST_CLOCK_WARNING_MS;
+	const wasWarning = broadcastClockState && broadcastClockState.warningActive === true;
+	if (warning && !wasWarning) {
+		operatorLog('[BroadcastClock] WARN: server clock ' + (diffSeconds >= 0 ? 'ahead of' : 'behind') +
+			' broadcast by ' + Math.abs(diffSeconds).toFixed(3) + ' seconds');
+	} else if (!warning && wasWarning) {
+		operatorLog('[BroadcastClock] RECOVERED: server clock is within +/-3 seconds; difference is ' +
+			diffSeconds.toFixed(3) + ' seconds');
+	} else if (!warning) {
+		operatorLog('[BroadcastClock] OK: server clock is within +/-3 seconds; difference is ' +
+			diffSeconds.toFixed(3) + ' seconds');
+	}
+	broadcastClockState = Object.assign({ schemaVersion: 1 }, broadcastClockState || {}, { warningActive: warning });
+	const nextAt = updateBroadcastClockState(warning ? 'warning' : 'normal', {
+		observedAt: new Date().toISOString(),
+		channel: { type: channel.type, channel: String(channel.channel), name: channel.name || null },
+		source: result.source,
+		broadcastTimeUtc: result.broadcastTimeUtc,
+		systemTimeUtc: result.systemTime,
+		diffMs: diffMs,
+		diffSeconds: diffSeconds,
+		sampleCount: result.sampleCount
+	}, true);
+	operatorLog('[BroadcastClock] NEXT: ' + formatBroadcastClockJst(nextAt));
+}
+
+function startBroadcastClockProbe(channel) {
+	const args = buildBroadcastClockToolArgs(channel);
+	let stdout = '';
+	let stderr = '';
+	const child = child_process.spawn(process.execPath, args, {
+		stdio: [ 'ignore', 'pipe', 'pipe' ]
+	});
+	broadcastClockProcess = child;
+	operatorLog('[BroadcastClock] START: channel=' + channel.type + '/' + channel.channel +
+		' samples=' + BROADCAST_CLOCK_SAMPLES + ' timeout=' + BROADCAST_CLOCK_TIMEOUT_MS + 'ms priority=' + BROADCAST_CLOCK_PRIORITY);
+	const timeout = setTimeout(() => {
+		child._broadcastClockFailure = new Error('probe timed out after ' + BROADCAST_CLOCK_TIMEOUT_MS + ' ms');
+		try { child.kill('SIGTERM'); } catch (_) {}
+	}, BROADCAST_CLOCK_TIMEOUT_MS);
+	timeout.unref?.();
+	child.stdout.on('data', chunk => {
+		stdout += chunk.toString('utf8');
+		if (stdout.length > 256 * 1024) {
+			child._broadcastClockFailure = new Error('probe output exceeded limit');
+			try { child.kill('SIGTERM'); } catch (_) {}
+		}
+	});
+	child.stderr.on('data', chunk => {
+		stderr += chunk.toString('utf8');
+		if (stderr.length > 64 * 1024) stderr = stderr.slice(-64 * 1024);
+	});
+	child.once('error', error => {
+		clearTimeout(timeout);
+		if (broadcastClockProcess === child) broadcastClockProcess = null;
+		broadcastClockChecking = false;
+		if (!shutdownStarted) failBroadcastClockObservation(error);
+	});
+	child.once('close', (code, signal) => {
+		clearTimeout(timeout);
+		if (broadcastClockProcess !== child) return;
+		broadcastClockProcess = null;
+		broadcastClockChecking = false;
+		if (shutdownStarted) return;
+		if (child._broadcastClockFailure) {
+			failBroadcastClockObservation(child._broadcastClockFailure);
+			return;
+		}
+		if (child._broadcastClockAbortReason) {
+			deferBroadcastClockObservation(child._broadcastClockAbortReason);
+			return;
+		}
+		if (code !== 0 || signal) {
+			let detail = stderr.trim();
+			try {
+				const failure = JSON.parse(detail);
+				detail = failure.error || detail;
+			} catch (_) {}
+			failBroadcastClockObservation(new Error(detail || ('probe exit=' + code + (signal ? ' signal=' + signal : ''))));
+			return;
+		}
+		try {
+			handleBroadcastClockResult(JSON.parse(stdout), channel);
+		} catch (error) {
+			failBroadcastClockObservation(new Error('probe output parse failed: ' + error.message));
+		}
+	});
+}
+
+async function runBroadcastClockObservation() {
+	if (shutdownStarted || broadcastClockChecking || broadcastClockProcess) {
+		return;
+	}
+	broadcastClockChecking = true;
+	const now = Date.now();
+	const nextAttemptAt = getNextBroadcastClockAttempt(now, broadcastClockState);
+	broadcastClockState = Object.assign({ schemaVersion: 1, warningActive: false }, broadcastClockState || {}, {
+		lastAttemptAt: now,
+		nextAttemptAt: nextAttemptAt,
+		status: 'checking',
+		updatedAt: new Date(now).toISOString()
+	});
+	persistBroadcastClockState();
+	try {
+		const localReason = getBroadcastClockLocalDeferralReason(now, BROADCAST_CLOCK_TIMEOUT_MS);
+		if (localReason) {
+			broadcastClockChecking = false;
+			deferBroadcastClockObservation(localReason);
+			return;
+		}
+		const tunersResult = await getMirakurunJson('/tuners', 3000);
+		if (!tunersResult.ok) throw new Error('tuner state unavailable: ' + tunersResult.error);
+		const channelsResult = await getMirakurunJson('/channels', 3000);
+		if (!channelsResult.ok) throw new Error('channel state unavailable: ' + channelsResult.error);
+		if (shutdownStarted) {
+			broadcastClockChecking = false;
+			return;
+		}
+		const channel = selectBroadcastClockChannel(tunersResult.data, channelsResult.data);
+		if (!channel) {
+			broadcastClockChecking = false;
+			deferBroadcastClockObservation(BROADCAST_CLOCK_GR_CHANNEL === null
+				? 'no confirmed free tuner and GR channel'
+				: 'configured channel GR/' + BROADCAST_CLOCK_GR_CHANNEL + ' is unavailable or has no confirmed free tuner');
+			return;
+		}
+		const changedReason = getBroadcastClockLocalDeferralReason(Date.now(), BROADCAST_CLOCK_TIMEOUT_MS);
+		if (changedReason) {
+			broadcastClockChecking = false;
+			deferBroadcastClockObservation(changedReason);
+			return;
+		}
+		startBroadcastClockProbe(channel);
+	} catch (error) {
+		broadcastClockChecking = false;
+		failBroadcastClockObservation(error);
+	}
+}
+
+function abortBroadcastClockObservationIfNeeded() {
+	if (!broadcastClockProcess) {
+		return;
+	}
+	const reason = getBroadcastClockLocalDeferralReason(Date.now());
+	if (!reason) {
+		return;
+	}
+	broadcastClockProcess._broadcastClockAbortReason = reason;
+	try { broadcastClockProcess.kill('SIGTERM'); } catch (error) {
+		operatorLog('[BroadcastClock] ERROR: probe stop failed: ' + error.message);
+	}
+}
+
+function startBroadcastClockMonitor() {
+	broadcastClockState = readBroadcastClockState();
+	if (!broadcastClockState) {
+		broadcastClockState = {
+			schemaVersion: 1,
+			warningActive: false,
+			status: 'scheduled',
+			nextAttemptAt: 0,
+			updatedAt: new Date().toISOString()
+		};
+	}
+	if (!BROADCAST_CLOCK_ENABLED) {
+		broadcastClockState.warningActive = false;
+		broadcastClockState.status = 'disabled';
+		broadcastClockState.nextAttemptAt = 0;
+		broadcastClockState.updatedAt = new Date().toISOString();
+		persistBroadcastClockState();
+		operatorLog('[BroadcastClock] DISABLED: periodic TDT/TOT observation is off');
+		return;
+	}
+	if (broadcastClockState.status === 'disabled') {
+		broadcastClockState.status = broadcastClockState.warningActive ? 'warning' : 'scheduled';
+	}
+	broadcastClockState.nextAttemptAt = getNextBroadcastClockAttempt(Date.now(), broadcastClockState);
+	broadcastClockState.updatedAt = new Date().toISOString();
+	persistBroadcastClockState();
+	scheduleBroadcastClockObservation(broadcastClockState.nextAttemptAt);
+	operatorLog('[BroadcastClock] CONFIG: interval=' + BROADCAST_CLOCK_INTERVAL_HOURS + 'h channel=' +
+		(BROADCAST_CLOCK_GR_CHANNEL === null ? 'auto (GR)' : 'GR/' + BROADCAST_CLOCK_GR_CHANNEL));
+	operatorLog('[BroadcastClock] NEXT: ' + formatBroadcastClockJst(broadcastClockState.nextAttemptAt));
+}
+
+function stopBroadcastClockMonitor() {
+	if (broadcastClockTimer !== null) {
+		clearTimeout(broadcastClockTimer);
+		broadcastClockTimer = null;
+	}
+	if (broadcastClockProcess) {
+		broadcastClockProcess._broadcastClockAbortReason = 'operator-shutdown';
+		try { broadcastClockProcess.kill('SIGTERM'); } catch (_) {}
+		broadcastClockProcess = null;
+	}
+	broadcastClockChecking = false;
 }
 
 function summarizeMirakurunStreamInfo(streamInfo) {
@@ -3133,3 +3583,5 @@ chinachu.jsonWatcher(
 	},
 	{ create: [], now: false }
 );
+
+startBroadcastClockMonitor();

@@ -13,6 +13,12 @@ export async function loadConfig(signal) {
   return parseJsonResponse(response);
 }
 
+export async function loadClockRuntime(signal) {
+  const response = await fetch('/api/clock.json', { method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store', signal });
+  const value = await parseJsonResponse(response);
+  return value.runtime && typeof value.runtime === 'object' ? value.runtime : {};
+}
+
 export async function saveConfig(config, signal) {
   const json = JSON.stringify(config, null, '\t');
   const body = new URLSearchParams({ json });
