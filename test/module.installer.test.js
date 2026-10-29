@@ -17,16 +17,22 @@ function createLauncherFixture() {
 	fs.chmodSync(path.join(temporaryDir, 'chinachu'), 0o755);
 	fs.copyFileSync(path.join(repositoryRoot, 'config.sample.json'), path.join(temporaryDir, 'config.sample.json'));
 	fs.copyFileSync(path.join(repositoryRoot, 'rules.sample.json'), path.join(temporaryDir, 'rules.sample.json'));
-	fs.writeFileSync(path.join(temporaryDir, 'app-operator.js'), "require('fs').writeFileSync('service-ran', 'yes');\n");
 
 	return temporaryDir;
 }
 
 function runServiceBootstrap(temporaryDir) {
-	return childProcess.spawnSync('bash', [ './chinachu', 'service', 'operator', 'execute' ], {
-		cwd: temporaryDir,
-		encoding: 'utf8'
-	});
+	const sourceable = writeSourceableLauncher(temporaryDir);
+	return childProcess.spawnSync('bash', [ '-c', [
+		'cd "$1"',
+		'. "$2"',
+		'CHINACHU_DIR=$PWD',
+		'USR_DIR="$PWD/usr"',
+		'NODE_PATH="$3"',
+		'NODE_VER=$("$NODE_PATH" --version)',
+		'NODE_VER=${NODE_VER#v}',
+		'chinachu_runtime_bootstrap'
+	].join('; '), 'bash', temporaryDir, sourceable, process.execPath ], { encoding: 'utf8' });
 }
 
 function writeSourceableLauncher(temporaryDir) {
@@ -83,11 +89,60 @@ function currentPrimaryGroup() {
 }
 
 describe('Installer bootstrap', function() {
-	it('protects unknown local FFmpeg and removes only recognized legacy files after confirmation', function() {
+	it('checks FFmpeg first, keeps the compact menu/name dispatch, and protects local FFmpeg files', function() {
 		const unknownFixture = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-installer-unknown-ffmpeg-'));
 		const legacyFixture = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-installer-legacy-ffmpeg-'));
+		const orderFixture = createLauncherFixture();
 
 		try {
+			const menu = childProcess.spawnSync('bash', [ './chinachu', 'installer' ], {
+				cwd: orderFixture,
+				encoding: 'utf8'
+			});
+			assert.strictEqual(menu.status, 1);
+			assert.match(menu.stdout, /1\) Auto \(Full\)\n2\) Node\.js\n3\) Dependencies\n4\) Runtime Bootstrap\n5\) Verify\n6\) PM2 Service Setup\n0\) Exit/);
+			assert.doesNotMatch(menu.stdout, /\d+\) FFmpeg/);
+
+			const orderSourceable = writeSourceableLauncher(orderFixture);
+			const failedOrderLog = path.join(orderFixture, 'failed-order.log');
+			const successfulOrderLog = path.join(orderFixture, 'successful-order.log');
+			const runOrder = (logPath, ffmpegStatus) => childProcess.spawnSync('bash', [ '-c', [
+				'. "$1"',
+				'ORDER_LOG="$2"',
+				'FFMPEG_STATUS="$3"',
+				'chinachu_installer_ffmpeg() { echo ffmpeg >> "$ORDER_LOG"; return "$FFMPEG_STATUS"; }',
+				'chinachu_installer_node_ready() { echo node-check >> "$ORDER_LOG"; return 0; }',
+				'chinachu_installer_node() { echo node-install >> "$ORDER_LOG"; return 0; }',
+				'chinachu_installer_dependencies_ready() { echo dependencies-check >> "$ORDER_LOG"; return 0; }',
+				'chinachu_installer_node_modules() { echo dependencies-install >> "$ORDER_LOG"; return 0; }',
+				'chinachu_runtime_bootstrap() { echo bootstrap >> "$ORDER_LOG"; return 0; }',
+				'chinachu_installer_verify() { echo verify >> "$ORDER_LOG"; return 0; }',
+				'chinachu_installer_offer_pm2() { echo pm2-offer >> "$ORDER_LOG"; return 0; }',
+				'chinachu_installer_auto_full'
+			].join('\n'), 'bash', orderSourceable, logPath, String(ffmpegStatus) ], { encoding: 'utf8' });
+
+			const stopped = runOrder(failedOrderLog, 1);
+			assert.strictEqual(stopped.status, 1);
+			assert.strictEqual(fs.readFileSync(failedOrderLog, 'utf8'), 'ffmpeg\n');
+
+			const ordered = runOrder(successfulOrderLog, 0);
+			assert.strictEqual(ordered.status, 0, ordered.stdout + ordered.stderr);
+			assert.deepStrictEqual(fs.readFileSync(successfulOrderLog, 'utf8').trim().split('\n'), [
+				'ffmpeg', 'node-check', 'dependencies-check', 'bootstrap', 'verify', 'pm2-offer'
+			]);
+
+			const ffmpegDispatchMarker = path.join(orderFixture, 'ffmpeg-dispatch');
+			const dispatched = childProcess.spawnSync('bash', [ '-c', [
+				'. "$1"',
+				'CHINACHU_DIR="$2"',
+				'USR_DIR="$2/usr"',
+				'FFMPEG_DISPATCH_MARKER="$3"',
+				'chinachu_installer_ffmpeg() { : > "$FFMPEG_DISPATCH_MARKER"; }',
+				'chinachu_installer ffmpeg'
+			].join('\n'), 'bash', orderSourceable, orderFixture, ffmpegDispatchMarker ], { encoding: 'utf8' });
+			assert.strictEqual(dispatched.status, 0, dispatched.stdout + dispatched.stderr);
+			assert.strictEqual(fs.existsSync(ffmpegDispatchMarker), true);
+
 			const unknownSourceable = writeSourceableLauncher(unknownFixture);
 			const unknownUsrBin = path.join(unknownFixture, 'usr', 'bin');
 			const packageMarker = path.join(unknownFixture, 'package-install-ran');
@@ -147,6 +202,7 @@ describe('Installer bootstrap', function() {
 		} finally {
 			fs.rmSync(unknownFixture, { recursive: true, force: true });
 			fs.rmSync(legacyFixture, { recursive: true, force: true });
+			fs.rmSync(orderFixture, { recursive: true, force: true });
 		}
 	});
 

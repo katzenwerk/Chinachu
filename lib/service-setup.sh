@@ -46,15 +46,19 @@ service_setup_pm2 () {
 }
 
 service_setup_pm2_daemon_active () {
-  local user="$1" home pid_file pid
+  local user="$1" home pid_file pid user_uid process_uid command
   home=$(service_setup_user_home "$user") || return 1
   pid_file="$home/.pm2/pm2.pid"
-  if [ -r "$pid_file" ]; then
-    read -r pid < "$pid_file"
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
-    return $?
-  fi
-  ps -eo user=,args= | awk -v user="$user" '$1 == user && /PM2 .*God Daemon/ { found=1 } END { exit !found }'
+  [ -r "$pid_file" ] || return 1
+  read -r pid < "$pid_file"
+  case "$pid" in '' | *[!0-9]* ) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  user_uid=$(id -u "$user") || return 1
+  process_uid=$(stat -c %u -- "/proc/$pid" 2>/dev/null) || return 1
+  [ "$user_uid" = "$process_uid" ] || return 1
+  command=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || return 1
+  case "$command" in *PM2*God*Daemon* | */pm2/lib/Daemon.js* ) ;; * ) return 1 ;; esac
+  [ -S "$home/.pm2/rpc.sock" ] && [ -S "$home/.pm2/pub.sock" ]
 }
 
 service_setup_pm2_startup_enabled () {
@@ -238,15 +242,31 @@ service_setup_resolve_config_identity () {
 service_setup_chinachu_pids () {
   "$BOOTSTRAP_NODE_COMMAND" -e '
     const fs = require("fs"), path = require("path"), root = path.resolve(process.argv[1]), found = [];
+    const targets = new Set([path.join(root, "app-operator.js"), path.join(root, "app-wui.js")]);
+    const isNodeCommand = value => {
+      const name = path.basename(value);
+      return name === "node" || name === "nodejs";
+    };
+    const scriptsFromArgv = argv => {
+      if (argv.length > 1 && isNodeCommand(argv[0])) {
+        return argv.slice(1).filter(arg => /(^|\/)app-(operator|wui)\.js$/.test(arg));
+      }
+      if (argv.length !== 1) return [];
+      const title = argv[0].match(/^(\S+)\s+(.+)$/);
+      if (!title || !isNodeCommand(title[1]) || !/(^|\/)app-(operator|wui)\.js$/.test(title[2])) return [];
+      return [title[2]];
+    };
     for (const entry of fs.readdirSync("/proc")) {
       if (!/^\d+$/.test(entry) || Number(entry) === process.pid) continue;
       try {
         const argv = fs.readFileSync("/proc/" + entry + "/cmdline", "utf8").split("\0").filter(Boolean);
-        const script = argv.find(arg => /(^|\/)app-(operator|wui)\.js$/.test(arg));
-        if (!script) continue;
+        const scripts = scriptsFromArgv(argv);
+        if (!scripts.length) continue;
         const cwd = fs.realpathSync("/proc/" + entry + "/cwd");
-        const resolved = path.isAbsolute(script) ? path.resolve(script) : path.resolve(cwd, script);
-        if (resolved === path.join(root, "app-operator.js") || resolved === path.join(root, "app-wui.js")) found.push(entry);
+        if (scripts.some(script => {
+          const resolved = path.isAbsolute(script) ? path.resolve(script) : path.resolve(cwd, script);
+          return targets.has(resolved);
+        })) found.push(entry);
       } catch (_) {}
     }
     if (found.length) process.stdout.write(found.join("\n") + "\n");
@@ -575,19 +595,36 @@ service_setup_log_rotation_review () {
 
 service_setup_installer_offer () {
   local source="$1" answer
-  printf '\n────────────────────────────────\nChinachuのPM2サービス設定・確認\n────────────────────────────────\n\n'
-  if [ "$(id -u)" -eq 0 ]; then chinachu_service_setup; return $?; fi
-  if ! service_setup_is_tty; then
-    installer_warning "非対話実行ではPM2 Service Setupを自動実行しません。"
-    printf '必要な場合は次を実行してください。\n\n  sudo ./chinachu service setup\n'
-    return 0
+  if [ "$(id -u)" -eq 0 ]; then
+    printf '\n────────────────────────────────\nChinachuのPM2サービス設定・確認\n────────────────────────────────\n\n'
+    chinachu_service_setup
+    return $?
   fi
   if [ "$source" != menu ]; then
+    if ! service_setup_is_tty; then
+      installer_warning "非対話実行ではPM2 Service Setupを自動実行しません。"
+      printf '必要な場合は次を実行してください。\n\n  sudo ./chinachu service setup\n'
+      printf 'PM2を使用しない場合は、手動起動または利用者管理のsystemd等を別途設定してください。\n'
+      return 0
+    fi
     answer="$SERVICE_SETUP_INSTALLER_ANSWER"
     if [ -z "$answer" ]; then read -r -p 'ChinachuのPM2サービス設定を行いますか？ [Y/n] ' answer; fi
     case "$answer" in
-      n | N | no | NO ) printf 'ChinachuのPM2 Service Setupをスキップしました。\n'; return 0 ;;
+      n | N | no | NO )
+        printf 'ChinachuのPM2 Service Setupをスキップしました。\n'
+        printf '必要に応じて、手動起動または利用者管理のsystemd等を別途設定してください。\n'
+        return 0
+        ;;
     esac
+  fi
+  printf '\nChinachu PM2 Service Setup\n--------------------------------\n\n'
+  printf '一般ユーザーとrootのPM2登録状態を確認します。\n'
+  printf '状態確認およびサービス設定には管理者権限が必要です。\n\n'
+  printf '続行すると、sudoのパスワード入力を求められる場合があります。\n'
+  if ! service_setup_is_tty; then
+    installer_warning "非対話実行ではsudo認証を開始しません。"
+    printf 'TTYから ./chinachu installer service を実行してください。\n'
+    return 0
   fi
   if ! command -v sudo > /dev/null 2>&1; then
     installer_warning "sudoを利用できないためPM2 Service Setupを起動しません。"

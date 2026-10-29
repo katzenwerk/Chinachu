@@ -1,14 +1,18 @@
 (function() {
-	
+	var SCHEDULER_ALREADY_RUNNING_EXIT_CODE = 76;
+
 	switch (request.method) {
 		case 'GET':
 			res();
 			return;
-		
+
 		case 'PUT':
 			child_process.exec('./chinachu update', function(err, stdout, stderr) {
-				if (err) return response.error(err.code === 75 ? 503 : 500);
-				
+				if (err) {
+					if (err.code === SCHEDULER_ALREADY_RUNNING_EXIT_CODE) return response.error(409);
+					return response.error(err.code === 75 ? 503 : 500);
+				}
+
 				res();
 			});
 			return;

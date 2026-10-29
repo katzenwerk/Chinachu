@@ -177,6 +177,11 @@ export async function runScheduler() {
     method: 'PUT',
     headers: { Accept: 'application/json' }
   });
+  if (response.status === 409) {
+    const error = new Error('スケジューラーは現在実行中です');
+    error.status = response.status;
+    throw error;
+  }
   const result = await jsonResponse(response, 'スケジューラーの実行');
   invalidateResources(['reserves']);
   return result || { conflicts: [], reserves: [] };

@@ -17,6 +17,7 @@ const RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 const RECORDED_DATA_FILE = __dirname + '/data/recorded.json';
 const MATCH_DATA_FILE = __dirname + '/data/match.json';
 const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
+const ALREADY_RUNNING_EXIT_CODE = 76;
 const RESERVES_CHANGED_EXIT_CODE = 75;
 
 // 標準モジュールのロード
@@ -1804,14 +1805,14 @@ isRunning(running => {
 
 	if (running) {
 		console.error('ERROR: Scheduler is already running.');
-		process.exit(1);
+		process.exit(ALREADY_RUNNING_EXIT_CODE);
 	} else {
 		try {
 			createPidFile();
 		} catch (error) {
 			if (error && error.code === 'EEXIST') {
 				console.error('ERROR: Scheduler runtime lock was acquired by another process.');
-				process.exit(1);
+				process.exit(ALREADY_RUNNING_EXIT_CODE);
 			}
 			throw error;
 		}

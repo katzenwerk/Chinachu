@@ -80,7 +80,7 @@ main () {
   local cmd="$1"
   shift
   case $cmd in
-    installer | updater | service | update | search | \
+    installer | upgrade | updater | service | update | search | \
     reserve | unreserve | skip | unskip | stop | \
     rule | enrule | disrule | rmrule | \
     rules | reserves | recording | recorded | \
@@ -109,12 +109,11 @@ chinachu_installer () {
   if [ -z "$choice" ]; then
     printf '\nChinachu Installer\n────────────────────────────────\n\n'
     printf '1) Auto (Full)\n'
-    printf '3) Node.js\n'
-    printf '4) Dependencies\n'
-    printf '5) FFmpeg\n'
-    printf '6) Runtime Bootstrap\n'
-    printf '7) Verify\n'
-    printf '8) ChinachuのPM2サービス設定・確認\n'
+    printf '2) Node.js\n'
+    printf '3) Dependencies\n'
+    printf '4) Runtime Bootstrap\n'
+    printf '5) Verify\n'
+    printf '6) PM2 Service Setup\n'
     printf '0) Exit\n'
     [ -t 0 ] || { installer_error "非対話実行ではinstaller項目を引数で指定してください。"; return 1; }
     read -r -p '> ' choice
@@ -122,12 +121,12 @@ chinachu_installer () {
 
   case "$choice" in
     1 | auto | full ) chinachu_installer_auto_full ;;
-    3 | node ) chinachu_installer_node ;;
-    4 | dependencies | modules ) chinachu_installer_node_modules ;;
-    5 | ffmpeg ) chinachu_installer_ffmpeg ;;
-    6 | bootstrap | runtime ) chinachu_runtime_bootstrap ;;
-    7 | verify ) chinachu_installer_verify ;;
-    8 | service | pm2 ) chinachu_installer_pm2_service ;;
+    2 | node ) chinachu_installer_node ;;
+    3 | dependencies | modules ) chinachu_installer_node_modules ;;
+    ffmpeg ) chinachu_installer_ffmpeg ;;
+    4 | bootstrap | runtime ) chinachu_runtime_bootstrap ;;
+    5 | verify ) chinachu_installer_verify ;;
+    6 | service | pm2 ) chinachu_installer_pm2_service ;;
     0 | exit | quit ) return 0 ;;
     * )
       installer_error "installer項目を選択できませんでした: $choice"
@@ -137,26 +136,35 @@ chinachu_installer () {
 }
 
 chinachu_installer_auto_full () {
-  installer_step 1 5 "Node.js"
-  chinachu_installer_node || installer_error "Node.js installation failed."
-  installer_success "v${NODE_VER}"
-
-  installer_step 2 5 "Dependencies"
-  chinachu_installer_node_modules || installer_error "Dependency installation failed."
-  installer_success "Ready"
-
-  installer_step 3 5 "FFmpeg"
+  installer_step 1 6 "FFmpeg"
   chinachu_installer_ffmpeg || installer_error "FFmpeg installation failed."
   installer_success "Ready"
 
-  installer_step 4 5 "Runtime Bootstrap"
+  installer_step 2 6 "Node.js"
+  if chinachu_installer_node_ready; then
+    printf 'Using existing Nave Node.js v%s.\n' "$NODE_VER"
+  else
+    chinachu_installer_node || installer_error "Node.js installation failed."
+  fi
+  installer_success "v${NODE_VER}"
+
+  installer_step 3 6 "Dependencies"
+  if chinachu_installer_dependencies_ready; then
+    printf 'Existing node_modules satisfies package-lock.json.\n'
+  else
+    chinachu_installer_node_modules || installer_error "Dependency installation failed."
+  fi
+  installer_success "Ready"
+
+  installer_step 4 6 "Runtime Bootstrap"
   chinachu_runtime_bootstrap || installer_error "Runtime bootstrap failed."
   installer_success "Ready"
 
-  installer_step 5 5 "Verify"
+  installer_step 5 6 "Verify"
   chinachu_installer_verify || installer_error "Installer verification failed."
   installer_success "Passed"
 
+  installer_step 6 6 "PM2 Service Setup (Optional)"
   chinachu_installer_offer_pm2 auto || return 1
 
   printf '\n%sInstallation completed successfully.%s\n' "$INSTALLER_GREEN" "$INSTALLER_RESET"
@@ -198,16 +206,30 @@ chinachu_installer_pm2_service () {
 }
 
 chinachu_installer_node () {
-  remove_dir "$NAVE_DIR" || return 1
+  local nave_download
   ensure_dir "$NAVE_DIR" || return 1
 
+  if chinachu_application_processes_running; then
+    installer_warning "The Nave Node.js runtime is being used by a running Chinachu process."
+    printf 'Stop only the affected Chinachu Operator/WUI after checking recordings and near-term reservations, then retry.\n' >&2
+    return 1
+  fi
+
   echo "Installing Node using Nave..."
-  wget -O "$NAVE_DIR/nave.sh" https://raw.githubusercontent.com/isaacs/nave/v3.2.2/nave.sh || return 1
-  chmod a+x "$NAVE_DIR/nave.sh" || return 1
+  if [ ! -x "$NAVE_DIR/nave.sh" ]; then
+    nave_download="$NAVE_DIR/nave.sh.download.$$"
+    wget -O "$nave_download" https://raw.githubusercontent.com/isaacs/nave/v3.2.2/nave.sh || { rm -f -- "$nave_download"; return 1; }
+    chmod a+x "$nave_download" || { rm -f -- "$nave_download"; return 1; }
+    mv -- "$nave_download" "$NAVE_DIR/nave.sh" || return 1
+  fi
+  if [ -e "$NAVE_DIR/installed/$NODE_VER" ] && ! chinachu_installer_node_ready; then
+    remove_dir "$NAVE_DIR/installed/$NODE_VER" || return 1
+  fi
   "$NAVE_DIR/nave.sh" install "$NODE_VER" || return 1
-  rm -fv "$NAVE_DIR/node" || return 1
-  ln -sv "$NODE_PATH" "$NAVE_DIR/node" || return 1
-  ln -sv "$NPM_PATH" "$NAVE_DIR/npm" || return 1
+  ln -s "$NODE_PATH" "$NAVE_DIR/node.new.$$" || return 1
+  mv -Tf -- "$NAVE_DIR/node.new.$$" "$NAVE_DIR/node" || return 1
+  ln -s "$NPM_PATH" "$NAVE_DIR/npm.new.$$" || return 1
+  mv -Tf -- "$NAVE_DIR/npm.new.$$" "$NAVE_DIR/npm" || return 1
 
   [ -x "$NODE_PATH" ] || return 1
   [ "$("$NODE_PATH" --version)" = "v${NODE_VER}" ] || return 1
@@ -219,6 +241,11 @@ chinachu_installer_node () {
 
 chinachu_installer_node_modules () {
   [ -x "$NPM_PATH" ] || fail "Nave npm is not available: $NPM_PATH"
+  if chinachu_application_processes_running; then
+    installer_warning "Chinachu Operator/WUI is running from this working tree."
+    printf 'Stop only the affected services after checking recordings and near-term reservations, then retry dependency repair.\n' >&2
+    return 1
+  fi
   remove_dir node_modules || return 1
 
   echo "Installing Node Modules using NPM..."
@@ -228,6 +255,44 @@ chinachu_installer_node_modules () {
   echo "done."
 
   return 0
+}
+
+chinachu_installer_node_ready () {
+  [ -x "$NODE_PATH" ] && [ -x "$NPM_PATH" ] || return 1
+  [ "$("$NODE_PATH" --version 2>/dev/null)" = "v${NODE_VER}" ] || return 1
+  [ "$(readlink -f -- "$NAVE_DIR/node" 2>/dev/null)" = "$(readlink -f -- "$NODE_PATH" 2>/dev/null)" ] || return 1
+  [ "$(readlink -f -- "$NAVE_DIR/npm" 2>/dev/null)" = "$(readlink -f -- "$NPM_PATH" 2>/dev/null)" ] || return 1
+  "$NPM_PATH" --version > /dev/null 2>&1
+}
+
+chinachu_installer_dependencies_ready () {
+  [ -x "$NODE_PATH" ] && [ -x "$NPM_PATH" ] || return 1
+  [ -r package.json ] && [ -r package-lock.json ] && [ -d node_modules ] || return 1
+  "$NPM_PATH" ls --all > /dev/null 2>&1 || return 1
+  "$NODE_PATH" -e '
+    const fs = require("fs"), util = require("util");
+    const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+    const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+    const root = lock.packages && lock.packages[""];
+    if (!root) process.exit(1);
+    for (const field of ["dependencies", "devDependencies", "optionalDependencies"]) {
+      if (!util.isDeepStrictEqual(pkg[field] || {}, root[field] || {})) process.exit(1);
+    }
+  '
+}
+
+chinachu_application_processes_running () {
+  local process cwd command
+  for process in /proc/[0-9]*
+  do
+    cwd=$(readlink -f -- "$process/cwd" 2>/dev/null) || continue
+    [ "$cwd" = "$CHINACHU_DIR" ] || continue
+    command=$(tr '\0' ' ' < "$process/cmdline" 2>/dev/null) || continue
+    case "$command" in
+      *app-operator.js* | *app-wui.js* ) return 0 ;;
+    esac
+  done
+  return 1
 }
 
 chinachu_installer_ffmpeg () {
@@ -455,90 +520,468 @@ verify_runtime_ffmpeg () {
 }
 
 chinachu_updater () {
-  if [ -e "/etc/init.d/chinachu-operator" ]; then
-    /etc/init.d/chinachu-operator status
+  chinachu_upgrade "$@"
+}
+
+upgrade_error () {
+  printf '%sERROR:%s %s\n' "$INSTALLER_RED" "$INSTALLER_RESET" "$1" >&2
+  return 1
+}
+
+upgrade_as_user () {
+  local user_home
+  if [ "$(id -un)" = "$UPGRADE_USER" ]; then
+    "$@"
+  else
+    user_home=$(getent passwd "$UPGRADE_USER" | awk -F: 'NR == 1 { print $6 }') || return 1
+    [ -n "$user_home" ] || return 1
+    runuser -u "$UPGRADE_USER" -- env HOME="$user_home" USER="$UPGRADE_USER" LOGNAME="$UPGRADE_USER" "$@"
   fi
+}
 
-  if [ -e "/etc/init.d/chinachu-wui" ]; then
-    /etc/init.d/chinachu-wui status
-  fi
+upgrade_git () {
+  upgrade_as_user git -C "$CHINACHU_DIR" "$@"
+}
 
-  git fetch
-  git status
+upgrade_verify_repository_owner () {
+  local user_uid repository_uid git_dir git_uid
+  user_uid=$(id -u "$UPGRADE_USER") || return 1
+  repository_uid=$(stat -c %u -- "$CHINACHU_DIR") || return 1
+  [ "$user_uid" = "$repository_uid" ] || {
+    upgrade_error "The Upgrade user does not own the Chinachu repository: $UPGRADE_USER"
+    return 1
+  }
 
-  while [ 1 ]; do
-    echo -n "Do you want to update [Y/n]? "
-    read line
-    case ${line:-y} in
-      [yY])
-        chinachu_updater_main && return 0
-        ;;
-      [nN])
-        echo "Abort." && return 0
-        ;;
-    esac
+  git_dir=$(upgrade_git rev-parse --absolute-git-dir 2>/dev/null) || {
+    upgrade_error "The Git metadata directory could not be resolved as $UPGRADE_USER."
+    return 1
+  }
+  git_uid=$(stat -c %u -- "$git_dir") || return 1
+  [ "$user_uid" = "$git_uid" ] || {
+    upgrade_error "The Upgrade user does not own the Git metadata directory: $git_dir"
+    return 1
+  }
+  upgrade_as_user test -w "$CHINACHU_DIR" && upgrade_as_user test -w "$git_dir" || {
+    upgrade_error "$UPGRADE_USER cannot write the repository or its Git metadata."
+    return 1
+  }
+}
+
+upgrade_pm2_state_valid () {
+  printf '%s' "$1" | "$BOOTSTRAP_NODE_COMMAND" -e '
+    const fs = require("fs"), path = require("path");
+    const root = path.resolve(process.argv[1]);
+    const mode = process.argv[2];
+    const list = JSON.parse(fs.readFileSync(0, "utf8").trim() || "[]");
+    const expected = new Map([
+      ["chinachu-operator", path.join(root, "app-operator.js")],
+      ["chinachu-wui", path.join(root, "app-wui.js")]
+    ]);
+    const found = list.filter(item => item && expected.has(item.name));
+    if (!found.length) process.exit(0);
+    if (found.length !== 2 || new Set(found.map(item => item.name)).size !== 2) process.exit(1);
+    for (const item of found) {
+      const env = item.pm2_env || item;
+      const cwd = env.pm_cwd || env.cwd || root;
+      const script = env.pm_exec_path || env.script || item.pm_exec_path || item.script;
+      if (!script || path.resolve(cwd, script) !== expected.get(item.name)) process.exit(1);
+      if (mode === "active") {
+        const status = env.status;
+        const pid = Number(item.pid);
+        if (status !== "online" && status !== "stopped") process.exit(1);
+        if (status === "online" && !(pid > 0)) process.exit(1);
+        if (status === "stopped" && pid > 0) process.exit(1);
+      }
+    }
+  ' "$CHINACHU_DIR" "$2"
+}
+
+upgrade_pm2_online_names () {
+  printf '%s' "$1" | "$BOOTSTRAP_NODE_COMMAND" -e '
+    const list = JSON.parse(require("fs").readFileSync(0, "utf8").trim() || "[]");
+    const names = ["chinachu-operator", "chinachu-wui"].filter(name => {
+      const item = list.find(entry => entry && entry.name === name);
+      return item && item.pm2_env && item.pm2_env.status === "online" && Number(item.pid) > 0;
+    });
+    process.stdout.write(names.join(" "));
+  '
+}
+
+upgrade_pm2_identity_valid () {
+  local output="$1" names="$2" expected_uid="$3" expected_gid="$4" name pid uid gid
+  for name in $names
+  do
+    pid=$(printf '%s' "$output" | "$BOOTSTRAP_NODE_COMMAND" -e '
+      const list = JSON.parse(require("fs").readFileSync(0, "utf8").trim() || "[]");
+      const item = list.find(entry => entry && entry.name === process.argv[1]);
+      if (!item || !Number(item.pid)) process.exit(1);
+      process.stdout.write(String(item.pid));
+    ' "$name") || return 1
+    [ -r "/proc/$pid/status" ] || return 1
+    uid=$(awk '/^Uid:/ { print $2 }' "/proc/$pid/status") || return 1
+    gid=$(awk '/^Gid:/ { print $2 }' "/proc/$pid/status") || return 1
+    [ "$uid" = "$expected_uid" ] && [ "$gid" = "$expected_gid" ] || return 1
+    printf '%s\n' "$SERVICE_SETUP_PROCESS_PIDS" | grep -Fxq -- "$pid" || return 1
   done
 }
 
-chinachu_updater_main () {
-  if [ -e "/etc/init.d/chinachu-operator" ] && [ -e "/etc/init.d/chinachu-wui" ]; then
-    while [ 1 ]; do
-      echo -n "Do you want to stop chinachu services [Y/n]? "
-      read line
-      case ${line:-y} in
-        [yY])
-          if type sudo > /dev/null 2>&1; then
-            sudo /etc/init.d/chinachu-operator stop
-            sudo /etc/init.d/chinachu-wui stop
-            break
-          fi
-          su -c "/etc/init.d/chinachu-operator stop; /etc/init.d/chinachu-wui stop"
-          break
-          ;;
-        [nN])
-          break
-          ;;
-      esac
-    done
+upgrade_pm2_status () {
+  printf '%s' "$1" | "$BOOTSTRAP_NODE_COMMAND" -e '
+    const fs = require("fs");
+    const active = JSON.parse(fs.readFileSync(0, "utf8").trim() || "[]");
+    const name = process.argv[1];
+    const item = active.find(entry => entry && entry.name === name);
+    if (item) {
+      process.stdout.write(String((item.pm2_env || item).status));
+    }
+  ' "$2"
+}
+
+upgrade_pm2_daemon_state_safe () {
+  local home
+  service_setup_pm2_daemon_active "$1" && return 0
+  home=$(service_setup_user_home "$1") || return 1
+  [ ! -e "$home/.pm2/pm2.pid" ] && [ ! -e "$home/.pm2/rpc.sock" ] && [ ! -e "$home/.pm2/pub.sock" ]
+}
+
+upgrade_processes_match_state () {
+  local state="$1" pid
+  while read -r pid; do
+    [ -z "$pid" ] && continue
+    printf '%s' "$state" | service_setup_json_has_pid "$pid" || return 1
+  done <<< "$SERVICE_SETUP_PROCESS_PIDS"
+}
+
+upgrade_inspect_pm2_manager () {
+  local include_root="$1" local_has=false root_has=false
+
+  SERVICE_SETUP_PM2_BIN=$(command -v pm2 2>/dev/null || true)
+  SERVICE_SETUP_LOCAL_USER="$UPGRADE_USER"
+  SERVICE_SETUP_INCLUDE_ROOT="$include_root"
+  SERVICE_SETUP_ROOT_ACTIVE='[]'
+  SERVICE_SETUP_ROOT_SAVED='[]'
+  upgrade_pm2_daemon_state_safe "$SERVICE_SETUP_LOCAL_USER" || {
+    upgrade_error "Local PM2 daemon artifacts exist, but an existing daemon connection could not be verified."
+    return 1
+  }
+  if [ "$include_root" = true ]; then
+    upgrade_pm2_daemon_state_safe root || {
+      upgrade_error "Root PM2 daemon artifacts exist, but an existing daemon connection could not be verified."
+      return 1
+    }
+  fi
+  service_setup_capture_state "$include_root" || { upgrade_error "PM2 state could not be inspected."; return 1; }
+  service_setup_all_pm2_state_known || {
+    upgrade_error "The Local PM2 active or saved state could not be inspected safely."
+    return 1
+  }
+  upgrade_pm2_state_valid "$SERVICE_SETUP_LOCAL_ACTIVE" active && \
+    upgrade_pm2_state_valid "$SERVICE_SETUP_LOCAL_SAVED" saved || {
+      upgrade_error "Local PM2 has an incomplete, abnormal, or foreign-path Chinachu registration."
+      return 1
+    }
+  if service_setup_state_value_has_chinachu SERVICE_SETUP_LOCAL_ACTIVE || \
+    service_setup_state_value_has_chinachu SERVICE_SETUP_LOCAL_SAVED; then local_has=true; fi
+
+  if [ "$include_root" = true ]; then
+    upgrade_pm2_state_valid "$SERVICE_SETUP_ROOT_ACTIVE" active && \
+      upgrade_pm2_state_valid "$SERVICE_SETUP_ROOT_SAVED" saved || {
+        upgrade_error "Root PM2 has an incomplete, abnormal, or foreign-path Chinachu registration."
+        return 1
+      }
+    if service_setup_state_value_has_chinachu SERVICE_SETUP_ROOT_ACTIVE || \
+      service_setup_state_value_has_chinachu SERVICE_SETUP_ROOT_SAVED; then root_has=true; fi
+    if [ "$local_has" = true ] && [ "$root_has" = true ]; then
+      upgrade_error "Chinachu is registered in both Local and Root PM2. Resolve the conflict before upgrading."
+      return 1
+    fi
   fi
 
-  git pull || fail "failed: git pull"
-  git gc
-
-  while [ 1 ]; do
-    echo -n "Do you want to run chinachu installer (full) [Y/n]? "
-    read line
-    case ${line:-y} in
-      [yY])
-        echo 1 | ./chinachu installer
-        break
-        ;;
-      [nN])
-        break
-        ;;
-    esac
-  done
-
-  if [ -e "/etc/init.d/chinachu-operator" ] && [ -e "/etc/init.d/chinachu-wui" ]; then
-    while [ 1 ]; do
-      echo -n "Do you want to start chinachu services [Y/n]? "
-      read line
-      case ${line:-y} in
-        [yY])
-          if type sudo > /dev/null 2>&1; then
-            sudo /etc/init.d/chinachu-operator start
-            sudo /etc/init.d/chinachu-wui start
-            break
-          fi
-          sudo -c "/etc/init.d/chinachu-operator start; /etc/init.d/chinachu-wui start"
-          break
-          ;;
-        [nN])
-          break
-          ;;
-      esac
-    done
+  if ! service_setup_processes_are_attributed; then
+    if [ "$include_root" = true ]; then
+      upgrade_error "A Chinachu process cannot be attributed to the inspected PM2 registration."
+      return 1
+    fi
+    return 2
   fi
+
+  if [ "$local_has" = true ]; then
+    manager_prefix=LOCAL
+    manager_user="$SERVICE_SETUP_LOCAL_USER"
+    manager_active="$SERVICE_SETUP_LOCAL_ACTIVE"
+    manager_saved="$SERVICE_SETUP_LOCAL_SAVED"
+    manager_expected_uid=$(id -u "$manager_user") || return 1
+    manager_expected_gid=$(id -g "$manager_user") || return 1
+  elif [ "$root_has" = true ]; then
+    manager_prefix=ROOT
+    manager_user=root
+    manager_active="$SERVICE_SETUP_ROOT_ACTIVE"
+    manager_saved="$SERVICE_SETUP_ROOT_SAVED"
+    service_setup_resolve_config_identity || { upgrade_error "config.json runtime identity could not be resolved for Root PM2."; return 1; }
+    [ "$SERVICE_SETUP_RUNTIME_USER" = "$UPGRADE_USER" ] || {
+      upgrade_error "Root PM2 runtime user ($SERVICE_SETUP_RUNTIME_USER) does not match the repository owner ($UPGRADE_USER)."
+      return 1
+    }
+    manager_expected_uid="$SERVICE_SETUP_EXPECTED_UID"
+    manager_expected_gid="$SERVICE_SETUP_EXPECTED_GID"
+  elif [ "$include_root" != true ]; then
+    return 2
+  fi
+
+  if [ -n "$manager_prefix" ] && [ -z "$SERVICE_SETUP_PM2_BIN" ]; then
+    upgrade_error "PM2 registration exists but the pm2 command is unavailable."
+    return 1
+  fi
+  online_names=$(upgrade_pm2_online_names "$manager_active") || return 1
+  if [ -n "$online_names" ]; then
+    upgrade_pm2_identity_valid "$manager_active" "$online_names" "$manager_expected_uid" "$manager_expected_gid" || {
+      upgrade_error "A running Chinachu PM2 process does not match its registration, path, or runtime identity."
+      return 1
+    }
+  fi
+}
+
+upgrade_revalidate_pm2_manager () {
+  local current_active current_online current_pids
+  [ -n "$manager_prefix" ] || return 0
+
+  if ! service_setup_pm2_daemon_active "$manager_user"; then
+    current_pids=$(service_setup_chinachu_pids 2>/dev/null) || current_pids=''
+    [ -z "$online_names" ] && [ -z "$current_pids" ] || {
+      upgrade_error "The selected PM2 manager changed before service control."
+      return 1
+    }
+    return 0
+  fi
+  current_active=$(service_setup_pm2_as_user "$manager_user" jlist 2>/dev/null) && \
+    printf '%s' "$current_active" | service_setup_json_is_array || {
+      upgrade_error "The selected PM2 manager could not be rechecked before service control."
+      return 1
+    }
+  upgrade_pm2_state_valid "$current_active" active || {
+    upgrade_error "The selected PM2 registration changed before service control."
+    return 1
+  }
+  current_online=$(upgrade_pm2_online_names "$current_active") || return 1
+  [ "$current_online" = "$online_names" ] || {
+    upgrade_error "The set of running Chinachu services changed before service control."
+    return 1
+  }
+  SERVICE_SETUP_PROCESS_PIDS=$(service_setup_chinachu_pids 2>/dev/null) || SERVICE_SETUP_PROCESS_PIDS=''
+  upgrade_processes_match_state "$current_active" || {
+    upgrade_error "A Chinachu process is no longer attributed to the selected PM2 manager."
+    return 1
+  }
+  upgrade_pm2_identity_valid "$current_active" "$current_online" "$manager_expected_uid" "$manager_expected_gid" || {
+    upgrade_error "A running Chinachu process changed before service control."
+    return 1
+  }
+  manager_active="$current_active"
+}
+
+upgrade_file_requires_restart () {
+  case "$1" in
+    README.md | CHANGELOG.md | LICENSE | NOTICE | test/* | docs/* | *.md ) return 1 ;;
+    * ) return 0 ;;
+  esac
+}
+
+upgrade_confirm () {
+  local answer
+  [ -t 0 ] || { upgrade_error "Upgrade application requires an interactive terminal."; return 1; }
+  read -r -p 'Apply this fast-forward update? [y/N] ' answer || return 1
+  case "$answer" in y | Y | yes | YES ) return 0 ;; esac
+  printf 'Upgrade was not applied.\n'
+  return 1
+}
+
+chinachu_upgrade () {
+  local status branch upstream remote changed_files upstream_launcher upstream_node_version
+  local dependencies_needed=false node_needed=false restart_needed=false
+  local manager_prefix='' manager_user='' manager_active='[]' manager_saved='[]'
+  local manager_expected_uid='' manager_expected_gid='' online_names='' operator_status='' wui_status='' file
+  local inspect_status
+
+  . "$CHINACHU_DIR/lib/service-setup.sh" || return 1
+  if [ "$(id -u)" -eq 0 ]; then
+    command -v runuser > /dev/null 2>&1 || { upgrade_error "runuser is required."; return 1; }
+    UPGRADE_USER=$(service_setup_origin_user) || { upgrade_error "A valid non-root SUDO_USER is required."; return 1; }
+  else
+    UPGRADE_USER=$(id -un) || return 1
+  fi
+  upgrade_verify_repository_owner || return 1
+  resolve_bootstrap_node || return 1
+
+  if [ "$(id -u)" -eq 0 ]; then
+    upgrade_inspect_pm2_manager true || return 1
+  else
+    upgrade_inspect_pm2_manager false
+    inspect_status=$?
+    if [ "$inspect_status" -eq 2 ]; then
+      printf '\nLocal PM2ではChinachuの管理先を確認できませんでした。\n\n'
+      printf 'root PM2で管理されている可能性があるため、\n'
+      printf '管理者権限でPM2登録状態を確認します。\n\n'
+      printf 'sudoのパスワード入力を求められる場合があります。\n\n'
+      if [ ! -t 0 ]; then
+        upgrade_error "非対話環境ではsudo認証を開始しません。TTYから ./chinachu upgrade を実行してください。"
+        return 1
+      fi
+      command -v sudo > /dev/null 2>&1 || {
+        upgrade_error "sudoが見つかりません。管理者権限を利用できる環境で ./chinachu upgrade を実行してください。"
+        return 1
+      }
+      sudo -- "$CHINACHU_DIR/chinachu" upgrade "$@"
+      return $?
+    elif [ "$inspect_status" -ne 0 ]; then
+      return "$inspect_status"
+    fi
+
+    operator_status=$(upgrade_pm2_status "$manager_active" chinachu-operator) || return 1
+    wui_status=$(upgrade_pm2_status "$manager_active" chinachu-wui) || return 1
+    [ -n "$operator_status" ] || operator_status='stopped (saved)'
+    [ -n "$wui_status" ] || wui_status='stopped (saved)'
+    printf '\nChinachu Upgrade\n--------------------------------\n\n'
+    printf 'PM2管理方式 : Local PM2\n'
+    printf '管理ユーザー : %s\n' "$manager_user"
+    printf 'Operator     : %s\n' "$operator_status"
+    printf 'WUI          : %s\n\n' "$wui_status"
+    printf '現在のユーザーで更新を実行します。\n'
+    printf '管理者権限は必要ありません。\n'
+  fi
+
+  printf '\nChinachu Upgrade preflight\n────────────────────────────────\n'
+
+  inspect_repository_ffmpeg
+  if [ "$FFMPEG_LOCAL_STATE" != none ] || ! verify_runtime_ffmpeg; then
+    upgrade_error "FFmpeg/ffprobe is not in the supported runtime state. Run ./chinachu installer ffmpeg first."
+    return 1
+  fi
+  print_ffmpeg_commands "Runtime"
+
+  status=$(upgrade_git status --porcelain --untracked-files=all) || return 1
+  if [ -n "$status" ]; then
+    upgrade_error "The working tree has tracked or untracked changes. Upgrade did not fetch or modify it."
+    upgrade_git status --short
+    return 1
+  fi
+  branch=$(upgrade_git branch --show-current) || return 1
+  [ -n "$branch" ] || { upgrade_error "Detached HEAD is not supported by Upgrade."; return 1; }
+  upstream=$(upgrade_git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || {
+    upgrade_error "The current branch has no upstream tracking branch."
+    return 1
+  }
+  remote=$(upgrade_git config --get "branch.${branch}.remote") || return 1
+  [ -n "$remote" ] && [ "$remote" != . ] || { upgrade_error "A remote tracking branch is required."; return 1; }
+  printf 'Git: %s -> %s (%s)\n' "$branch" "$upstream" "$remote"
+  upgrade_git fetch -- "$remote" || { upgrade_error "git fetch failed; no update was applied."; return 1; }
+  status=$(upgrade_git status --porcelain --untracked-files=all) || return 1
+  [ -z "$status" ] || { upgrade_error "The working tree changed during preflight."; return 1; }
+  upgrade_git merge-base --is-ancestor HEAD "$upstream" || {
+    upgrade_error "The tracking branch cannot be applied as a fast-forward."
+    return 1
+  }
+
+  changed_files=$(upgrade_git diff --name-only HEAD "$upstream") || return 1
+  if [ -z "$changed_files" ]; then
+    printf 'Already up to date. No service or PM2 state was changed.\n'
+    return 0
+  fi
+
+  upstream_launcher=$(upgrade_git show "$upstream:chinachu") || return 1
+  upstream_node_version=$(printf '%s\n' "$upstream_launcher" | sed -n 's/^NODE_VER=//p' | sed -n '1p')
+  [ -n "$upstream_node_version" ] || { upgrade_error "Could not determine the target Node.js version."; return 1; }
+  if [ "$upstream_node_version" != "$NODE_VER" ] || ! chinachu_installer_node_ready; then node_needed=true; fi
+  if printf '%s\n' "$changed_files" | grep -Eq '^(package.json|package-lock.json)$' || ! chinachu_installer_dependencies_ready; then
+    dependencies_needed=true
+  fi
+  while IFS= read -r file; do
+    if upgrade_file_requires_restart "$file"; then restart_needed=true; break; fi
+  done <<< "$changed_files"
+  if [ "$node_needed" = true ] || [ "$dependencies_needed" = true ]; then restart_needed=true; fi
+
+  upgrade_as_user test -w "$CHINACHU_DIR" || { upgrade_error "$UPGRADE_USER cannot update the working tree."; return 1; }
+  if [ "$node_needed" = true ] && [ -e "$NAVE_DIR" ]; then
+    [ "$(stat -c %u -- "$NAVE_DIR")" = "$(id -u "$UPGRADE_USER")" ] || { upgrade_error "$UPGRADE_USER does not own $NAVE_DIR."; return 1; }
+    upgrade_as_user test -w "$NAVE_DIR" || { upgrade_error "$UPGRADE_USER cannot repair $NAVE_DIR."; return 1; }
+    if [ -e "$NAVE_DIR/installed/$upstream_node_version" ]; then
+      [ "$(stat -c %u -- "$NAVE_DIR/installed/$upstream_node_version")" = "$(id -u "$UPGRADE_USER")" ] || { upgrade_error "$UPGRADE_USER does not own the target Nave runtime."; return 1; }
+      upgrade_as_user test -w "$NAVE_DIR/installed/$upstream_node_version" || { upgrade_error "$UPGRADE_USER cannot repair the target Nave runtime."; return 1; }
+    fi
+  fi
+  if [ "$dependencies_needed" = true ] && [ -e "$CHINACHU_DIR/node_modules" ]; then
+    [ "$(stat -c %u -- "$CHINACHU_DIR/node_modules")" = "$(id -u "$UPGRADE_USER")" ] || { upgrade_error "$UPGRADE_USER does not own node_modules."; return 1; }
+    upgrade_as_user test -w "$CHINACHU_DIR/node_modules" || { upgrade_error "$UPGRADE_USER cannot replace node_modules."; return 1; }
+  fi
+
+  printf 'Changed files: %s\n' "$(printf '%s\n' "$changed_files" | wc -l)"
+  printf 'Node.js repair: %s\nDependencies repair: %s\nService restart: %s\n' "$node_needed" "$dependencies_needed" "$restart_needed"
+  if [ -n "$manager_prefix" ]; then
+    printf 'PM2 manager: %s (%s), currently online: %s\n' "$manager_prefix" "$manager_user" "${online_names:-none}"
+  else
+    printf 'PM2 manager: unregistered (Upgrade will not register services)\n'
+  fi
+
+  upgrade_confirm || return $?
+
+  if [ "$restart_needed" = true ]; then
+    upgrade_revalidate_pm2_manager || return 1
+  fi
+  if [ "$restart_needed" = true ] && [ -n "$online_names" ]; then
+    service_setup_guard_activity || {
+      upgrade_error "Recording/finalization or a near-term reservation prevents service interruption."
+      return 1
+    }
+    service_setup_pm2_as_user "$manager_user" stop $online_names || {
+      upgrade_error "Could not stop the previously running Chinachu PM2 services."
+      return 1
+    }
+  fi
+
+  if ! upgrade_git merge --ff-only "$upstream"; then
+    upgrade_error "Fast-forward application failed. No forced rollback was attempted."
+    return 1
+  fi
+
+  if [ "$node_needed" = true ]; then
+    upgrade_as_user "$CHINACHU_DIR/chinachu" installer node || {
+      upgrade_error "Node.js repair failed. Previously stopped services remain stopped."
+      return 1
+    }
+  fi
+  if [ "$dependencies_needed" = true ]; then
+    upgrade_as_user "$CHINACHU_DIR/chinachu" installer dependencies || {
+      upgrade_error "Dependency repair failed. Previously stopped services remain stopped."
+      return 1
+    }
+  fi
+  upgrade_as_user "$CHINACHU_DIR/chinachu" installer bootstrap || return 1
+  upgrade_as_user "$CHINACHU_DIR/chinachu" installer verify || {
+    upgrade_error "Post-update verification failed. No forced rollback was attempted."
+    return 1
+  }
+
+  if [ "$restart_needed" = true ] && [ -n "$online_names" ]; then
+    service_setup_pm2_daemon_active "$manager_user" || {
+      upgrade_error "The selected PM2 daemon is no longer available; services were not restarted."
+      return 1
+    }
+    service_setup_pm2_as_user "$manager_user" start $online_names || {
+      upgrade_error "Updated files were verified, but previously running services could not be restarted."
+      return 1
+    }
+    manager_active=$(service_setup_pm2_as_user "$manager_user" jlist) || return 1
+    [ "$(upgrade_pm2_online_names "$manager_active")" = "$online_names" ] || {
+      upgrade_error "Not all previously running Chinachu services returned ONLINE."
+      return 1
+    }
+    upgrade_pm2_identity_valid "$manager_active" "$online_names" "$manager_expected_uid" "$manager_expected_gid" || {
+      upgrade_error "Restarted Chinachu services have an unexpected UID/GID."
+      return 1
+    }
+  fi
+
+  printf '\nUpgrade completed. PM2 registration and saved state were not changed.\n'
+  chinachu_auth_setup_hint "$UPGRADE_USER"
 }
 
 chinachu_service () {
@@ -549,166 +992,15 @@ chinachu_service () {
     return $?
   fi
 
-  local cmd name action
-  name="$1"
-  action="$2"
-  case $action in
-    initscript | execute )
-      case $name in
-        operator | wui )
-          cmd="chinachu_service_$action"
-          ;;
-        * )
-          cmd="chinachu_service_help"
-          ;;
-      esac
-      ;;
-    * )
-      cmd="chinachu_service_help"
-      ;;
-  esac
-  $cmd "$name" && return 0
-}
-
-chinachu_service_initscript () {
-  local name="$1"
-
-  cat <<EOF
-#!/bin/bash
-# /etc/
-
-### BEGIN INIT INFO
-# Provides:          chinachu-${name}
-# Required-Start:    \$local_fs \$remote_fs \$network \$syslog
-# Required-Stop:     \$local_fs \$remote_fs \$network \$syslog
-# Default-Start:     2 3 4 5
-# Default-Stop:      0 1 6
-# Short-Description: starts the chinachu-${name}
-# Description:       starts the chinachu-${name} (USER=$USER)
-### END INIT INFO
-
-PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-DAEMON=${CHINACHU_DIR}/chinachu
-DAEMON_OPTS="service ${name} execute"
-NAME=chinachu-${name}
-USER=$USER
-PIDFILE=/var/run/\${NAME}.pid
-
-test -x \$DAEMON || exit 0
-
-start () {
-  echo -n "Starting \${NAME}: "
-
-  if [ -f \$PIDFILE ]; then
-    PID=\`cat \$PIDFILE\`
-    if [ -z "\`ps axf | grep \${PID} | grep -v grep\`" ]; then
-      rm -f \$PIDFILE
-    else
-      echo "\${NAME} is already running? (pid=\${PID})"
-      exit
-    fi
-  fi
-
-  PID=\$(su \$USER -c "exec \$DAEMON \$DAEMON_OPTS < /dev/null > /dev/null 2>&1 & echo \\\$!")
-
-  if [ -z \$PID ]; then
-    echo "Failed!"
-    exit
-  else
-    echo \$PID > \$PIDFILE
-  fi
-
-  echo "OK."
-}
-
-stop () {
-  echo -n "Stopping \${NAME}: "
-
-  if [ -f \$PIDFILE ]; then
-    PID=\`cat \$PIDFILE\`
-    PGID=\`ps -p \$PID -o pgrp | grep -v PGRP\`
-    kill -QUIT -\`echo \$PGID\`
-    echo "OK."
-    rm -f \$PIDFILE
-  else
-    echo "\${NAME} is not running? (\${PIDFILE} not found)."
-  fi
-}
-
-status () {
-  if [ -f \$PIDFILE ]; then
-    PID=\`cat \$PIDFILE\`
-    if [ -z "\`ps axf | grep \${PID} | grep -v grep\`" ]; then
-      echo "\${NAME} is dead but \${PIDFILE} exists."
-    else
-      echo "\${NAME} is running."
-    fi
-  else
-    echo "\${NAME} is NOT running."
-  fi
-}
-
-case "\$1" in
-  start )
-    start "\$@"
-    ;;
-  stop )
-    stop "\$@"
-    ;;
-  restart )
-    stop "\$@"
-    sleep 3
-    start "\$@"
-    ;;
-  status )
-    status "\$@"
-    ;;
-  *)
-    echo "Usage: \$NAME {start|stop|restart|status}" >&2
-    exit 1
-    ;;
-esac
-
-exit 0
-
-EOF
-
-  return 0
-}
-
-chinachu_service_execute () {
-  local name="$1"
-
-  chinachu_runtime_bootstrap || return 1
-
-  node app-${name}.js > /dev/stdout 2>&1 | tee -a ./log/${name}
-  return ${PIPESTATUS[0]}
+  chinachu_service_help
 }
 
 chinachu_service_help () {
   cat <<EOF
 
-Usage: ./chinachu service <name> <action>
-
-Names:
-
-operator    Chinachu Task Operator Service
-wui         Chinachu WebUI Server Service
-
-Actions:
-
-initscript  Output a LSB init script
-execute     Execute
-setup       Register and verify operator/WUI with PM2
+Usage: ./chinachu service setup [local|root]
 
 Examples:
-
-# Create a LSB init script and Install to system
-./chinachu service operator initscript > /tmp/chinachu-operator
-./chinachu service wui initscript > /tmp/chinachu-wui
-sudo chown root:root /tmp/chinachu-operator /tmp/chinachu-wui
-sudo chmod +x /tmp/chinachu-operator /tmp/chinachu-wui
-sudo mv /tmp/chinachu-operator /tmp/chinachu-wui /etc/init.d/
 
 # PM2 Service Setup (administrative entry)
 sudo ./chinachu service setup
@@ -886,9 +1178,10 @@ Usage: ./chinachu <cmd> ...
 
 Commands:
 
-installer               Run a Installer.
-updater                 Run a Updater.
-service <name> <action> Service and PM2 setup utility.
+installer               Install or repair Chinachu components.
+upgrade                 Apply a safe fast-forward update (may prompt for sudo).
+updater                 Alias of upgrade.
+service setup           Configure or review PM2 services.
 
 update                  Run a Scheduler.
 search [options]        Search for programs.
