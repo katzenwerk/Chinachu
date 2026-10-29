@@ -1,8 +1,15 @@
+export const DROP_DETECTION_MODES = [
+  { value: 'mirakurun', label: 'Mirakurun監視（標準）', description: 'MirakurunからDROP情報を取得する。' },
+  { value: 'ts', label: 'TS解析（BETA）', description: '録画ストリームを解析し、CC不連続などを検出する。' },
+  { value: 'both', label: '両方（BETA）', description: 'Mirakurun監視とTS解析を併用する。' },
+  { value: 'off', label: '無効', description: 'DROP検出を行わない。' }
+];
+
 const KNOWN_KEYS = new Set([
   'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs', 'temporaryDir',
   'recordedFormat', 'recordedCommand', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
   'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm',
-  'vaapiEnabled', 'vaapiDevice', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds',
+  'vaapiEnabled', 'vaapiDevice', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode',
   'recordedStorageWakeupBeforeSec', 'storageLowSpaceWarningThresholdMB',
   'storageLowSpaceWarningIntervalMinutes', 'storageLowSpaceThresholdMB', 'storageLowSpaceAction',
   'storageLowSpaceCriticalNotifyIntervalMinutes', 'notificationCommand', 'matchRetentionDays',
@@ -123,6 +130,10 @@ export function normalizeRecordedDirs(rows) {
 export function validateConfig(config) {
   const errors = [];
   if (typeof config.recordedDir !== 'string' || config.recordedDir.trim() === '') errors.push('デフォルト録画先は必須です。');
+  if (config.dropDetectionMode !== undefined && config.dropDetectionMode !== null &&
+      !DROP_DETECTION_MODES.some(option => option.value === config.dropDetectionMode)) {
+    errors.push('DROP検出方式をmirakurun、ts、both、offのいずれかから選び直してください。');
+  }
   if (config.normalizationForm !== undefined && !['NFC', 'NFD', 'NFKC', 'NFKD'].includes(config.normalizationForm)) {
     errors.push('予約ルールの文字正規化が不正です。');
   }
@@ -157,9 +168,15 @@ export function validateConfig(config) {
   return errors;
 }
 
-export function formatChangeValue(value, removed = false) {
+export function formatChangeValue(value, removed = false, key) {
   if (removed) return '（未指定へ変更）';
   if (value === undefined) return '（未指定）';
+  if (key === 'dropDetectionMode') {
+    if (value === null) return '（未指定・Mirakurun監視（標準））';
+    const mode = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    const option = DROP_DETECTION_MODES.find(item => item.value === mode);
+    return option ? option.label : `${JSON.stringify(value)}（不正値・Mirakurun監視（標準）で動作）`;
+  }
   if (typeof value === 'string') return value === '' ? '（空文字）' : value;
   return JSON.stringify(value);
 }

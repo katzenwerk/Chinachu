@@ -88,6 +88,7 @@ const schedulerState = require('./lib/scheduler-state');
 const reservationStore = require('./lib/reservation-store');
 const matchV2 = require('./lib/match-v2');
 const bitrateStats = require('./lib/bitrate-stats');
+const { TsDropAnalyzer } = require('./lib/ts-drop-analyzer');
 const chinachu = require('chinachu-common');
 const mirakurun = new (require("mirakurun").default)();
 
@@ -129,10 +130,15 @@ const sendNotification = notification.createNotificationQueue(
 );
 const recordedStorageWakeupBeforeSec = getRecordedStorageWakeupBeforeSec();// 録画開始前HDD起動秒数。0/null/未指定は無効
 const recordedStorageWakeupBeforeTime = recordedStorageWakeupBeforeSec * 1000;
+const dropDetectionMode = getDropDetectionMode();// 未指定時は既存Mirakurun方式
+const mirakurunDropDetectionEnabled = dropDetectionMode === 'mirakurun' || dropDetectionMode === 'both';
+const tsDropDetectionEnabled = dropDetectionMode === 'ts' || dropDetectionMode === 'both';
 const mirakurunDropCheckIntervalTime = getMirakurunDropCheckIntervalTime();// 録画中drop監視間隔。0以下で無効
 const reserveCheckIntervalTime = getReserveCheckIntervalTime();// 通常時の予約チェック間隔
 const prepReserveCheckIntervalTime = getPrepReserveCheckIntervalTime();// 準備期間内の予約チェック間隔。通常間隔以上なら高速化なし
 const recordedDurationProbeTimeoutMs = getRecordedDurationProbeTimeoutMs();// 録画済みTSのffprobe timeout
+const TS_DROP_LOG_INTERVAL_MS = 30 * 1000;
+const TS_DROP_OVERLOAD_RATIO = 0.25;
 
 
 // 録画境界の準備猶予を取得する
@@ -191,6 +197,19 @@ function getMirakurunDropCheckIntervalTime() {
 	}
 
 	return Math.max(1, Math.floor(seconds)) * 1000;
+}
+
+function getDropDetectionMode() {
+	if (config.dropDetectionMode === null || typeof config.dropDetectionMode === 'undefined') {
+		return 'mirakurun';
+	}
+
+	const mode = typeof config.dropDetectionMode === 'string' ? config.dropDetectionMode.trim().toLowerCase() : '';
+	if (['mirakurun', 'ts', 'both', 'off'].includes(mode)) return mode;
+
+	operatorLog('WARNING: invalid dropDetectionMode=' + JSON.stringify(config.dropDetectionMode) +
+		'; fallback to mirakurun');
+	return 'mirakurun';
 }
 
 // 通常時の予約チェック間隔を取得する
@@ -524,7 +543,8 @@ operatorInterval = setInterval(() => {
 		recordingChecked = clock;
 	}
 
-	if (mirakurunDropCheckIntervalTime > 0 && clock - mirakurunDropChecked > mirakurunDropCheckIntervalTime) {
+	if (mirakurunDropDetectionEnabled && mirakurunDropCheckIntervalTime > 0 &&
+		clock - mirakurunDropChecked > mirakurunDropCheckIntervalTime) {
 		mirakurunDropChecker();
 		mirakurunDropChecked = clock;
 	}
@@ -596,10 +616,10 @@ function isRecorded(program) {
 	return false;
 }
 
-// graceful shutdown で中断した録画開始済みのルール予約だけを再開対象にする。
+// graceful shutdown で中断し、有効な予約が残る録画開始済み番組を再開対象にする。
 // isRecorded() の通常の終端判定は変更せず、その前段で限定的に使用する。
 function getResumableInterruptedRecording(program) {
-	if (!program || program.isManualReserved || clock > program.end) {
+	if (!program || clock > program.end) {
 		return null;
 	}
 
@@ -608,7 +628,7 @@ function getResumableInterruptedRecording(program) {
 
 		if (!interrupted ||
 			interrupted.id !== program.id ||
-			interrupted.isManualReserved ||
+			(interrupted.isManualReserved === true) !== (program.isManualReserved === true) ||
 			interrupted.operatorResumePending !== true ||
 			interrupted.operatorAbort === true ||
 			interrupted.operatorEndLack === true ||
@@ -648,18 +668,22 @@ function inheritInterruptedRecording(program, interrupted) {
 }
 
 function markRecordingInterruptedForResume(program) {
+	const interruptedAt = Date.now();
+
 	if (!program ||
-		program.isManualReserved ||
 		program._operatorNg ||
 		program._operatorAbort ||
 		program._operatorEndLack ||
 		program.operatorAbort === true ||
-		program.operatorEndLack === true) {
+		program.operatorEndLack === true ||
+		interruptedAt >= program.end ||
+		(program.isManualReserved === true && !reserves.some(reserve =>
+			reserve && reserve.id === program.id && reserve.isManualReserved === true && interruptedAt < reserve.end))) {
 		return false;
 	}
 
 	program.operatorResumePending = true;
-	program.operatorInterruptedAt = Date.now();
+	program.operatorInterruptedAt = interruptedAt;
 	program.operatorInterruptionCount = (Number(program.operatorInterruptionCount) || 0) + 1;
 	return true;
 }
@@ -2147,6 +2171,96 @@ function doRecord(program, stream) {
 	let inputEnded = false;
 	let probeDurationAfterClose = false;
 	let generateThumbnailAfterClose = false;
+	const tsDropAnalyzer = tsDropDetectionEnabled ? new TsDropAnalyzer() : null;
+	let tsDropLogTimer = null;
+	let tsDropLoggedSampleCount = 0;
+	let tsDropPreviousCcErrorsByPid = {};
+
+	function getTsDropLogDetails(summary) {
+		const ccErrorsByPid = summary.ccErrorsByPid || {};
+		const ccErrorsByPidInterval = {};
+		Object.keys(ccErrorsByPid).forEach(pid => {
+			const count = Number(ccErrorsByPid[pid]) || 0;
+			const previous = Number(tsDropPreviousCcErrorsByPid[pid]) || 0;
+			if (count > previous) ccErrorsByPidInterval[pid] = count - previous;
+		});
+		tsDropPreviousCcErrorsByPid = { ...ccErrorsByPid };
+
+		const samples = Array.isArray(summary.ccErrorSamples) ?
+			summary.ccErrorSamples.slice(tsDropLoggedSampleCount) : [];
+		tsDropLoggedSampleCount += samples.length;
+		return { ccErrorsByPidInterval, samples };
+	}
+
+	function tsDropLogText(label, summary, details) {
+		details = details || { ccErrorsByPidInterval: {}, samples: [] };
+		return 'TS DROP: ' + label +
+			' complete=' + (summary.completed === true) +
+			' packet=' + summary.packetTotal +
+			' cc-events=' + summary.ccErrorEvents +
+			' cc-pids=' + JSON.stringify(summary.ccErrorsByPid) +
+			' cc-pids-interval=' + JSON.stringify(details.ccErrorsByPidInterval) +
+			(details.samples.length > 0 ? ' cc-samples=' + JSON.stringify(details.samples) : '') +
+			' tei=' + summary.teiPackets +
+			' scrambled=' + summary.scrambledPackets +
+			' sync-events=' + summary.syncErrorEvents +
+			' cpu-ms=' + summary.processingTimeMs.toFixed(1) +
+			' cpu-ratio=' + (summary.processingRatio * 100).toFixed(2) + '%' +
+			(summary.stopReason ? ' reason=' + summary.stopReason : '') +
+			': ' + printProgram(program);
+	}
+
+	function stopTsDropObservation(reason) {
+		if (!tsDropAnalyzer || tsDropAnalyzer.stopped) return;
+		tsDropAnalyzer.stop(reason);
+		stream.removeListener('data', onTsDropData);
+		if (tsDropLogTimer !== null) {
+			clearInterval(tsDropLogTimer);
+			tsDropLogTimer = null;
+		}
+		const summary = tsDropAnalyzer.snapshot();
+		operatorLog(tsDropLogText('stopped', summary, getTsDropLogDetails(summary)));
+	}
+
+	function onTsDropData(chunk) {
+		try {
+			tsDropAnalyzer.push(chunk);
+		} catch (error) {
+			stopTsDropObservation('parser-error: ' + (error && error.message || error));
+		}
+	}
+
+	function logTsDropProgress() {
+		if (!tsDropAnalyzer || tsDropAnalyzer.stopped) return;
+		const summary = tsDropAnalyzer.snapshot();
+		operatorLog(tsDropLogText('progress', summary, getTsDropLogDetails(summary)));
+		// 単一chunkの所要時間はchunk sizeやGCに左右されるため停止根拠にしない。
+		// 30秒以上の累積で解析が1 CPUの25%以上を占有した場合だけ観測を停止する。
+		if (summary.wallTimeMs >= TS_DROP_LOG_INTERVAL_MS && summary.processingRatio > TS_DROP_OVERLOAD_RATIO) {
+			stopTsDropObservation('processing-load-ratio-exceeded');
+		}
+	}
+
+	function finalizeTsDropObservation() {
+		if (!tsDropAnalyzer) return;
+		stream.removeListener('data', onTsDropData);
+		if (tsDropLogTimer !== null) {
+			clearInterval(tsDropLogTimer);
+			tsDropLogTimer = null;
+		}
+		const reason = program._operatorNg ? 'recording-ng' :
+			program.operatorResumePending === true ? 'recording-interrupted-for-resume' :
+			program._operatorEndLack ? 'recording-ended-early' :
+			program._operatorAbort ? 'recording-aborted' : 'input-stream-not-ended';
+		const summary = tsDropAnalyzer.finish({ complete: inputEnded, reason });
+		summary.coverage = isResumedRecording ? 'resumed-segment' : inputEnded ? 'recording' : 'partial-recording';
+		program.tsDrop = summary;
+		operatorLog(tsDropLogText('final', summary, getTsDropLogDetails(summary)));
+		if (dropDetectionMode === 'both' && program.mirakurunDrop) {
+			operatorLog('DROP COMPARE: mirakurun=' + Number(program.mirakurunDrop.dropTotal || 0) +
+				' ts-cc-events=' + summary.ccErrorEvents + ' (different metrics): ' + printProgram(program));
+		}
+	}
 
 	function finalizeNg(reason, error) {
 		if (finalized) {
@@ -2226,6 +2340,13 @@ function doRecord(program, stream) {
 	});
 
 	stream.pipe(recFile);
+	if (tsDropAnalyzer) {
+		// 録画pipeを先に接続し、同じchunkを読み取り専用で観測する。
+		// Transformを録画経路へ挟まないため、recFile側のbackpressure経路は維持される。
+		stream.on('data', onTsDropData);
+		tsDropLogTimer = setInterval(logTsDropProgress, TS_DROP_LOG_INTERVAL_MS);
+		if (typeof tsDropLogTimer.unref === 'function') tsDropLogTimer.unref();
+	}
 
 	// 状態更新
 	writeRecordingData();
@@ -2242,6 +2363,7 @@ function doRecord(program, stream) {
 		stream.removeListener('aborted', onInputAborted);
 
 		applyMirakurunDropSnapshot(program);
+		finalizeTsDropObservation();
 
 		safeAbortStream(stream, 'recording finalize');
 
@@ -2265,7 +2387,6 @@ function doRecord(program, stream) {
 		const isNgRecording = !!program._operatorNg;
 		const isResumePending = !isNgRecording &&
 			program.operatorResumePending === true &&
-			!program.isManualReserved &&
 			program.operatorAbort !== true &&
 			program.operatorEndLack !== true;
 		probeDurationAfterClose = !isNgRecording && !isResumePending;
@@ -2300,7 +2421,10 @@ function doRecord(program, stream) {
 		}
 		writeRecordingData();
 		delete mirakurunDropSnapshots[program.id];
-		removeManualReserve(program);
+		// 再開待ちと再開直後の一時的なNGでは、手動予約を残して同じpending録画へ再試行できるようにする。
+		if (!isResumePending && !(isNgRecording && isResumedRecording)) {
+			removeManualReserve(program);
+		}
 
 		// ポストプロセス
 		if (!isNgRecording && !isResumePending && config.recordedCommand) {

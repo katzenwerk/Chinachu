@@ -67,6 +67,9 @@ button.program-detail-media-poster:focus-visible { outline: 3px solid var(--info
 .program-detail-technical { margin-top: var(--space-5); padding-top: var(--space-3); border-top: 1px solid var(--border); }
 .program-detail-technical summary { color: var(--muted); font-size: 12px; cursor: pointer; }
 .program-detail-technical dl { margin-top: var(--space-3); }
+.program-ts-drop-summary { margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+.program-ts-drop-summary h4 { margin: 0 0 var(--space-3); color: var(--muted); font-size: 12px; font-weight: var(--font-heading-weight); letter-spacing: .04em; }
+.program-ts-drop-summary dl { margin: 0; }
 .program-detail-recording-path { display: grid; gap: 8px; margin-top: var(--space-5); }
 .program-detail-recording-path > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .program-detail-recording-path h4 { margin: 0; color: var(--muted); font-size: 12px; font-weight: var(--font-heading-weight); }

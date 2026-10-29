@@ -88,6 +88,26 @@ function createRecordingStatusTags(statuses) {
   return tags;
 }
 
+function createTsDropSummary(summary) {
+  if (summary === null) return null;
+  const section = document.createElement('section');
+  section.className = 'program-ts-drop-summary';
+  const heading = document.createElement('h4');
+  const facts = document.createElement('dl');
+  heading.textContent = 'TS DROP解析';
+  addDefinition(facts, 'CC異常合計', summary.ccErrorTotal === null ? '不明' : `${summary.ccErrorTotal.toLocaleString('ja-JP')}件`);
+  if (summary.pids.length === 0) {
+    addDefinition(facts, 'PID別CC異常', 'なし');
+  } else {
+    summary.pids.forEach(entry => addDefinition(facts, `PID ${entry.label}`, `${entry.count.toLocaleString('ja-JP')}件`));
+  }
+  if (summary.totalsMatch === false) {
+    addDefinition(facts, '集計整合', `不一致（PID別合計 ${summary.pidTotal.toLocaleString('ja-JP')}件）`);
+  }
+  section.append(heading, facts);
+  return section;
+}
+
 function createFacts(model, recordingLayout = false) {
   const facts = document.createElement('aside');
   facts.className = 'panel program-detail-facts';
@@ -129,6 +149,8 @@ function createFacts(model, recordingLayout = false) {
     if (model.deletion.kind !== 'unknown') addDefinition(deletion, '削除日時', model.deletion.deletedAt || '日時情報なし');
     facts.append(deletion);
   }
+  const tsDropSummary = createTsDropSummary(model.tsDropInfo);
+  if (tsDropSummary) facts.append(tsDropSummary);
   const notices = document.createElement('div');
   notices.className = 'program-detail-notices';
   [...model.warnings, ...(model.reservation?.warnings || [])].filter(Boolean).forEach(value => {

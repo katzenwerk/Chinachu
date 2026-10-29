@@ -56,6 +56,35 @@ export function recordingDurationInfo(item) {
   };
 }
 
+export function tsDropPidSummary(item) {
+  const tsDrop = item?.tsDrop && typeof item.tsDrop === 'object' ? item.tsDrop : null;
+  if (tsDrop === null) return null;
+
+  const ccErrorTotalValue = Number(tsDrop.ccErrorEvents);
+  const ccErrorTotal = Number.isInteger(ccErrorTotalValue) && ccErrorTotalValue >= 0
+    ? ccErrorTotalValue : null;
+  const ccErrorsByPid = tsDrop.ccErrorsByPid && typeof tsDrop.ccErrorsByPid === 'object'
+    ? tsDrop.ccErrorsByPid : {};
+  const pids = Object.entries(ccErrorsByPid).map(([key, value]) => {
+    const pid = Number(key);
+    const count = Number(value);
+    if (!Number.isInteger(pid) || pid < 0 || pid > 0x1fff || !Number.isInteger(count) || count <= 0) return null;
+    return {
+      pid,
+      label: `0x${pid.toString(16).toUpperCase().padStart(4, '0')}`,
+      count
+    };
+  }).filter(Boolean).sort((left, right) => left.pid - right.pid);
+  const pidTotal = pids.reduce((total, entry) => total + entry.count, 0);
+
+  return {
+    ccErrorTotal,
+    pidTotal,
+    totalsMatch: ccErrorTotal === null ? null : ccErrorTotal === pidTotal,
+    pids
+  };
+}
+
 function warning(key, label, description, kind = 'confirmed', tone = 'warning') {
   return { key, label, description: description || label, kind, tone };
 }
@@ -129,6 +158,33 @@ export function recordedResultWarnings(item) {
   if (Number.isFinite(dropTotal) && dropTotal > 0) {
     warnings.push(warning('drop', `DROP ${dropTotal.toLocaleString('ja-JP')}`,
       `MirakurunでDROPを${dropTotal.toLocaleString('ja-JP')}件記録（映像への影響は未確認）`, 'confirmed'));
+  }
+  const tsDrop = item?.tsDrop && typeof item.tsDrop === 'object' ? item.tsDrop : null;
+  if (tsDrop) {
+    const ccEvents = Number(tsDrop.ccErrorEvents);
+    const teiPackets = Number(tsDrop.teiPackets);
+    const scrambledPackets = Number(tsDrop.scrambledPackets);
+    const syncEvents = Number(tsDrop.syncErrorEvents);
+    if (tsDrop.completed !== true) {
+      warnings.push(warning('ts-drop-incomplete', 'TS DROP解析未完了',
+        `OperatorのTS解析は完了していません${tsDrop.stopReason ? `（${tsDrop.stopReason}）` : ''}`, 'confirmed'));
+    }
+    if (Number.isFinite(ccEvents) && ccEvents > 0) {
+      warnings.push(warning('ts-cc', `CC不連続 ${ccEvents.toLocaleString('ja-JP')}`,
+        `録画TSでCC不連続イベントを${ccEvents.toLocaleString('ja-JP')}件検出（欠落パケット数ではありません）`, 'confirmed'));
+    }
+    if (Number.isFinite(teiPackets) && teiPackets > 0) {
+      warnings.push(warning('ts-tei', `TEI ${teiPackets.toLocaleString('ja-JP')}`,
+        `録画TSでTransport Error Indicatorを${teiPackets.toLocaleString('ja-JP')}パケット検出`, 'confirmed'));
+    }
+    if (Number.isFinite(scrambledPackets) && scrambledPackets > 0) {
+      warnings.push(warning('ts-scrambled', `未復号 ${scrambledPackets.toLocaleString('ja-JP')}`,
+        `録画TSでscrambling制御付きパケットを${scrambledPackets.toLocaleString('ja-JP')}件検出`, 'confirmed'));
+    }
+    if (Number.isFinite(syncEvents) && syncEvents > 0) {
+      warnings.push(warning('ts-sync', `同期異常 ${syncEvents.toLocaleString('ja-JP')}`,
+        `録画TS解析で同期喪失イベントを${syncEvents.toLocaleString('ja-JP')}件検出`, 'confirmed'));
+    }
   }
   return warnings;
 }

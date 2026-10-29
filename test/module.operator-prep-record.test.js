@@ -270,81 +270,126 @@ describe('Operator recording preparation attempts', function() {
 		}
 	});
 
-	it('resumes a shutdown-interrupted rule recording at the same path and runs completion work only after natural end', { timeout: 20000 }, async function() {
-		const responses = [];
-		const fixture = await createOperatorFixture([ createProgram('2') ], request => {
-			responses.push(request.res);
+	it('resumes shutdown-interrupted rule and active manual recordings but not a released manual reserve', { timeout: 45000 }, async function() {
+		for (const scenario of [
+			{ name: 'rule', program: createProgram('2') },
+			{ name: 'manual', program: createProgram('2', { isManualReserved: true }) }
+		]) {
+			const responses = [];
+			const fixture = await createOperatorFixture([ scenario.program ], request => {
+				responses.push(request.res);
+				request.res.writeHead(200, { 'Content-Type': 'video/MP2T' });
+				request.res.write('PART' + request.index);
+			}, {
+				trackRecordedCommand: true,
+				trackMatching: true,
+				config: { matchUpdateDelayMs: 0 },
+				ffprobeScript: [
+					'const fs = require("fs");',
+					'fs.appendFileSync(process.env.CHINACHU_TEST_FFPROBE_LOG, "probe\\n");',
+					'process.stdout.write("10.500001\\n");'
+				].join('\n')
+			});
+			const recordedPath = path.join(fixture.recordedDir, '2.m2ts');
+
+			try {
+				await waitForCondition(
+					() => fs.existsSync(recordedPath) && fs.readFileSync(recordedPath, 'utf8') === 'PART1',
+					'initial ' + scenario.name + ' recording did not start',
+					7000
+				);
+
+				const exit = await fixture.gracefulStop('SIGINT');
+				assert.deepStrictEqual(exit, { code: 0, signal: null });
+
+				const interrupted = fixture.read('recorded');
+				assert.strictEqual(interrupted.length, 1);
+				assert.strictEqual(interrupted[0].operatorResumePending, true);
+				assert.ok(interrupted[0].operatorInterruptedAt > 0);
+				assert.strictEqual(interrupted[0].operatorInterruptionCount, 1);
+				assert.strictEqual(interrupted[0].recorded, recordedPath);
+				assert.strictEqual(interrupted[0].isManualReserved, scenario.program.isManualReserved);
+				assert.deepStrictEqual(fixture.read('recording'), []);
+				assert.strictEqual(fixture.read('reserves').length, 1);
+				assert.strictEqual(fs.existsSync(fixture.recordedCommandLog), false);
+				assert.strictEqual(fs.existsSync(fixture.matchingLog), false);
+				assert.strictEqual(fs.existsSync(fixture.ffprobeLog), false);
+				assert.match(fixture.output(), /FIN INTERRUPTED: resume pending: #2\b/);
+
+				fixture.start();
+				await waitForCondition(
+					() => fixture.requests.length === 2 && fs.readFileSync(recordedPath, 'utf8') === 'PART1PART2',
+					'interrupted ' + scenario.name + ' recording did not append at the same path',
+					7000
+				);
+				responses[1].end();
+
+				await waitForCondition(
+					() => fixture.read('recording').length === 0 &&
+						fixture.read('recorded').length === 1 &&
+						fixture.read('recorded')[0].operatorResumePending === false &&
+						fs.existsSync(fixture.recordedCommandLog) &&
+						fs.existsSync(fixture.matchingLog),
+					'final ' + scenario.name + ' recording completion work did not finish',
+					5000
+				);
+				await waitForCondition(
+					() => fixture.read('recorded')[0].recordedDurationSeconds === 10.500001,
+					'final resumed ' + scenario.name + ' recording was not probed',
+					3000
+				);
+
+				const finalized = fixture.read('recorded')[0];
+				assert.strictEqual(finalized.recorded, recordedPath);
+				assert.strictEqual(finalized.operatorInterruptionCount, 1);
+				assert.ok(finalized.operatorResumedAt >= finalized.operatorInterruptedAt);
+				assert.strictEqual(fixture.read('reserves').length, scenario.program.isManualReserved ? 0 : 1);
+				assert.strictEqual(fs.readFileSync(recordedPath, 'utf8'), 'PART1PART2');
+				assert.strictEqual(fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length, 1);
+				assert.ok(fs.readFileSync(fixture.matchingLog, 'utf8').trim().split('\n').length >= 1);
+				assert.strictEqual(fs.readFileSync(fixture.ffprobeLog, 'utf8').trim().split('\n').length, 1);
+				assert.match(fixture.output(), /RESUME RECORD: #2\b/);
+			} finally {
+				await fixture.close();
+			}
+		}
+
+		const releasedProgram = createProgram('2', { isManualReserved: true });
+		const releasedFixture = await createOperatorFixture([ releasedProgram ], request => {
 			request.res.writeHead(200, { 'Content-Type': 'video/MP2T' });
 			request.res.write('PART' + request.index);
-		}, {
-			trackRecordedCommand: true,
-			trackMatching: true,
-			config: { matchUpdateDelayMs: 0 },
-			ffprobeScript: [
-				'const fs = require("fs");',
-				'fs.appendFileSync(process.env.CHINACHU_TEST_FFPROBE_LOG, "probe\\n");',
-				'process.stdout.write("10.500001\\n");'
-			].join('\n')
 		});
-		const recordedPath = path.join(fixture.recordedDir, '2.m2ts');
+		const releasedPath = path.join(releasedFixture.recordedDir, '2.m2ts');
 
 		try {
 			await waitForCondition(
-				() => fs.existsSync(recordedPath) && fs.readFileSync(recordedPath, 'utf8') === 'PART1',
-				'initial rule recording did not start',
+				() => fs.existsSync(releasedPath) && fs.readFileSync(releasedPath, 'utf8') === 'PART1',
+				'initial released manual recording did not start',
 				7000
 			);
-
-			const exit = await fixture.gracefulStop('SIGINT');
-			assert.deepStrictEqual(exit, { code: 0, signal: null });
-
-			const interrupted = fixture.read('recorded');
-			assert.strictEqual(interrupted.length, 1);
-			assert.strictEqual(interrupted[0].operatorResumePending, true);
-			assert.ok(interrupted[0].operatorInterruptedAt > 0);
-			assert.strictEqual(interrupted[0].operatorInterruptionCount, 1);
-			assert.strictEqual(interrupted[0].recorded, recordedPath);
-			assert.deepStrictEqual(fixture.read('recording'), []);
-			assert.strictEqual(fixture.read('reserves').length, 1);
-			assert.strictEqual(fs.existsSync(fixture.recordedCommandLog), false);
-			assert.strictEqual(fs.existsSync(fixture.matchingLog), false);
-			assert.strictEqual(fs.existsSync(fixture.ffprobeLog), false);
-			assert.match(fixture.output(), /FIN INTERRUPTED: resume pending: #2\b/);
-
-			fixture.start();
+			fs.writeFileSync(path.join(releasedFixture.dataDir, 'reserves.json'), '[]');
 			await waitForCondition(
-				() => fixture.requests.length === 2 && fs.readFileSync(recordedPath, 'utf8') === 'PART1PART2',
-				'interrupted rule recording did not append at the same path',
-				7000
-			);
-			responses[1].end();
-
-			await waitForCondition(
-				() => fixture.read('recording').length === 0 &&
-					fixture.read('recorded').length === 1 &&
-					fixture.read('recorded')[0].operatorResumePending === false &&
-					fs.existsSync(fixture.recordedCommandLog) &&
-					fs.existsSync(fixture.matchingLog),
-				'final recording completion work did not finish',
-				5000
-			);
-			await waitForCondition(
-				() => fixture.read('recorded')[0].recordedDurationSeconds === 10.500001,
-				'final resumed recording was not probed',
+				() => (releasedFixture.output().match(/READ: .*reserves\.json.*updated/g) || []).length >= 2,
+				'operator did not reload the released manual reserve',
 				3000
 			);
 
-			const finalized = fixture.read('recorded')[0];
-			assert.strictEqual(finalized.recorded, recordedPath);
-			assert.strictEqual(finalized.operatorInterruptionCount, 1);
-			assert.ok(finalized.operatorResumedAt >= finalized.operatorInterruptedAt);
-			assert.strictEqual(fs.readFileSync(recordedPath, 'utf8'), 'PART1PART2');
-			assert.strictEqual(fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length, 1);
-			assert.ok(fs.readFileSync(fixture.matchingLog, 'utf8').trim().split('\n').length >= 1);
-			assert.strictEqual(fs.readFileSync(fixture.ffprobeLog, 'utf8').trim().split('\n').length, 1);
-			assert.match(fixture.output(), /RESUME RECORD: #2\b/);
+			const exit = await releasedFixture.gracefulStop('SIGINT');
+			assert.deepStrictEqual(exit, { code: 0, signal: null });
+			assert.strictEqual(releasedFixture.read('recorded')[0].operatorResumePending, undefined);
+			assert.deepStrictEqual(releasedFixture.read('reserves'), []);
+
+			const readCount = (releasedFixture.output().match(/READ: .*reserves\.json/g) || []).length;
+			releasedFixture.start();
+			await waitForCondition(
+				() => (releasedFixture.output().match(/READ: .*reserves\.json/g) || []).length > readCount,
+				'restarted operator did not reload released reserves',
+				3000
+			);
+			await new Promise(resolve => setTimeout(resolve, 1200));
+			assert.strictEqual(releasedFixture.requests.length, 1);
 		} finally {
-			await fixture.close();
+			await releasedFixture.close();
 		}
 	});
 

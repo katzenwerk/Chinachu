@@ -79,6 +79,26 @@ function createRecordingStatusTags(statuses) {
   return tags;
 }
 
+function createTsDropSummary(summary) {
+  if (summary === null) return null;
+  const section = document.createElement('section');
+  section.className = 'program-ts-drop-summary';
+  const heading = document.createElement('h4');
+  const facts = document.createElement('dl');
+  heading.textContent = 'TS DROP解析';
+  addFact(facts, 'CC異常合計', summary.ccErrorTotal === null ? '不明' : `${summary.ccErrorTotal.toLocaleString('ja-JP')}件`);
+  if (summary.pids.length === 0) {
+    addFact(facts, 'PID別CC異常', 'なし');
+  } else {
+    summary.pids.forEach(entry => addFact(facts, `PID ${entry.label}`, `${entry.count.toLocaleString('ja-JP')}件`));
+  }
+  if (summary.totalsMatch === false) {
+    addFact(facts, '集計整合', `不一致（PID別合計 ${summary.pidTotal.toLocaleString('ja-JP')}件）`);
+  }
+  section.append(heading, facts);
+  return section;
+}
+
 function createManagement(model) {
   const aside = document.createElement('aside');
   aside.className = 'program-modal-management';
@@ -111,7 +131,10 @@ function createManagement(model) {
   const id = document.createElement('small');
   id.className = 'program-modal-id';
   id.textContent = `番組ID: ${model.programId || '未取得'}`;
-  aside.append(heading, facts, notices, createRecordingStatusTags(model.recordingWarnings), id);
+  const tsDropSummary = createTsDropSummary(model.tsDropInfo);
+  aside.append(heading, facts);
+  if (tsDropSummary) aside.append(tsDropSummary);
+  aside.append(notices, createRecordingStatusTags(model.recordingWarnings), id);
   return aside;
 }
 

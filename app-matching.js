@@ -745,7 +745,8 @@ function copyOperatorRecordingMeta(source, output) {
 		"operatorEndLackEarlySeconds",
 		"mirakurunProgramId",
 		"mirakurunStreamPath",
-		"mirakurunDrop"
+		"mirakurunDrop",
+		"tsDrop"
 	];
 
 	if (!source || typeof source !== "object" || !output || typeof output !== "object") {
@@ -830,6 +831,7 @@ function buildRecordingResult(recorded, nowMs, keepSnapshot) {
 		mirakurunProgramId: typeof recorded.mirakurunProgramId === "undefined" ? null : cloneJson(recorded.mirakurunProgramId),
 		mirakurunStreamPath: recorded.mirakurunStreamPath || "",
 		mirakurunDrop: typeof recorded.mirakurunDrop === "undefined" ? null : cloneJson(recorded.mirakurunDrop),
+		tsDrop: typeof recorded.tsDrop === "undefined" ? null : cloneJson(recorded.tsDrop),
 		fileExists: null,
 		fileSize: null,
 		cleanupState: recPath ? "active" : "unknown",

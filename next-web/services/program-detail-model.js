@@ -2,7 +2,8 @@ import {
   formatRecordingSeconds,
   isRecordedResultPlayable,
   recordedResultWarnings,
-  recordingDurationInfo
+  recordingDurationInfo,
+  tsDropPidSummary
 } from './recorded-result-warnings.js';
 
 function validText(value) {
@@ -212,6 +213,7 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
     path: recordingPath?.value || 'パス不明'
   } : null;
   const recordingWarnings = recordingInfo === null ? [] : recordedResultWarnings(recordingItem);
+  const tsDropInfo = recordingInfo === null ? null : tsDropPidSummary(recordingItem);
   const playable = isRecordedResultPlayable({
     status: recordingItem.status,
     deletionKind: recordingItem.deletionKind,
@@ -255,6 +257,7 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
     relatedRule,
     recordingInfo,
     recordingWarnings,
+    tsDropInfo,
     recordingPath,
     deletion: deletionInfo(match.deletion),
     actions: {

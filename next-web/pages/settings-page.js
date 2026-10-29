@@ -1,5 +1,6 @@
 import { loadConfig, loadMirakurunServices, loadRuntimeMode, saveConfig } from '../services/config-client.js';
 import {
+  DROP_DETECTION_MODES,
   cloneConfig,
   configChanges,
   formatChangeValue,
@@ -30,6 +31,7 @@ const FIELD = {
   recordingPriority: { label: '通常録画の優先度', type: 'number', integer: true },
   conflictedPriority: { label: '競合録画の優先度', type: 'number', integer: true },
   handoffPrepSeconds: { label: 'チューナー引継ぎ準備時間', type: 'number', min: 0 },
+  dropDetectionMode: { label: 'DROP検出方式', type: 'text', select: DROP_DETECTION_MODES },
   recordedStorageWakeupBeforeSec: { label: '録画先HDDの事前起動', type: 'number', integer: true, min: 0 },
   storageLowSpaceWarningThresholdMB: { label: '容量警告の空き容量', type: 'number', min: 0 },
   storageLowSpaceWarningIntervalMinutes: { label: '容量警告の通知間隔', type: 'number', exclusiveMin: 0 },
@@ -357,6 +359,28 @@ export function renderSettingsPage(container) {
     dependentUpdates.push(() => { map.input.disabled = draft.recordedNameReplaceEnclosingCharacters !== true; map.wrap.classList.toggle('is-disabled', map.input.disabled); });
     naming.body.append(format.wrap, replace.wrap, map.wrap);
 
+    const drop = card('録画中のDROP検出', '変更はOperatorの再起動後に反映されます。保存しても自動では再起動しません。');
+    drop.section.classList.add('settings-drop');
+    const dropMode = bindValueField('dropDetectionMode', '録画中のDROP検出方式を選択します。TS解析はBETA機能で、録画中のCPU負荷が増加する場合があります。', { wide: true });
+    if (draft.dropDetectionMode === undefined || draft.dropDetectionMode === null) {
+      dropMode.input.value = 'mirakurun';
+    } else if (!DROP_DETECTION_MODES.some(option => option.value === draft.dropDetectionMode)) {
+      const current = document.createElement('option');
+      current.value = '';
+      current.disabled = true;
+      current.textContent = `現在の設定: ${formatChangeValue(draft.dropDetectionMode, false, 'dropDetectionMode')}（選び直してください）`;
+      dropMode.input.prepend(current);
+      dropMode.input.value = '';
+    }
+    const dropDescription = document.createElement('p');
+    dropDescription.className = 'settings-muted';
+    dependentUpdates.push(() => {
+      dropDescription.textContent = DROP_DETECTION_MODES.find(option => option.value === dropMode.input.value)?.description ||
+        '保存するにはDROP検出方式を選び直してください。現在の設定値は自動では変更しません。';
+    });
+    dropMode.wrap.append(dropDescription);
+    drop.body.append(dropMode.wrap);
+
     const commands = card('録画後処理と予約照合', '録画終了後の処理と、予約ルールの照合方法を設定します。変更した内容はOperatorの再起動後に反映されます。');
     const fields = document.createElement('div');
     fields.className = 'settings-fields';
@@ -377,7 +401,7 @@ export function renderSettingsPage(container) {
       fields.append(bindValueField(key, descriptions[key], { compact: true }).wrap);
     });
     commands.body.append(temporary.wrap, recordedCommand.wrap, ffprobe.wrap, fields);
-    tab.append(destination.section, naming.section, commands.section);
+    tab.append(destination.section, naming.section, drop.section, commands.section);
     return tab;
   }
 
@@ -583,10 +607,10 @@ export function renderSettingsPage(container) {
     changes.forEach(change => {
       const row = document.createElement('div');
       row.innerHTML = '<strong></strong><span></span><span aria-hidden="true">→</span><span></span>';
-      row.querySelector('strong').textContent = change.key;
+      row.querySelector('strong').textContent = change.key === 'dropDetectionMode' ? FIELD.dropDetectionMode.label : change.key;
       const values = row.querySelectorAll('span');
-      values[0].textContent = formatChangeValue(change.before);
-      values[2].textContent = formatChangeValue(change.after, change.removed);
+      values[0].textContent = formatChangeValue(change.before, false, change.key);
+      values[2].textContent = formatChangeValue(change.after, change.removed, change.key);
       list.append(row);
     });
     const button = dialog.querySelector('[data-save]');
