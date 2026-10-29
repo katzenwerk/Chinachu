@@ -15,11 +15,18 @@ const KNOWN_KEYS = new Set([
   'storageLowSpaceCriticalNotifyIntervalMinutes', 'notificationCommand', 'matchRetentionDays',
   'reserves2RetentionDays', 'recordedHistoryRetentionDays', 'recordingResultCsvEnabled',
   'excludeServices', 'serviceOrder',
-  'wuiOpenServer', 'wuiOpenHost', 'wuiOpenPort'
+  'wuiOpenServer', 'wuiOpenHost', 'wuiOpenPort',
+  'seriesUseSyobocal'
 ]);
 
 export function cloneConfig(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+export function configForSave(config) {
+  const result = cloneConfig(config);
+  if (!Object.prototype.hasOwnProperty.call(result, 'seriesUseSyobocal')) result.seriesUseSyobocal = true;
+  return result;
 }
 
 function sameValue(left, right) {
@@ -139,6 +146,9 @@ export function validateConfig(config) {
   }
   if (config.storageLowSpaceAction !== undefined && !['stop-new', 'stop', 'remove'].includes(config.storageLowSpaceAction)) {
     errors.push('容量不足時の処置が不正です。');
+  }
+  if (config.seriesUseSyobocal !== undefined && typeof config.seriesUseSyobocal !== 'boolean') {
+    errors.push('seriesUseSyobocalは真偽値で指定してください。');
   }
   const nonNegativeIntegers = ['recordedStorageWakeupBeforeSec', 'matchRetentionDays', 'reserves2RetentionDays', 'recordedHistoryRetentionDays'];
   nonNegativeIntegers.forEach(key => {

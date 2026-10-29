@@ -13,6 +13,11 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
     ${enableFilter ? '<button type="button" role="menuitem" data-action="filter" aria-haspopup="menu" aria-expanded="false">絞り込み <span aria-hidden="true">▸</span></button>' : ''}
     <button type="button" role="menuitem" data-action="detail">番組詳細を開く</button>
     <div class="recorded-context-separator" role="separator"></div>
+    <button type="button" role="menuitem" data-action="series-view">シリーズを確認</button>
+    <button type="button" role="menuitem" data-action="series-change">シリーズを変更</button>
+    <button type="button" role="menuitem" data-action="series-episode">話数を修正</button>
+    <button type="button" role="menuitem" data-action="series-remove" class="is-danger">手動指定を解除</button>
+    <div class="recorded-context-separator" role="separator"></div>
     <button type="button" role="menuitem" data-action="copy-title">タイトルをコピー</button>
     <div class="recorded-context-separator" role="separator"></div>
     <button type="button" role="menuitem" data-action="search-google">Googleで検索</button>
@@ -99,6 +104,17 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
     for (const action of ['copy-title', 'search-google', 'search-wikipedia']) {
       menu.querySelector(`[data-action="${action}"]`).disabled = !hasTitle;
     }
+    const series = item?.seriesContext;
+    const supportsSeries = Object.prototype.hasOwnProperty.call(item || {}, 'seriesContext');
+    for (const action of ['series-view', 'series-change', 'series-episode']) {
+      menu.querySelector(`[data-action="${action}"]`).hidden = !supportsSeries;
+    }
+    menu.querySelector('[data-action="series-view"]').disabled = !series?.seriesId;
+    const change = menu.querySelector('[data-action="series-change"]');
+    change.disabled = !series?.eventKey;
+    change.textContent = series?.tidConfirmed ? 'シリーズを変更' : 'シリーズに紐づけ';
+    menu.querySelector('[data-action="series-episode"]').disabled = !series?.seriesId;
+    menu.querySelector('[data-action="series-remove"]').hidden = !supportsSeries || series?.manual !== true;
     if (submenu) {
       const channelId = item.program?.channel?.id;
       const meta = item.program?.reservationMeta;
@@ -183,7 +199,7 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     const choices = (submenu?.contains(document.activeElement) && !submenu.hidden
       ? submenuButtons : Array.from(menu.querySelectorAll('button[data-action]')))
-      .filter(button => !button.disabled);
+      .filter(button => !button.disabled && !button.hidden);
     if (!choices.length) return;
     const index = choices.indexOf(document.activeElement);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? choices.length - 1 :

@@ -2,6 +2,7 @@ import { loadConfig, loadMirakurunServices, loadRuntimeMode, saveConfig } from '
 import {
   DROP_DETECTION_MODES,
   cloneConfig,
+  configForSave,
   configChanges,
   formatChangeValue,
   normalizeRecordedDirs,
@@ -14,7 +15,7 @@ import {
 
 const TABS = [
   ['basic', '基本設定'], ['recording', '録画設定'], ['storage', 'Storage'],
-  ['history', '履歴管理'], ['services', 'サービス'], ['advanced', '詳細設定']
+  ['history', '履歴管理'], ['services', 'サービス'], ['series', 'シリーズ'], ['advanced', '詳細設定']
 ];
 
 const FIELD = {
@@ -555,6 +556,34 @@ export function renderSettingsPage(container) {
     return tab;
   }
 
+  function createSeriesTab() {
+    const tab = sectionFor('series');
+    const information = card('しょぼいカレンダー連携（Beta）',
+      'しょぼいカレンダーの作品・話数・副題情報を利用し、番組情報を補完します。利用しない場合はシリーズ一覧が表示されません。');
+    const enabled = bindBoolean('seriesUseSyobocal', 'しょぼいカレンダーの情報を利用する',
+      'ONでは外部取得と保存済み情報を利用します。インターネットに接続できない場合も、取得済みの情報があれば利用できます。OFFでは外部取得を行わず、保存済みの辞書・放送情報もシリーズ判定に利用しません。',
+      { defaultTrue: true, wide: true });
+    const status = document.createElement('div');
+    status.className = 'settings-runtime-status';
+    const heading = document.createElement('strong');
+    const offline = document.createElement('p');
+    const limitation = document.createElement('p');
+    status.append(heading, offline, limitation);
+    dependentUpdates.push(() => {
+      const usesSyobocal = draft.seriesUseSyobocal !== false;
+      heading.textContent = usesSyobocal ? 'しょぼいカレンダーの情報を利用します' : 'しょぼいカレンダーの情報を利用しません';
+      offline.textContent = usesSyobocal ?
+        'インターネットに接続できない場合でも、取得済みの情報があれば利用できます。' :
+        'ProgLookupの外部取得は開始せず、取得済みの辞書・放送情報も参照しません。';
+      limitation.textContent = usesSyobocal ? '' :
+        'OFFではシリーズ一覧に作品が表示されません。録画・予約・ルール管理には影響しません。';
+      limitation.hidden = usesSyobocal;
+    });
+    information.body.append(enabled.wrap, status);
+    tab.append(information.section);
+    return tab;
+  }
+
   function createAdvancedTab() {
     const tab = sectionFor('advanced');
     const preview = card('保存内容の確認', '保存前の設定全体を確認できます。画面に入力欄がない設定は、ここで内容を確認できます。');
@@ -588,13 +617,14 @@ export function renderSettingsPage(container) {
   }
 
   function openSaveDialog() {
-    const errors = [...fieldErrors.values(), ...validateConfig(draft)];
+    if (!configChanges(original, draft).length) return;
+    const saveDraft = configForSave(draft);
+    const errors = [...fieldErrors.values(), ...validateConfig(saveDraft)];
     if (errors.length) {
       window.alert(`入力内容を確認してください。\n\n${[...new Set(errors)].join('\n')}`);
       return;
     }
-    const changes = configChanges(original, draft);
-    if (!changes.length) return;
+    const changes = configChanges(original, saveDraft);
     const dialog = document.createElement('dialog');
     dialog.className = 'settings-save-dialog';
     const warning = draft.wuiOpenServer === false && original.wuiOpenServer !== false
@@ -616,7 +646,7 @@ export function renderSettingsPage(container) {
       button.disabled = true;
       status.textContent = '保存しています…';
       try {
-        const saved = await saveConfig(draft, controller.signal);
+        const saved = await saveConfig(saveDraft, controller.signal);
         original = cloneConfig(saved);
         draft = cloneConfig(saved);
         fieldErrors.clear();
@@ -672,7 +702,7 @@ export function renderSettingsPage(container) {
       });
       tabs.append(button);
     });
-    content.append(createBasicTab(), createRecordingTab(), createStorageTab(), createHistoryTab(), createServicesTab(), createAdvancedTab());
+    content.append(createBasicTab(), createRecordingTab(), createStorageTab(), createHistoryTab(), createServicesTab(), createSeriesTab(), createAdvancedTab());
     container.querySelector('.settings-save').addEventListener('click', openSaveDialog);
     container.querySelector('.settings-discard').addEventListener('click', openDiscardDialog);
     dependentUpdates.forEach(update => update());

@@ -1,7 +1,9 @@
 import { createChannelLogo } from './channel-logo.js';
+import { appendMobileContextButton } from './mobile-layout.js';
 import { programDetailUrl } from '../services/program-detail-client.js';
 import { channelDetailText } from '../services/recording-model.js';
 import { isRecordedResultPlayable, recordedResultWarnings } from '../services/recorded-result-warnings.js';
+import { buildProgramDisplayTitle } from '../services/program-title.js';
 
 const dateFormatter = new Intl.DateTimeFormat('ja-JP', {
   month: '2-digit',
@@ -60,12 +62,13 @@ function cardState(item) {
   return { key: 'recorded', label: null };
 }
 
-function toRecordedCardModel(item, index) {
+function toRecordedCardModel(item, index, options = {}) {
   const recordedId = text(item?.recordedId);
   const state = cardState(item);
   const recordedDuration = finitePositive(item?.recordedDurationSeconds);
   const operatorDuration = finitePositive(item?.operatorActualSeconds);
   const channelName = text(item?.channel?.name, '放送局未取得');
+  const displayTitle = buildProgramDisplayTitle(item, options.seriesTitleIndex);
   return {
     key: text(item?.key, recordedId || `recorded-card-${index}`),
     recordedId,
@@ -78,7 +81,9 @@ function toRecordedCardModel(item, index) {
     playable: isRecordedResultPlayable(item),
     channelLogoUrl: channelLogoUrl(item?.channel),
     channelTooltip: channelDetailText(item?.channel),
-    title: text(item?.fullTitle) || text(item?.title, 'タイトル未取得'),
+    title: displayTitle.text,
+    titleSource: displayTitle.source,
+    episodeSource: displayTitle.episodeSource || null,
     channelName,
     channelLabel: [channelName, text(item?.channel?.type)].filter(Boolean).join(' / '),
     broadcastText: formatDateTime(item?.start, item?.end),
@@ -87,11 +92,11 @@ function toRecordedCardModel(item, index) {
   };
 }
 
-export function buildRecordedCardModels(items) {
-  return (Array.isArray(items) ? items : []).map(toRecordedCardModel);
+export function buildRecordedCardModels(items, options = {}) {
+  return (Array.isArray(items) ? items : []).map((item, index) => toRecordedCardModel(item, index, options));
 }
 
-export function buildRecentRecordedModels(items, limit = 10) {
+export function buildRecentRecordedModels(items, limit = 10, options = {}) {
   return (Array.isArray(items) ? items : [])
     .filter(item => (item?.status === 'RECORDED' || item?.status === 'RECORDED_UNTRACKED') &&
       text(item.recordedId) !== '')
@@ -103,7 +108,7 @@ export function buildRecentRecordedModels(items, limit = 10) {
     })
     .slice(0, limit)
     // Home and recorded results must use the same card model for identical entries.
-    .map(toRecordedCardModel);
+    .map((item, index) => toRecordedCardModel(item, index, options));
 }
 
 export function createRecordedCard(initialModel, { onWatch, onOpenDetail } = {}) {
@@ -121,10 +126,12 @@ export function createRecordedCard(initialModel, { onWatch, onOpenDetail } = {})
       <span class="recorded-card-duration-badge" aria-label="" hidden></span>
     </button>
     <div class="recorded-card-meta">
+      <strong class="mobile-card-title"></strong>
       <span class="recorded-card-broadcast"></span>
       <span class="recorded-card-actions"><span class="recorded-result-warning storage-warning is-align-right" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-tip" role="tooltip"></span></span><a class="recorded-card-detail" href=""><span aria-hidden="true">ⓘ</span> 詳細</a></span>
     </div>`;
 
+  appendMobileContextButton(article, article.querySelector('.recorded-card-actions'));
   const thumbnail = article.querySelector('.recorded-card-thumbnail');
   const preview = article.querySelector('.recorded-card-preview');
   const placeholder = article.querySelector('.recorded-card-placeholder');
@@ -163,6 +170,7 @@ export function createRecordedCard(initialModel, { onWatch, onOpenDetail } = {})
     thumbnail.title = model.playable ? '録画を再生' : (canOpenDetail ? '番組詳細を表示' : '再生できません');
     play.hidden = !model.playable;
     title.textContent = model.title;
+    article.querySelector('.mobile-card-title').textContent = model.title;
     detailLink.href = model.detailUrl;
     detailLink.setAttribute('aria-label', `${model.title}の詳細`);
     const warningLabels = (model.recordingWarnings || []).map(item => item.label);

@@ -17,6 +17,11 @@ export function createRecordedContextMenu({ onAction }) {
     <button type="button" role="menuitem" data-action="filter" aria-expanded="false" aria-haspopup="menu">絞り込み <span aria-hidden="true">▸</span></button>
     <button type="button" role="menuitem" data-action="detail">詳細</button>
     <div class="recorded-context-separator" role="separator"></div>
+    <button type="button" role="menuitem" data-action="series-view">シリーズを確認</button>
+    <button type="button" role="menuitem" data-action="series-change">シリーズを変更</button>
+    <button type="button" role="menuitem" data-action="series-episode">話数を修正</button>
+    <button type="button" role="menuitem" data-action="series-remove" class="is-danger">手動指定を解除</button>
+    <div class="recorded-context-separator" role="separator"></div>
     <button type="button" role="menuitem" data-action="copy-title">タイトルをコピー</button>
     <button type="button" role="menuitem" data-action="search-google">Googleで検索</button>
     <button type="button" role="menuitem" data-action="search-wikipedia">Wikipediaで検索</button>
@@ -113,6 +118,13 @@ export function createRecordedContextMenu({ onAction }) {
     for (const action of ['copy-title', 'search-google', 'search-wikipedia']) {
       menu.querySelector(`[data-action="${action}"]`).disabled = !hasTitle;
     }
+    const series = item?.seriesContext;
+    menu.querySelector('[data-action="series-view"]').disabled = !series?.seriesId;
+    const change = menu.querySelector('[data-action="series-change"]');
+    change.disabled = !series?.eventKey;
+    change.textContent = series?.tidConfirmed ? 'シリーズを変更' : 'シリーズに紐づけ';
+    menu.querySelector('[data-action="series-episode"]').disabled = !series?.seriesId;
+    menu.querySelector('[data-action="series-remove"]').hidden = series?.manual !== true;
     menu.hidden = false;
     position(x, y);
   }
@@ -164,7 +176,7 @@ export function createRecordedContextMenu({ onAction }) {
     }
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     const available = (submenu.contains(document.activeElement) && !submenu.hidden ? submenuButtons : menuButtons)
-      .filter(button => !button.disabled);
+      .filter(button => !button.disabled && !button.hidden);
     const index = available.indexOf(document.activeElement);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? available.length - 1 :
       index < 0 ? (event.key === 'ArrowUp' ? available.length - 1 : 0) :

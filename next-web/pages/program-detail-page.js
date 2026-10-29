@@ -165,15 +165,17 @@ function createFacts(model, recordingLayout = false) {
 function createHeaderActions(model, onDelete) {
   const wrapper = document.createElement('div');
   wrapper.className = 'program-detail-header-actions';
-  if (model.actions.deleteRecording === null) return { element: wrapper, dispose() {} };
+  const seriesAvailable = typeof model.eventKey === 'string' && model.eventKey !== '';
+  if (model.actions.deleteRecording === null && !seriesAvailable) return { element: wrapper, dispose() {} };
 
   wrapper.innerHTML = `
     <button class="button program-detail-more" type="button" aria-label="番組操作" aria-haspopup="menu" aria-expanded="false">…</button>
     <div class="program-detail-action-menu" role="menu" hidden>
-      <button type="button" role="menuitem">録画ファイルを削除</button>
+      ${seriesAvailable ? '<button type="button" role="menuitem" data-action="series">シリーズを確認</button>' : ''}
+      ${model.actions.deleteRecording !== null ? '<button type="button" role="menuitem" data-action="delete">録画ファイルを削除</button>' : ''}
     </div>
     <p class="program-detail-action-feedback" role="status" hidden></p>
-    <dialog class="program-detail-delete-dialog">
+    ${model.actions.deleteRecording !== null ? `<dialog class="program-detail-delete-dialog">
       <form method="dialog">
         <h2>録画ファイルを削除</h2>
         <p class="program-detail-delete-title"></p>
@@ -188,14 +190,15 @@ function createHeaderActions(model, onDelete) {
           <button class="button is-danger" value="delete">削除する</button>
         </div>
       </form>
-    </dialog>`;
+    </dialog>` : ''}`;
 
   const trigger = wrapper.querySelector('.program-detail-more');
   const menu = wrapper.querySelector('.program-detail-action-menu');
-  const deleteButton = menu.querySelector('button');
+  const seriesButton = menu.querySelector('[data-action="series"]');
+  const deleteButton = menu.querySelector('[data-action="delete"]');
   const feedback = wrapper.querySelector('.program-detail-action-feedback');
   const dialog = wrapper.querySelector('dialog');
-  const confirmButton = dialog.querySelector('[value="delete"]');
+  const confirmButton = dialog?.querySelector('[value="delete"]');
   let deleting = false;
 
   function setMenu(open) {
@@ -203,14 +206,17 @@ function createHeaderActions(model, onDelete) {
     trigger.setAttribute('aria-expanded', String(open));
   }
   trigger.addEventListener('click', () => setMenu(menu.hidden));
-  deleteButton.addEventListener('click', () => {
+  seriesButton?.addEventListener('click', () => {
+    window.location.hash = `#series?event=${encodeURIComponent(model.eventKey)}`;
+  });
+  deleteButton?.addEventListener('click', () => {
     setMenu(false);
     dialog.querySelector('.program-detail-delete-title').textContent = model.title;
     dialog.querySelector('code').textContent = model.actions.deleteRecording.path;
     dialog.returnValue = '';
     dialog.showModal();
   });
-  dialog.addEventListener('close', async () => {
+  dialog?.addEventListener('close', async () => {
     if (dialog.returnValue !== 'delete' || deleting) return;
     deleting = true;
     trigger.disabled = true;
@@ -240,7 +246,7 @@ function createHeaderActions(model, onDelete) {
   return {
     element: wrapper,
     dispose() {
-      if (dialog.open) dialog.close();
+      if (dialog?.open) dialog.close();
     }
   };
 }

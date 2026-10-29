@@ -1,6 +1,7 @@
 import { channelDetailText, channelIdentifier, channelLogoUrl } from './recording-model.js';
 import { buildReservationStorageDisplay } from './storage-model.js';
 import { programDetailUrl } from './program-detail-client.js';
+import { buildProgramDisplayTitle } from './program-title.js';
 
 export const NEXT_RESERVATION_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const NEXT_RESERVATION_MAX_ITEMS = 8;
@@ -108,6 +109,7 @@ export function buildReservationListModels(programs, options = {}) {
     const identifier = channelIdentifier(channel);
     const channelName = validText(channel.name);
     const fullTitle = validText(program?.fullTitle) || validText(program?.title) || 'タイトル未取得';
+    const displayTitle = buildProgramDisplayTitle(program, options.seriesTitleIndex);
     const longDurationDays = start !== null && end !== null && end - start >= 24 * 60 * 60 * 1000
       ? Math.floor((end - start) / (24 * 60 * 60 * 1000))
       : 0;
@@ -130,7 +132,9 @@ export function buildReservationListModels(programs, options = {}) {
       id,
       detailUrl: programDetailUrl({ id }),
       fullTitle,
-      displayTitle: normalizeDisplayText(fullTitle) || 'タイトル未取得',
+      displayTitle: displayTitle.text,
+      displayTitleSource: displayTitle.source,
+      displayEpisodeSource: displayTitle.episodeSource || null,
       detail: normalizeDisplayText(program?.detail, true),
       category,
       start,

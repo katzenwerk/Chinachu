@@ -7,6 +7,9 @@ import { openRecordedPlaybackOverlay, openRecordingLiveOverlay } from '../servic
 import { copyProgramTitle, programSearchUrl } from '../services/program-actions.js';
 import { invalidateResources } from '../services/api-client.js';
 import { subscribeMatchNotifications, subscribeRecordedNotifications, subscribeRecordingNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
+import { loadSeriesProjection } from '../services/series-client.js';
+import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
+import { openSeriesCorrectionDialog } from './series-correction-dialog.js';
 
 let activeDialog = null;
 
@@ -18,6 +21,18 @@ function addFact(list, label, value, className = '') {
   description.textContent = value;
   if (className) description.className = className;
   list.append(term, description);
+}
+
+function formatParsedProgramValue(value) {
+  if (value === undefined || value === null || value === '') return '未取得';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? String(value) : serialized;
+  } catch (_) {
+    return String(value);
+  }
 }
 
 function actionLabel(action) {
@@ -102,7 +117,34 @@ function createTsDropSummary(summary) {
   return section;
 }
 
-function createManagement(model) {
+function seriesDecisionLabel(context, error) {
+  if (error) return 'シリーズ情報取得失敗';
+  if (!context?.tidConfirmed) return 'TID未確定';
+  if (context.manual) {
+    const automaticTid = Number(context.event?.resolution?.automatic?.tid);
+    const tidAlsoAutomatic = Number.isInteger(automaticTid) && automaticTid === Number(context.tid);
+    if (context.manualEpisode !== null) return tidAlsoAutomatic ?
+      'TID自動確定・EP手動指定' : 'TID手動確定・EP手動指定';
+    const prefix = tidAlsoAutomatic ? 'TID自動確定（手動補正あり）' : 'TID手動確定';
+    if (context.episodeSource === 'epg' && context.multipleEpisodeConfirmed) return `${prefix}・EPG複数話数から確定`;
+    if (context.episodeSource === 'epg' && context.episodeConfirmed) return `${prefix}・EPG話数から確定`;
+    if (context.multipleEpisodeConfirmed) return `${prefix}・複数EP自動確定`;
+    if (context.episodeConfirmed) return `${prefix}・EP自動確定`;
+    return `${prefix}・EP未確定`;
+  }
+  if (context.workRule?.active && context.episodeSource === 'epg') return context.multipleEpisodeConfirmed ?
+    '同局作品ルールでTID確定・EPG複数話数から確定' : context.episodeConfirmed ?
+      '同局作品ルールでTID確定・EPG話数から確定' : '同局作品ルールでTID確定・EP未確定';
+  if (context.workRule?.active) return context.multipleEpisodeConfirmed ?
+    '同局作品ルールでTID確定・複数EP自動確定' : context.episodeConfirmed ?
+      '同局作品ルールでTID確定・EP自動確定' : '同局作品ルールでTID確定・EP未確定';
+  if (context.episodeSource === 'epg' && context.multipleEpisodeConfirmed) return 'TID自動確定・EPG複数話数から確定';
+  if (context.multipleEpisodeConfirmed) return 'TID自動確定・複数EP確定';
+  if (context.episodeSource === 'epg' && context.episodeConfirmed) return 'TID自動確定・EPG話数から確定';
+  return context.episodeConfirmed ? 'TID・EP自動確定' : 'TID自動確定・EP未確定';
+}
+
+function createManagement(model, seriesContext, seriesError) {
   const aside = document.createElement('aside');
   aside.className = 'program-modal-management';
   const heading = document.createElement('h3');
@@ -124,6 +166,20 @@ function createManagement(model) {
     addFact(facts, model.deletion.kind === 'unknown' ? '確認状態' : '削除理由', model.deletion.reason);
     if (model.deletion.kind !== 'unknown') addFact(facts, '削除日時', model.deletion.deletedAt || '日時情報なし');
   }
+  addFact(facts, '所属作品', seriesContext?.seriesTitle || '未確定');
+  addFact(facts, 'TID', seriesContext?.tidConfirmed ? String(seriesContext.tid) : '未確定');
+  addFact(facts, '話数', seriesContext?.episodeConfirmed ? seriesContext.episodeLabel :
+    seriesContext?.episodeHint ? `未確定（EPG #${seriesContext.episodeHint}）` : '未確定');
+  addFact(facts, '判定', seriesDecisionLabel(seriesContext, seriesError));
+  const analysis = document.createElement('section');
+  analysis.className = 'program-modal-analysis';
+  const analysisHeading = document.createElement('h4');
+  analysisHeading.textContent = 'thorn番組解析';
+  const analysisFacts = document.createElement('dl');
+  addFact(analysisFacts, '解析タイトル', formatParsedProgramValue(model.parsedProgram?.title));
+  addFact(analysisFacts, '解析副題', formatParsedProgramValue(model.parsedProgram?.subTitle));
+  addFact(analysisFacts, '解析話数', formatParsedProgramValue(model.parsedProgram?.episode));
+  analysis.append(analysisHeading, analysisFacts);
   const notices = document.createElement('div');
   notices.className = 'program-detail-notices';
   [...model.warnings].filter(Boolean).forEach(value => {
@@ -136,7 +192,13 @@ function createManagement(model) {
   id.textContent = `番組ID: ${model.programId || '未取得'}`;
   const tsDropSummary = createTsDropSummary(model.tsDropInfo);
   aside.append(heading, facts);
+  aside.append(analysis);
   if (tsDropSummary) aside.append(tsDropSummary);
+  if (seriesError) {
+    const notice = document.createElement('p');
+    notice.textContent = 'シリーズ情報を取得できませんでした。通常の番組情報は引き続き利用できます。';
+    notices.append(notice);
+  }
   aside.append(notices, createRecordingStatusTags(model.recordingWarnings), id);
   return aside;
 }
@@ -178,10 +240,13 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   let logo = null;
   let busy = false;
   let latestDetail = null;
+  let latestSeriesContext = null;
+  let latestSeriesError = null;
   let preferredRuleUid = null;
   let boundaryTimer = null;
   let ruleDialog = null;
-  let pendingInitialAction = ['rule', 'delete'].includes(initialAction) ? initialAction : null;
+  let pendingInitialAction = ['rule', 'delete', 'series-change', 'series-episode', 'series-remove'].includes(initialAction)
+    ? initialAction : null;
   const reloadFromNotification = resources => {
     if (disposed || !dialog.open) return;
     invalidateResources(resources);
@@ -227,7 +292,9 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     if (!Number.isFinite(next)) return;
     boundaryTimer = window.setTimeout(() => {
       boundaryTimer = null;
-      if (!disposed && dialog.open && latestDetail) render(buildProgramDetailModel({ ...latestDetail, preferredRuleUid }));
+      if (!disposed && dialog.open && latestDetail) {
+        render(buildProgramDetailModel({ ...latestDetail, preferredRuleUid }), latestSeriesContext, latestSeriesError);
+      }
     }, Math.min(2147483647, Math.max(0, next - now + 20)));
   }
 
@@ -281,7 +348,18 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     }
   }
 
-  async function render(model) {
+  function openSeriesCorrection(context, focusEpisode = false) {
+    if (!context?.event?.key) return;
+    openSeriesCorrectionDialog({
+      event: context.event,
+      candidates: context.candidates,
+      seriesContext: context,
+      focusEpisode,
+      onChanged: refreshAfterMutation
+    });
+  }
+
+  async function render(model, seriesContext = null, seriesError = null) {
     logo?.dispose();
     const article = document.createElement('article');
     const header = document.createElement('header');
@@ -305,7 +383,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     right.className = 'program-modal-right';
     const thumbnail = createThumbnail(model, () => play(model).catch(() => {}));
     if (thumbnail) right.append(thumbnail);
-    right.append(createManagement(model));
+    right.append(createManagement(model, seriesContext, seriesError));
     body.append(createDescription(model), right);
 
     const footer = document.createElement('footer');
@@ -355,6 +433,27 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     rule.disabled = model.actions.rule.mode === 'unavailable';
     rule.addEventListener('click', () => openRuleEditor(model));
     primary.append(rule);
+    if (seriesContext?.seriesId) {
+      const viewSeries = document.createElement('button');
+      viewSeries.className = 'button';
+      viewSeries.type = 'button';
+      viewSeries.textContent = 'シリーズを見る';
+      viewSeries.addEventListener('click', () => {
+        const href = seriesEventHref(seriesContext, model.phase.key === 'reserved' ? 'reservations' : 'recordings');
+        if (!href) return;
+        close();
+        window.location.hash = href;
+      });
+      primary.append(viewSeries);
+    }
+    if (seriesContext?.event?.key) {
+      const changeSeries = document.createElement('button');
+      changeSeries.className = 'button';
+      changeSeries.type = 'button';
+      changeSeries.textContent = seriesContext.tidConfirmed ? '紐づけを変更' : 'シリーズに紐づけ';
+      changeSeries.addEventListener('click', () => openSeriesCorrection(seriesContext));
+      primary.append(changeSeries);
+    }
     if (normalProgram) {
       const copy = document.createElement('button');
       copy.className = 'button';
@@ -403,7 +502,18 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       if (!disposed && !requestController.signal.aborted) {
         latestDetail = detail;
         const model = buildProgramDetailModel({ ...detail, preferredRuleUid });
-        await render(model);
+        let seriesContext = null;
+        let seriesError = null;
+        try {
+          const snapshot = await loadSeriesProjection({ signal: requestController.signal });
+          seriesContext = model.eventKey ? buildSeriesEventIndex(snapshot).get(model.eventKey) || null : null;
+        } catch (cause) {
+          if (requestController.signal.aborted || cause?.name === 'AbortError') return;
+          seriesError = cause;
+        }
+        latestSeriesContext = seriesContext;
+        latestSeriesError = seriesError;
+        await render(model, seriesContext, seriesError);
         if (pendingInitialAction !== null) {
           const action = pendingInitialAction;
           pendingInitialAction = null;
@@ -415,6 +525,9 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
             const remove = dialog.querySelector('.program-modal-danger button');
             if (remove) remove.click();
             else showFeedback('削除できる録画ファイルがありません', true);
+          } else if (action === 'series-change' || action === 'series-episode' || action === 'series-remove') {
+            if (seriesContext?.event?.key) openSeriesCorrection(seriesContext, action === 'series-episode');
+            else showFeedback('このイベントのシリーズ情報を操作できません', true);
           }
         }
       }

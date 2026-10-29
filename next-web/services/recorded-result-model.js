@@ -1,5 +1,6 @@
 import { programDetailUrl } from './program-detail-client.js';
 import { recordedResultWarnings } from './recorded-result-warnings.js';
+import { buildProgramDisplayTitle } from './program-title.js';
 
 const dateFormatter = new Intl.DateTimeFormat('ja-JP', {
   month: '2-digit',
@@ -81,13 +82,13 @@ function channelTooltip(channel) {
   return values.join(' / ') || 'チャンネル情報未取得';
 }
 
-export function buildRecordedResultModels(items) {
+export function buildRecordedResultModels(items, options = {}) {
   if (!Array.isArray(items)) throw new Error('Match page items are invalid');
   return items.map((item, index) => {
     const channel = item?.channel && typeof item.channel === 'object' ? item.channel : {};
     const channelName = validText(channel.name);
     const channelId = validText(channel.id);
-    const fullTitle = validText(item?.fullTitle) || validText(item?.title) || 'タイトル未取得';
+    const displayTitle = buildProgramDisplayTitle(item, options.seriesTitleIndex);
     const submeta = [
       channelName,
       validText(item?.category),
@@ -96,7 +97,9 @@ export function buildRecordedResultModels(items) {
     return {
       key: validText(item?.key) || `recorded-result-${index}`,
       detailUrl: programDetailUrl({ key: validText(item?.key), id: validText(item?.recordedId) }),
-      displayTitle: normalizeDisplayText(fullTitle) || 'タイトル未取得',
+      displayTitle: displayTitle.text,
+      displayTitleSource: displayTitle.source,
+      displayEpisodeSource: displayTitle.episodeSource || null,
       detail: normalizeDisplayText(item?.detail, true),
       category: submeta.join(' · ') || '補足情報未取得',
       dateText: formatDate(item?.start),

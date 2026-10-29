@@ -30,7 +30,8 @@ const primaryItems = [
   ['recording', 'record', '録画中'],
   ['rules', 'rule', 'ルール'],
   ['reserves', 'calendar', '予約一覧'],
-  ['recorded', 'film', '録画結果']
+  ['recorded', 'film', '録画結果'],
+  ['series', 'film', 'シリーズ']
 ];
 const adminItems = [
   ['storage', 'storage', 'ストレージ'],

@@ -10,6 +10,9 @@ import { subscribeReservationNotifications } from '../services/realtime-client.j
 import { subscribeStorageData } from '../services/storage-store.js';
 import { ruleAction } from '../services/program-detail-model.js';
 import { setReserveSkip, unreserveProgram } from '../services/timetable-client.js';
+import { loadSeriesProjection } from '../services/series-client.js';
+import { buildSeriesTitleIndex, canonicalProgramKey } from '../services/program-title.js';
+import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
 
 function normalizeStatus(value) {
   return ['normal', 'skip', 'conflict'].includes(value) ? value : 'all';
@@ -20,6 +23,8 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
   let models = [];
   let latestPrograms = [];
   let storageData = null;
+  let seriesTitleIndex = new Map();
+  let seriesEventIndex = new Map();
   let status = normalizeStatus(query.get('status'));
   let search = query.get('search') || '';
   let ruleUid = query.get('ruleUid') || null;
@@ -190,7 +195,7 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     if (delay === null) return;
     displayBoundaryTimer = window.setTimeout(() => {
       if (!isActive()) return;
-      models = buildReservationListModels(latestPrograms, { storageData });
+      models = buildReservationListModels(latestPrograms, { storageData, seriesTitleIndex });
       renderList({ preserveScroll: true });
       scheduleDisplayBoundary();
     }, Math.min(delay, 2147483647));
@@ -244,11 +249,18 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
         forceQueued = false;
         if (shouldForce) invalidateResources(['reserves']);
         try {
-          const programs = await loadResource('reserves');
+          const [programs, seriesSnapshot] = await Promise.all([
+            loadResource('reserves'),
+            loadSeriesProjection().catch(() => null)
+          ]);
           if (!isActive()) return;
           if (generation !== refreshGeneration) continue;
           latestPrograms = programs;
-          models = buildReservationListModels(latestPrograms, { storageData });
+          if (seriesSnapshot !== null) {
+            seriesTitleIndex = buildSeriesTitleIndex(seriesSnapshot);
+            seriesEventIndex = buildSeriesEventIndex(seriesSnapshot);
+          }
+          models = buildReservationListModels(latestPrograms, { storageData, seriesTitleIndex });
           renderList({ preserveScroll: true });
           scheduleDisplayBoundary();
         } catch (error) {
@@ -394,6 +406,20 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     onAction(action, item) {
       if (!isActive()) return;
       if (action.startsWith('filter-')) return applyContextFilter(action, item);
+      if (action === 'series-view') {
+        const href = seriesEventHref(item.seriesContext, 'reservations');
+        if (href) window.location.hash = href;
+        return;
+      }
+      if (['series-change', 'series-episode', 'series-remove'].includes(action)) {
+        openProgramDetailDialog({
+          key: item.seriesContext?.eventKey,
+          id: item.id,
+          initialAction: action,
+          onChanged: () => requestRefresh(true)
+        });
+        return;
+      }
       if (action === 'copy-title') return void copyContextTitle(item.title).catch(showContextError);
       if (action === 'search-google' || action === 'search-wikipedia') {
         const url = action === 'search-google'
@@ -449,6 +475,15 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     if (!model?.id) return;
     const program = latestPrograms.find(value => value?.id != null && String(value.id) === model.id);
     if (!program) return;
+    const eventKey = canonicalProgramKey(program);
+    const seriesContext = seriesEventIndex.get(eventKey) || (eventKey ? {
+      eventKey,
+      event: { ...program, key: eventKey, resolution: null },
+      seriesId: null,
+      tidConfirmed: false,
+      manual: false,
+      candidates: []
+    } : null);
     event.preventDefault();
     dismissReservationProgramPreview();
     const rect = row.getBoundingClientRect();
@@ -456,7 +491,7 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
       ? { x: event.clientX, y: event.clientY }
       : { x: rect.left + 16, y: rect.top + 16 };
     contextMenu.open({ kind: 'reservation', id: model.id,
-      title: program.title || program.fullTitle || '', program }, point);
+      title: program.title || program.fullTitle || '', program, seriesContext }, point);
   }
 
   content.addEventListener('contextmenu', openRowContext);
@@ -477,7 +512,7 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     if (!isActive() || state.data === null) return;
     storageData = state.data;
     if (latestPrograms.length === 0) return;
-    models = buildReservationListModels(latestPrograms, { storageData });
+    models = buildReservationListModels(latestPrograms, { storageData, seriesTitleIndex });
     renderList({ preserveScroll: true });
     scheduleDisplayBoundary();
   });

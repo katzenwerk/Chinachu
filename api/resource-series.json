@@ -1,0 +1,37 @@
+{
+  "/": {
+    "script": "series",
+    "methods": ["get"],
+    "types": ["json"]
+  },
+  "/search": {
+    "script": "series",
+    "methods": ["get"],
+    "types": ["json"]
+  },
+  "/preview": {
+    "script": "series",
+    "methods": ["post"],
+    "types": ["json"]
+  },
+  "/override": {
+    "script": "series",
+    "methods": ["post", "delete"],
+    "types": ["json"]
+  },
+  "/override-bulk": {
+    "script": "series",
+    "methods": ["post"],
+    "types": ["json"]
+  },
+  "/work-rule": {
+    "script": "series",
+    "methods": ["delete"],
+    "types": ["json"]
+  },
+  "/hidden": {
+    "script": "series",
+    "methods": ["post"],
+    "types": ["json"]
+  }
+}

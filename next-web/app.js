@@ -12,6 +12,7 @@ import { renderGuidePage } from './pages/guide-page.js';
 import { renderSearchPage } from './pages/search-page.js';
 import { renderSettingsPage } from './pages/settings-page.js';
 import { renderRulesPage } from './pages/rules-page.js';
+import { renderSeriesPage } from './pages/series-page.js';
 import { loadResource } from './services/api-client.js';
 import { subscribeMatchNotifications, subscribeRealtimeConnection, subscribeReservationNotifications } from './services/realtime-client.js';
 import { subscribeRecordingData } from './services/recording-store.js';
@@ -121,6 +122,7 @@ const routeTitles = {
   recorded: '録画結果',
   reserves: '予約一覧',
   rules: 'ルール',
+  series: 'シリーズ',
   status: 'ステータス',
   storage: 'ストレージ',
   log: 'サービスとログ',
@@ -240,6 +242,12 @@ async function route() {
     disposeCurrentPage = renderRulesPage(page, new URLSearchParams(queryString), {
       setHeaderActions: shell.setPageActions,
       showToast: shell.showToast
+    });
+    return;
+  }
+  if (name === 'series') {
+    disposeCurrentPage = renderSeriesPage(page, new URLSearchParams(queryString), {
+      setHeaderActions: shell.setPageActions
     });
     return;
   }

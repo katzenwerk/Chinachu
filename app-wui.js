@@ -16,6 +16,11 @@ const SCHEDULE_DATA_FILE = __dirname + '/data/schedule.json';
 const RECORDING_DATA_FILE = __dirname + '/data/recording.json';
 const RECORDED_DATA_FILE = __dirname + '/data/recorded.json';
 const MATCH_DATA_FILE = __dirname + '/data/match.json';
+const SERIES_DICTIONARY_FILE = __dirname + '/data/dictionary.sqlite3';
+const SERIES_CHANNEL_CATALOG_FILE = __dirname + '/data/syobocal-channel-catalog.json';
+const SERIES_CHANNEL_MAP_FILE = __dirname + '/data/syobocal-channel-map-independent.json';
+const SERIES_PROGLOOKUP_CACHE_FILE = __dirname + '/data/proglookup-cache-independent.json';
+const SERIES_MANUAL_OVERRIDE_FILE = __dirname + '/data/series-overrides.json';
 const WUI_CONFIG_FILE = __dirname + '/data/wui-config.json';
 const STORAGE_STATE_FILE = __dirname + '/data/storage-state.json';
 const RECORDED_THUMBNAIL_DIR = __dirname + '/data/thumbnails';
@@ -88,6 +93,12 @@ const storageRuntimeState = require('./lib/storage-runtime-state');
 const storageRefreshIpc = require('./lib/storage-refresh-ipc');
 const recordedThumbnail = require('./lib/recorded-thumbnail');
 const matchDetailResolver = require('./lib/match-detail-resolver');
+const seriesServiceModule = require('./lib/series-service');
+const dictionaryManagerModule = require('./lib/syobocal-dictionary-manager');
+const syobocalChannelCatalogModule = require('./lib/syobocal-channel-catalog');
+const syobocalChannelMapManagerModule = require('./lib/syobocal-channel-map-manager');
+const progLookupStoreModule = require('./lib/proglookup-store');
+const progLookupUpdaterModule = require('./lib/proglookup-updater');
 const matchDeletionHistory = require('./lib/match-deletion-history');
 const reservationStore = require('./lib/reservation-store');
 const logHistory = require('./lib/log-history');
@@ -161,6 +172,64 @@ try {
 }
 const STORAGE_REFRESH_SOCKET = runtimePaths.storageRefreshSocket;
 const RECORDED_THUMBNAIL_SOCKET = runtimePaths.recordedThumbnailSocket;
+const seriesUseSyobocal = config.seriesUseSyobocal !== false;
+const officialRequests = seriesUseSyobocal ? syobocalChannelCatalogModule.createOfficialRequestQueue({
+	statePath: __dirname + '/data/syobocal-request-cooldown.json'
+}) : null;
+let dictionaryManager;
+const progLookupStore = progLookupStoreModule.createProgLookupStore({ path: SERIES_PROGLOOKUP_CACHE_FILE });
+const seriesService = seriesServiceModule.createSeriesService({
+	enabled: seriesUseSyobocal,
+	dictionaryPath: SERIES_DICTIONARY_FILE,
+	getDictionaryStatus: () => dictionaryManager && dictionaryManager.getStatus(),
+	channelMapPath: SERIES_CHANNEL_MAP_FILE,
+	progLookupStore,
+	manualPath: SERIES_MANUAL_OVERRIDE_FILE,
+	thumbnailDir: RECORDED_THUMBNAIL_DIR,
+	ledgerPaths: {
+		reserves: RESERVES_DATA_FILE,
+		reserves2: RESERVES2_DATA_FILE,
+		recorded: RECORDED_DATA_FILE,
+		match: MATCH_DATA_FILE
+	}
+});
+const syobocalChannelMapManager = syobocalChannelMapManagerModule.createSyobocalChannelMapManager({
+	request: officialRequests && officialRequests.request,
+	catalogPath: SERIES_CHANNEL_CATALOG_FILE,
+	channelMapPath: SERIES_CHANNEL_MAP_FILE,
+	dictionaryPath: SERIES_DICTIONARY_FILE,
+	progLookupStore,
+	getAvailableChannels: () => schedule,
+	userAgent: `Chinachu-thorn/${pkg.version} (Syobocal channel catalog; WUI)`,
+	log: util.log
+});
+const progLookupUpdater = progLookupUpdaterModule.createProgLookupUpdater({
+	request: officialRequests && officialRequests.request,
+	store: progLookupStore,
+	channelMapPath: SERIES_CHANNEL_MAP_FILE,
+	getAvailableChannels: () => schedule,
+	getBackfillRequests: () => seriesService.getBackfillRequests(),
+	onUpdateApplied: async update => {
+		await syobocalChannelMapManager.rebuild({ refreshCatalog: update.kind === 'full' });
+		seriesService.invalidate();
+		ios.emit('notify-series');
+	},
+	userAgent: `Chinachu-thorn/${pkg.version} (ProgLookup; WUI)`,
+	log: util.log
+});
+dictionaryManager = dictionaryManagerModule.createDictionaryManager({
+	path: SERIES_DICTIONARY_FILE,
+	enabled: seriesUseSyobocal,
+	request: officialRequests && officialRequests.request,
+	userAgent: `Chinachu-thorn/${pkg.version} (TitleLookup dictionary; WUI)`,
+	getNextRequestAt: () => officialRequests ? officialRequests.getNextAt() : 0,
+	log: util.log,
+	onStatus: () => ios.emit('notify-series'),
+	onPublished: () => dictionaryManagerModule.applyDictionaryToSeries({
+		seriesService, channelMapManager: syobocalChannelMapManager, progLookupUpdater,
+		notify: () => ios.emit('notify-series')
+	})
+});
 
 // Mirakurun Client
 const mirakurunPath = mirakurunConnection.configureClient(mirakurun, config);
@@ -391,6 +460,10 @@ function shutdownWui(signal) {
 	shutdownStarted = true;
 	util.log('SHUTDOWN: ' + signal);
 	mediaDelivery.close();
+	progLookupUpdater.stop();
+	dictionaryManager.stop();
+	syobocalChannelMapManager.stop();
+	seriesService.close();
 
 	if (openServerStartRetryTimer) {
 		clearTimeout(openServerStartRetryTimer);
@@ -889,6 +962,7 @@ function httpServerMain(req, res, query) {
 				storageRefreshIpc: storageRefreshIpc,
 				recordedThumbnail: recordedThumbnail,
 					matchDetailResolver: matchDetailResolver,
+					seriesService: seriesService,
 					matchDeletionHistory: matchDeletionHistory,
 					reservationStore: reservationStore,
 				logHistory    : logHistory,
@@ -1069,6 +1143,7 @@ function ioAddListener(server) {
 	iosAddEventListner(io, 'notify-recorded');
 	iosAddEventListner(io, 'notify-match');
 	iosAddEventListner(io, 'notify-schedule');
+	iosAddEventListner(io, 'notify-series');
 
 	return io;
 }
@@ -1132,6 +1207,11 @@ chinachu.jsonWatcher(
 		}
 
 		schedule = data;
+		if (seriesUseSyobocal) {
+			syobocalChannelMapManager.rebuild({ refreshCatalog: true }).then(result => {
+				if (result && result.created) progLookupUpdater.requestTick();
+			});
+		}
 		ios.emit('notify-schedule');
 		util.log(mes);
 	},
@@ -1235,5 +1315,9 @@ function processChecker() {
 
 		c.tick();
 	}
+}
+if (seriesUseSyobocal) {
+	progLookupUpdater.start();
+	dictionaryManager.start();
 }
 processChecker();

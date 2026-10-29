@@ -257,9 +257,19 @@ describe('WUI access model', function() {
 				'log-history.js',
 				'match-detail-resolver.js',
 				'match-deletion-history.js',
+				'proglookup-store.js',
+				'proglookup-updater.js',
 				'reservation-store.js',
 				'runtime-paths.js',
 				'rule-store.js',
+				'series-manual-store.js',
+				'series-projector.js',
+				'series-resolver.js',
+				'series-service.js',
+				'syobocal-channel-catalog.js',
+				'syobocal-channel-map-manager.js',
+				'syobocal-channel-map.js',
+				'syobocal-dictionary-manager.js',
 				'wui-config.js'
 			].forEach(name => {
 				fs.symlinkSync(path.join(repositoryRoot, 'lib', name), path.join(libDir, name));
@@ -291,6 +301,7 @@ describe('WUI access model', function() {
 
 			fs.writeFileSync(path.join(temporaryDir, 'config.json'), JSON.stringify({
 				mirakurunPath: 'http://127.0.0.1:9/',
+				seriesUseSyobocal: false,
 				wuiOpenServer: true,
 				wuiOpenHost: null,
 				wuiOpenPort: openPort
@@ -357,6 +368,7 @@ describe('WUI access model', function() {
 			});
 			fs.writeFileSync(path.join(temporaryDir, 'config.json'), JSON.stringify({
 				mirakurunPath: 'http://127.0.0.1:9/',
+				seriesUseSyobocal: false,
 				wuiOpenServer: true,
 				wuiOpenHost: '127.0.0.1',
 				wuiOpenPort: occupiedPort
@@ -423,6 +435,7 @@ describe('WUI access model', function() {
 			fs.writeFileSync(path.join(dataDir, 'match.json'), '[]');
 			fs.writeFileSync(path.join(temporaryDir, 'config.json'), JSON.stringify({
 				mirakurunPath: 'http://127.0.0.1:9/',
+				seriesUseSyobocal: false,
 				wuiOpenServer: true,
 				wuiOpenHost: '127.0.0.1',
 				wuiOpenPort: openPort,

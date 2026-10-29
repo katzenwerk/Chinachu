@@ -10,6 +10,10 @@ function validText(value) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
+function parsedProgramValue(program, key) {
+  return Object.prototype.hasOwnProperty.call(program, key) ? program[key] : undefined;
+}
+
 function finitePositive(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : null;
@@ -179,6 +183,7 @@ function recordingPathInfo(detail, state, file) {
 export function buildProgramDetailModel(detail, now = Date.now()) {
   const program = detail.program || {};
   const match = detail.match || {};
+  const parsedProgramAvailable = detail.currentSource != null || detail.resolution?.matchedBy !== 'minimal-match';
   const reservationMeta = match.reservationMeta || {};
   const reservationProgram = {
     ...program,
@@ -245,8 +250,15 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
       : state.key === 'program' ? programRecordingAction({ start, end, seconds }, now) : null;
 
   return {
+    eventKey: validText(match.key) || (channelId !== null && start !== null && seconds !== null
+      ? `${channelId}|${start}|${seconds}` : null),
     title: validText(program.fullTitle) || validText(program.title) || validText(match.fullTitle) || 'タイトル未取得',
     shortTitle: validText(program.title),
+    parsedProgram: {
+      title: parsedProgramAvailable ? parsedProgramValue(program, 'title') : undefined,
+      subTitle: parsedProgramAvailable ? parsedProgramValue(program, 'subTitle') : undefined,
+      episode: parsedProgramAvailable ? parsedProgramValue(program, 'episode') : undefined
+    },
     summary: validText(program.description),
     detail: validText(program.detail) || validText(program.description),
     state,

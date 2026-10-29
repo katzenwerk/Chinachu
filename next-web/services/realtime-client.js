@@ -3,6 +3,7 @@ const reservationListeners = new Set();
 const recordedListeners = new Set();
 const matchListeners = new Set();
 const scheduleListeners = new Set();
+const seriesListeners = new Set();
 const connectionListeners = new Set();
 let socket = null;
 let connectionSequence = 0;
@@ -15,12 +16,13 @@ function emitConnection(status, reason = null) {
 
 function disconnectIfUnused() {
   if (recordingListeners.size !== 0 || reservationListeners.size !== 0 || recordedListeners.size !== 0 || matchListeners.size !== 0 || scheduleListeners.size !== 0
-      || connectionListeners.size !== 0 || socket === null) return;
+      || seriesListeners.size !== 0 || connectionListeners.size !== 0 || socket === null) return;
   socket.off('notify-recording');
   socket.off('notify-reserves');
   socket.off('notify-recorded');
   socket.off('notify-match');
   socket.off('notify-schedule');
+  socket.off('notify-series');
   socket.off('connect');
   socket.off('disconnect');
   socket.disconnect();
@@ -51,6 +53,7 @@ function connect() {
     socket.on('notify-schedule', () => {
       scheduleListeners.forEach(listener => listener());
     });
+    socket.on('notify-series', () => seriesListeners.forEach(listener => listener()));
     socket.on('connect', () => emitConnection('connected'));
     socket.on('disconnect', reason => {
       emitConnection(reason === 'io client disconnect' ? 'idle' : 'disconnected', reason || null);
@@ -66,6 +69,15 @@ export function subscribeRecordingNotifications(listener) {
   connect();
   return () => {
     recordingListeners.delete(listener);
+    disconnectIfUnused();
+  };
+}
+
+export function subscribeSeriesNotifications(listener) {
+  seriesListeners.add(listener);
+  connect();
+  return () => {
+    seriesListeners.delete(listener);
     disconnectIfUnused();
   };
 }

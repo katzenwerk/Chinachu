@@ -1,4 +1,5 @@
 import { createReservationListRenderer, dismissReservationProgramPreview } from '../components/reservation-list-row.js';
+import { headerCompactMedia } from '../components/mobile-layout.js';
 import { createHoverPopupController } from '../components/hover-popup-controller.js';
 import {
   loadAllRecordedResults,
@@ -15,6 +16,9 @@ import { deleteRecordedFromContext } from '../services/recorded-delete-action.js
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
 import { subscribeMatchNotifications } from '../services/realtime-client.js';
 import { openCleanerDialog } from '../components/cleaner-dialog.js';
+import { loadSeriesProjection } from '../services/series-client.js';
+import { buildSeriesTitleIndex } from '../services/program-title.js';
+import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
 
 const SEARCH_DELAY_MS = 280;
 const AUTO_LOAD_DISTANCE_PX = 200;
@@ -89,6 +93,8 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   let warningsOnly = false;
   let filteredCache = null;
   let items = [];
+  let seriesTitleIndex = new Map();
+  let seriesEventIndex = new Map();
   let total = 0;
   let currentPage = 0;
   let totalPages = 0;
@@ -191,7 +197,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   const loadingIndicator = more.querySelector('.recorded-results-loading');
   setHeaderActions(headerToolbar);
 
-  const compactHeader = window.matchMedia('(max-width: 1300px)');
+  const compactHeader = headerCompactMedia(1300);
   const syncHeaderLayout = () => { headerControls.open = !compactHeader.matches; };
   compactHeader.addEventListener('change', syncHeaderLayout);
   syncHeaderLayout();
@@ -289,7 +295,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   }
 
   function renderCards() {
-    const models = buildRecordedCardModels(items);
+    const models = buildRecordedCardModels(items, { seriesTitleIndex });
     const activeKeys = new Set(models.map(model => model.key));
     cards.forEach((card, key) => {
       if (activeKeys.has(key)) return;
@@ -390,7 +396,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
       renderCards();
     } else {
       clearCards();
-      listRenderer.render(buildRecordedResultModels(items), { preserveScroll });
+      listRenderer.render(buildRecordedResultModels(items, { seriesTitleIndex }), { preserveScroll });
     }
     updateMore();
   }
@@ -431,7 +437,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     feedback.hidden = true;
     updateMore();
     try {
-      const result = await loadResults({
+      const resultPromise = loadResults({
         page: reset ? 1 : currentPage + 1,
         limit: viewMode === 'card' ? CARD_PAGE_SIZE : LIST_PAGE_SIZE,
         search,
@@ -439,7 +445,13 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
         results: resultValues(),
         signal: controller.signal
       });
+      const seriesPromise = reset ? loadSeriesProjection({ signal: controller.signal }).catch(() => null) : null;
+      const [result, seriesSnapshot] = await Promise.all([resultPromise, seriesPromise]);
       if (!isActive() || sequence !== requestSequence) return;
+      if (seriesSnapshot !== null) {
+        seriesTitleIndex = buildSeriesTitleIndex(seriesSnapshot);
+        seriesEventIndex = buildSeriesEventIndex(seriesSnapshot);
+      }
       items = reset ? result.items.slice() : appendUnique(items.slice(), result.items);
       total = result.total;
       currentPage = result.page;
@@ -481,6 +493,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     try {
       const refreshed = [];
       let lastResult = null;
+      const seriesPromise = loadSeriesProjection({ signal: controller.signal }).catch(() => null);
       for (let pageNumber = 1; pageNumber <= pagesToReload; pageNumber += 1) {
         const result = await loadResults({
           page: pageNumber,
@@ -494,7 +507,12 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
         lastResult = result;
         if (pageNumber >= result.totalPages) break;
       }
+      const seriesSnapshot = await seriesPromise;
       if (!isActive() || sequence !== requestSequence || lastResult === null) return;
+      if (seriesSnapshot !== null) {
+        seriesTitleIndex = buildSeriesTitleIndex(seriesSnapshot);
+        seriesEventIndex = buildSeriesEventIndex(seriesSnapshot);
+      }
       items = refreshed;
       total = lastResult.total;
       currentPage = Math.min(pagesToReload, lastResult.totalPages || 1);
@@ -651,6 +669,20 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     onAction(action, item) {
       if (!isActive()) return;
       if (action.startsWith('filter-')) return applyContextFilter(action, item);
+      if (action === 'series-view') {
+        const href = seriesEventHref(item.seriesContext, 'recordings');
+        if (href) window.location.hash = href;
+        return;
+      }
+      if (['series-change', 'series-episode', 'series-remove'].includes(action)) {
+        openProgramDetailDialog({
+          key: item.key,
+          id: item.recordedId,
+          initialAction: action,
+          onChanged: requestDynamicRefresh
+        });
+        return;
+      }
       if (action === 'copy-title') {
         const title = (typeof item?.fullTitle === 'string' && item.fullTitle.trim()) ||
           (typeof item?.title === 'string' && item.title.trim()) || '';
@@ -709,7 +741,17 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     const row = event.target.closest?.('.recorded-card[data-recorded-key], .reservation-list-row[data-reservation-key]');
     if (!row || !content.contains(row)) return null;
     const key = row.dataset.recordedKey || row.dataset.reservationKey;
-    return items.find(item => item?.key === key) || null;
+    const item = items.find(value => value?.key === key) || null;
+    if (!item) return null;
+    const seriesContext = seriesEventIndex.get(item.key) || {
+      eventKey: item.key,
+      event: { ...item, key: item.key, resolution: null },
+      seriesId: null,
+      tidConfirmed: false,
+      manual: false,
+      candidates: []
+    };
+    return { ...item, seriesContext };
   }
   content.addEventListener('contextmenu', event => {
     const item = contextTarget(event);

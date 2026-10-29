@@ -137,6 +137,9 @@ button.program-detail-media-poster:focus-visible { outline: 3px solid var(--info
 .program-modal-management dl { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 8px 12px; margin: 0; }
 .program-modal-management dt { align-self: center; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .program-modal-management dd { align-self: center; min-width: 0; margin: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.program-modal-analysis { margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+.program-modal-analysis h4 { margin: 0 0 var(--space-3); color: var(--muted); font-size: 12px; font-weight: var(--font-heading-weight); letter-spacing: .04em; }
+.program-modal-analysis dl { margin: 0; }
 .program-modal-file-path { font-family: ui-monospace,SFMono-Regular,Consolas,monospace; font-size: 11px; word-break: break-all; }
 .program-modal-id { display: block; margin-top: var(--space-4); color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .program-detail-dialog > article > footer { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 8px; align-items: center; padding: var(--space-4) var(--space-5); border-top: 1px solid var(--border); }
