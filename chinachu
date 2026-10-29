@@ -84,7 +84,7 @@ main () {
     reserve | unreserve | skip | unskip | stop | \
     rule | enrule | disrule | rmrule | \
     rules | reserves | recording | recorded | \
-    cleanup | cleaner | ircbot | test )
+    cleanup | cleaner | ircbot | auth | test )
       cmd="chinachu_$cmd"
       ;;
     * )
@@ -161,7 +161,31 @@ chinachu_installer_auto_full () {
 
   printf '\n%sInstallation completed successfully.%s\n' "$INSTALLER_GREEN" "$INSTALLER_RESET"
 
+  chinachu_auth_setup_hint "${BOOTSTRAP_RUNTIME_USER:-$(id -un)}"
+
   return 0
+}
+
+chinachu_auth_setup_hint () {
+  local runtime_user="$1" setup_state
+
+  node app-auth.js _needs-setup >/dev/null 2>&1
+  setup_state=$?
+  case "$setup_state" in
+    0)
+      printf '\n［任意］WUIログイン認証（Auth・2FA）\n'
+      printf 'ログイン認証を利用する場合は、Chinachu実行ユーザー（%s）で以下を実行してください。\n\n' "$runtime_user"
+      printf '  cd %q\n' "$CHINACHU_DIR"
+      printf '  ./chinachu auth setup\n\n'
+      printf '登録後、WUIの「設定 → ログイン認証」からAuthを有効化できます。\n'
+      printf '2FAも同じ画面で設定できます。\n'
+      ;;
+    1)
+      ;;
+    *)
+      installer_warning "WUIログイン認証の登録状態を確認できなかったため、初期登録案内は表示しません。"
+      ;;
+  esac
 }
 
 chinachu_installer_offer_pm2 () {
@@ -843,6 +867,10 @@ chinachu_ircbot () {
   node app-cli.js -mode ircbot "$@" && return 0
 }
 
+chinachu_auth () {
+  node app-auth.js "$@" && return 0
+}
+
 chinachu_test () {
   if [ ! "$1" ]; then
     fail "Usage: test <app> [options]"
@@ -883,6 +911,7 @@ recorded                Show a list of recorded programs.
 
 cleanup                 Clean-up the recorded list.
 cleaner [--dry-run]     Inspect ledgers and recording locations (dry-run only).
+auth [command]          Manage the WUI admin password and local recovery.
 
 ircbot [options]        Connect to IRC server and run a ircbot. (Experimental)
 

@@ -29,8 +29,13 @@ import {
 import { loadServiceControl } from './services/service-control-client.js';
 import { serviceGeneration, serviceGenerationChanged } from './services/service-restart-model.js';
 import { completePendingRestart, subscribePendingRestart } from './services/service-restart-store.js';
+import { initializeAuthentication, logout } from './services/auth-client.js';
 
-const shell = createAppShell(document.querySelector('#app'));
+const appRoot = document.querySelector('#app');
+const authentication = await initializeAuthentication(appRoot);
+const shell = createAppShell(appRoot);
+shell.setAuthentication(authentication.enabled === true, logout);
+window.addEventListener('chinachu-auth-state', event => shell.setAuthentication(event.detail?.enabled === true, logout));
 const uninstallProgramDetailDialogLinks = installProgramDetailDialogLinks();
 setWuiConnectionSocketSubscriber(subscribeRealtimeConnection);
 const unsubscribeRecordingCount = subscribeRecordingData(state => {

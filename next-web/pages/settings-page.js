@@ -1,5 +1,13 @@
 import { loadConfig, loadMirakurunServices, loadRuntimeMode, saveConfig } from '../services/config-client.js';
 import {
+  beginTotpSetup,
+  changeAdminPassword,
+  confirmTotpSetup,
+  disableTotp,
+  loadAuthSettings,
+  updateAuthEnabled
+} from '../services/auth-client.js';
+import {
   DROP_DETECTION_MODES,
   cloneConfig,
   configForSave,
@@ -12,10 +20,11 @@ import {
   updateRecordedStorageRootProtection,
   validateConfig
 } from '../services/config-model.js';
+import QrCreator from '../vendor/qr-creator.es6.min.js';
 
 const TABS = [
   ['basic', '基本設定'], ['recording', '録画設定'], ['storage', 'Storage'],
-  ['history', '履歴管理'], ['services', 'サービス'], ['series', 'シリーズ'], ['advanced', '詳細設定']
+  ['history', '履歴管理'], ['services', 'サービス'], ['series', 'シリーズ'], ['auth', 'ログイン認証'], ['advanced', '詳細設定']
 ];
 
 const FIELD = {
@@ -41,7 +50,7 @@ const FIELD = {
   matchRetentionDays: { label: '予約・録画照合履歴の保持期間', type: 'number', integer: true, min: 0 },
   reserves2RetentionDays: { label: '予約履歴の保持期間', type: 'number', integer: true, min: 0 },
   recordedHistoryRetentionDays: { label: '録画済み履歴の保持期間', type: 'number', integer: true, min: 0 },
-  wuiOpenHost: { label: '待受アドレス', type: 'text', empty: 'null' },
+  wuiOpenHost: { label: '接続を受け付けるIPアドレス', type: 'text', empty: 'null' },
   wuiOpenPort: { label: 'ポート番号', type: 'number', integer: true, min: 1 }
 };
 
@@ -64,6 +73,13 @@ function card(title, description) {
   body.className = 'settings-card-body';
   section.append(header, body);
   return { section, body };
+}
+
+function globalAccessWarning() {
+  const warning = document.createElement('aside');
+  warning.className = 'settings-access-warning';
+  warning.innerHTML = '<strong><span aria-hidden="true">⚠</span> 外部アクセスに関する注意</strong><p>この設定をOFFにすると、Chinachu WUIはグローバルIPからの接続を拒否しなくなります。</p><p>インターネットへ直接公開する構成では必要になる場合がありますが、不正アクセスなどのセキュリティリスクがあるため、WUIの直接公開は推奨しません。</p><p>外部から利用する場合は、VPN（Tailscale、WireGuardなど）や、remote.itなどのリモートアクセスサービスの利用を検討してください。</p>';
+  return warning;
 }
 
 function fieldShell(label, key, description, options = {}) {
@@ -119,6 +135,7 @@ export function renderSettingsPage(container) {
   let original = null;
   let draft = null;
   let runtimeMode = null;
+  let authSettings = null;
   let activeTab = 'basic';
   let services = null;
   const fieldErrors = new Map();
@@ -126,11 +143,19 @@ export function renderSettingsPage(container) {
 
   container.innerHTML = '<section class="panel settings-loading">設定を読み込んでいます…</section>';
 
-  Promise.all([loadConfig(controller.signal), loadRuntimeMode(controller.signal)]).then(([config, mode]) => {
+  const authenticationRequest = loadAuthSettings(controller.signal).then(
+    value => ({ value }),
+    error => {
+      if (error?.name === 'AbortError') throw error;
+      return { error };
+    }
+  );
+  Promise.all([loadConfig(controller.signal), loadRuntimeMode(controller.signal), authenticationRequest]).then(([config, mode, authentication]) => {
     if (disposed) return;
     original = cloneConfig(config);
     draft = cloneConfig(config);
     runtimeMode = mode;
+    authSettings = authentication.value || { loadError: authentication.error?.message || '認証状態を取得できませんでした。' };
     render();
   }).catch(error => {
     if (disposed || error?.name === 'AbortError') return;
@@ -487,17 +512,28 @@ export function renderSettingsPage(container) {
 
   function createServicesTab() {
     const tab = sectionFor('services');
-    const wui = card('WUI公開サーバー', 'ほかの端末からChinachuのWeb画面へアクセスするためのHTTPサーバーです。家庭内LANなど、信頼できるネットワークで使用してください。');
-    const open = bindBoolean('wuiOpenServer', 'WUI公開サーバー', 'ほかの端末からWeb画面へアクセスできるようにします。OFFにしてWUIを再起動すると、ブラウザから接続できなくなる場合があります。');
-    const host = bindValueField('wuiOpenHost', 'Web画面への接続を受け付けるネットワークアドレスです。未指定時は利用可能なプライベートIPv4アドレスを自動選択します。', { wide: true });
+    const wui = card('WUIサーバー・アクセス制限', 'ChinachuのWeb画面と、接続元IPアドレスによるアクセス制限を設定します。変更はWUIの再起動後に反映されます。');
+    const open = bindBoolean('wuiOpenServer', 'WUIサーバーを有効にする', 'ChinachuのWeb画面を利用できるようにします。OFFにすると、WUI再起動後に接続できなくなる場合があります。');
+    const blockGlobal = bindBoolean('wuiBlockGlobalAccess', 'グローバルIPからの接続を拒否', 'ONにすると、接続元IPアドレスがローカル・プライベートネットワークに属する接続だけを受け付けます。', { defaultTrue: true });
+    const host = bindValueField('wuiOpenHost', 'WUIが接続を受け付ける、このサーバー側のIPアドレスです。未指定時は、内部インターフェース以外のプライベート・リンクローカルIPv4アドレスから最初の1つを自動選択します。該当するアドレスがなければ起動しません。', { placeholder: '自動選択（未指定）' });
     const port = bindValueField('wuiOpenPort', 'Web画面への接続に使用するポート番号です。変更するとブラウザでアクセスするURLも変わります。', { compact: true, placeholder: '例: 20772' });
     dependentUpdates.push(() => {
       [host, port].forEach(field => { field.input.disabled = draft.wuiOpenServer !== true; field.wrap.classList.toggle('is-disabled', field.input.disabled); });
     });
-    const wuiGrid = document.createElement('div');
-    wuiGrid.className = 'settings-fields';
-    wuiGrid.append(host.wrap, port.wrap);
-    wui.body.append(open.wrap, wuiGrid);
+    const serverColumn = document.createElement('div');
+    serverColumn.className = 'settings-wui-column';
+    const serverHeading = document.createElement('h3');
+    serverHeading.textContent = 'WUIサーバー';
+    serverColumn.append(serverHeading, open.wrap, host.wrap, port.wrap);
+    const accessColumn = document.createElement('div');
+    accessColumn.className = 'settings-wui-column';
+    const accessHeading = document.createElement('h3');
+    accessHeading.textContent = 'アクセス制限';
+    const accessWarning = globalAccessWarning();
+    accessWarning.setAttribute('role', 'note');
+    accessColumn.append(accessHeading, blockGlobal.wrap, accessWarning);
+    dependentUpdates.push(() => { accessWarning.hidden = draft.wuiBlockGlobalAccess !== false; });
+    wui.body.append(serverColumn, accessColumn);
 
     const serviceCard = card('放送サービス', '番組表や録画予約で使用しないサービスを選び、画面上の表示順を指定します。除外するサービスにチェックを入れてください。');
     const controls = document.createElement('div');
@@ -605,6 +641,264 @@ export function renderSettingsPage(container) {
     return tab;
   }
 
+  function openAuthDialog(options) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'settings-save-dialog settings-auth-dialog';
+    dialog.innerHTML = '<form method="dialog"><header><h2></h2><button value="cancel" aria-label="閉じる">×</button></header><p class="settings-auth-description"></p><div class="settings-auth-fields"></div><footer><button class="button" value="cancel">キャンセル</button><button class="button primary" type="button" data-submit></button></footer><p role="status"></p></form>';
+    dialog.querySelector('h2').textContent = options.title;
+    dialog.querySelector('.settings-auth-description').textContent = options.description || '';
+    const fields = dialog.querySelector('.settings-auth-fields');
+    (options.fields || []).forEach(definition => {
+      const label = document.createElement('label');
+      label.textContent = definition.label;
+      const input = document.createElement('input');
+      input.name = definition.name;
+      input.type = definition.type || 'text';
+      input.required = definition.required !== false;
+      if (definition.autocomplete) input.autocomplete = definition.autocomplete;
+      if (definition.inputmode) input.inputMode = definition.inputmode;
+      if (definition.minlength) input.minLength = definition.minlength;
+      if (definition.maxlength) input.maxLength = definition.maxlength;
+      label.append(input);
+      fields.append(label);
+    });
+    const submit = dialog.querySelector('[data-submit]');
+    submit.textContent = options.submitLabel || '実行';
+    if (options.danger) submit.classList.add('is-danger');
+    const status = dialog.querySelector('[role="status"]');
+    submit.addEventListener('click', async () => {
+      const form = dialog.querySelector('form');
+      if (!form.reportValidity()) return;
+      submit.disabled = true;
+      status.textContent = '確認しています…';
+      status.classList.remove('is-error');
+      const values = Object.fromEntries(new FormData(form).entries());
+      try {
+        const outcome = await options.submit(values, dialog);
+        if (outcome !== false && dialog.open) dialog.close();
+      } catch (error) {
+        status.textContent = error.message;
+        status.classList.add('is-error');
+        submit.disabled = false;
+      }
+    });
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    document.body.append(dialog);
+    dialog.showModal();
+    dialog.querySelector('input')?.focus();
+  }
+
+  function credentialFields(includeNewPassword = false) {
+    const fields = [{ name: 'password', label: '現在の管理者パスワード', type: 'password', autocomplete: 'current-password' }];
+    if (includeNewPassword) {
+      fields.push(
+        { name: 'newPassword', label: '新しいパスワード（6文字以上）', type: 'password', autocomplete: 'new-password', minlength: 6 },
+        { name: 'newPasswordConfirm', label: '新しいパスワード（確認）', type: 'password', autocomplete: 'new-password' }
+      );
+    }
+    if (authSettings.totpEnabled) fields.push({ name: 'totp', label: '現在の6桁確認コード', inputmode: 'numeric', maxlength: 6, autocomplete: 'one-time-code' });
+    return fields;
+  }
+
+  function reloadAfterAuthChange() {
+    window.location.reload();
+    return false;
+  }
+
+  function showAuthChange(result, message) {
+    authSettings = {
+      ...authSettings,
+      enabled: typeof result.enabled === 'boolean' ? result.enabled : authSettings.enabled,
+      totpEnabled: typeof result.totpEnabled === 'boolean' ? result.totpEnabled : authSettings.totpEnabled
+    };
+    render();
+    const notice = container.querySelector('.settings-page-message');
+    notice.textContent = message;
+    notice.hidden = false;
+  }
+
+  async function copyAuthText(value, button) {
+    let copied = false;
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(value);
+        copied = true;
+      } catch (_) {}
+    }
+    if (!copied) {
+      const field = document.createElement('textarea');
+      field.value = value;
+      field.setAttribute('readonly', '');
+      field.className = 'settings-copy-fallback';
+      document.body.append(field);
+      field.select();
+      copied = document.execCommand('copy');
+      field.remove();
+      if (!copied) throw new Error('コピーできませんでした。');
+    }
+    const original = button.textContent;
+    button.textContent = 'コピーしました';
+    window.setTimeout(() => { button.textContent = original; }, 1600);
+  }
+
+  function openTotpSetupDialog(setup) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'settings-save-dialog settings-auth-dialog settings-totp-dialog';
+    dialog.innerHTML = '<form method="dialog"><header><h2>2FA（TOTP）を設定</h2><button value="cancel" aria-label="閉じる">×</button></header><div class="settings-totp-steps"><section><h3><span>1</span>認証アプリを開く</h3><p>スマートフォンでGoogle Authenticator（Google 認証システム）などの認証アプリを開いてください。</p><p>アプリの「＋」から「QRコードをスキャン」を選択します。</p></section><section><h3><span>2</span>QRコードを読み取る</h3><div class="settings-totp-qr" data-qr></div><p class="settings-totp-account"></p><details><summary>QRコードを読み取れない場合</summary><p>認証アプリへ次の秘密鍵を手動で登録してください。</p><div class="settings-auth-copy"><code></code><button class="button" type="button">秘密鍵をコピー</button></div></details></section><section><h3><span>3</span>6桁の認証コードを入力する</h3><p>認証アプリに表示された6桁のコードを入力してください。</p><p>コードは30秒ごとに更新されます。切り替わった場合は、新しく表示されたコードを入力してください。</p><label>6桁の認証コード<input name="code" required inputmode="numeric" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code"></label></section></div><footer><button class="button" value="cancel">キャンセル</button><button class="button primary" type="button" data-submit>確認して有効化</button></footer><p role="status"></p></form>';
+    dialog.querySelector('.settings-totp-account').textContent = `登録名: ${setup.issuer} / ${setup.account}`;
+    dialog.querySelector('details code').textContent = setup.secret;
+    dialog.querySelector('.settings-auth-copy button').addEventListener('click', event => {
+      copyAuthText(setup.secret, event.currentTarget).catch(error => {
+        const status = dialog.querySelector('[role="status"]');
+        status.textContent = error.message;
+        status.classList.add('is-error');
+      });
+    });
+    const status = dialog.querySelector('[role="status"]');
+    try {
+      QrCreator.render({ text: setup.otpauth, radius: 0, ecLevel: 'M', fill: '#000', background: '#fff', size: 240, quiet: 4 }, dialog.querySelector('[data-qr]'));
+    } catch (_) {
+      dialog.querySelector('details').open = true;
+      status.textContent = 'QRコードを表示できませんでした。秘密鍵を手動で登録してください。';
+      status.classList.add('is-error');
+    }
+    const submit = dialog.querySelector('[data-submit]');
+    submit.addEventListener('click', async () => {
+      const form = dialog.querySelector('form');
+      if (!form.reportValidity()) return;
+      submit.disabled = true;
+      status.textContent = '確認しています…';
+      status.classList.remove('is-error');
+      try {
+        const values = Object.fromEntries(new FormData(form).entries());
+        const result = await confirmTotpSetup(setup.setupId, values.code, controller.signal);
+        dialog.close();
+        showAuthChange(result, '2FA（TOTP）を有効にしました。');
+      } catch (error) {
+        status.textContent = error.message;
+        status.classList.add('is-error');
+        submit.disabled = false;
+      }
+    });
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    document.body.append(dialog);
+    dialog.showModal();
+    dialog.querySelector('input[name="code"]').focus();
+  }
+
+  function createAuthTab() {
+    const tab = sectionFor('auth');
+    const warning = document.createElement('div');
+    warning.className = 'settings-auth-warning';
+    warning.textContent = 'WUIのインターネット直接公開は推奨しません。LAN内またはVPN経由で利用し、wuiBlockGlobalAccessも補助的な制限として併用してください。';
+    const compatibilityNotice = document.createElement('section');
+    compatibilityNotice.className = 'settings-card panel';
+    compatibilityNotice.innerHTML = '<header><h2>ログイン認証に関する注意</h2></header><div class="settings-card-body"><div class="settings-auth-onboarding"><p>ログイン認証を有効にすると、一部の端末や再生アプリでは動画を再生できなくなる場合があります。</p><p>2FA（TOTP）を有効にすると、ログイン時に認証アプリの6桁コードが必要になります。認証コードを入力できない端末では、ログインできない場合があります。</p></div></div>';
+
+    if (authSettings.loadError) {
+      const unavailable = card('認証状態を確認できません', authSettings.loadError);
+      unavailable.body.append(warning);
+      tab.append(unavailable.section, compatibilityNotice);
+      return tab;
+    }
+
+    if (!authSettings.configured) {
+      const onboarding = card('管理者パスワードが未設定です', 'ログイン認証を利用するには、Chinachuを実行しているLinux端末で、最初に管理者パスワードを登録してください。');
+      const instructions = document.createElement('div');
+      instructions.className = 'settings-auth-onboarding';
+      instructions.innerHTML = '<p>Chinachuのインストールディレクトリへ移動し、WUI実行ユーザーと同じLinuxユーザーで実行してください。</p><div class="settings-auth-copy"><code>./chinachu auth setup</code><button class="button" type="button">コマンドをコピー</button></div><p>登録後、この画面を再読み込みしてください。CLIをブラウザから自動実行することはありません。</p>';
+      instructions.querySelector('button').addEventListener('click', event => {
+        copyAuthText('./chinachu auth setup', event.currentTarget).catch(error => window.alert(error.message));
+      });
+      onboarding.body.append(instructions, warning);
+      tab.append(onboarding.section, compatibilityNotice);
+      return tab;
+    }
+
+    const overview = card('ログイン認証', '単一の管理者 admin とサーバー側セッションでWUIとAPIを保護します。認証情報は通常設定とは別に保存されます。');
+    const statuses = document.createElement('dl');
+    statuses.className = 'settings-auth-status';
+    statuses.innerHTML = `<div><dt>ログイン認証</dt><dd>${authSettings.enabled ? 'ON' : 'OFF'}</dd></div><div><dt>管理者パスワード</dt><dd>設定済み</dd></div><div><dt>2FA（TOTP）</dt><dd>${authSettings.totpEnabled ? 'ON' : 'OFF'}</dd></div>`;
+    overview.body.append(warning, statuses);
+
+    const actions = card('認証設定の変更', '重要な変更では現在の管理者パスワードと、有効な場合はTOTP確認コードを再入力します。認証有効化と2FA設定では操作中のブラウザだけ継続し、その他の既存セッションは失効します。');
+    const buttons = document.createElement('div');
+    buttons.className = 'settings-auth-actions';
+    const enable = document.createElement('button');
+    enable.type = 'button';
+    enable.className = `button${authSettings.enabled ? ' is-danger' : ' primary'}`;
+    enable.textContent = authSettings.enabled ? 'ログイン認証をOFFにする' : 'ログイン認証をONにする';
+    enable.addEventListener('click', () => openAuthDialog({
+      title: enable.textContent,
+		description: authSettings.enabled ? '認証を無効にすると、WUIとAPIへログインせずアクセスできるようになります。' : '本人確認後、このブラウザを認証済みにして設定画面で操作を継続します。',
+      fields: credentialFields(),
+      submitLabel: authSettings.enabled ? '認証をOFFにする' : '認証をONにする',
+      danger: authSettings.enabled,
+      submit: async values => {
+        const result = await updateAuthEnabled(!authSettings.enabled, values.password, values.totp, controller.signal);
+        if (!result.enabled) return reloadAfterAuthChange();
+        showAuthChange(result, 'ログイン認証を有効にしました。');
+      }
+    }));
+
+    const password = document.createElement('button');
+    password.type = 'button';
+    password.className = 'button';
+    password.textContent = '管理者パスワードを変更';
+    password.addEventListener('click', () => openAuthDialog({
+      title: '管理者パスワードを変更',
+      description: '変更すると、現在を含むすべてのログインセッションが失効します。',
+      fields: credentialFields(true),
+      submitLabel: 'パスワードを変更',
+      submit: async values => {
+        if (values.newPassword !== values.newPasswordConfirm) throw new Error('新しいパスワードが一致しません。');
+        await changeAdminPassword(values.password, values.newPassword, values.totp, controller.signal);
+        return reloadAfterAuthChange();
+      }
+    }));
+
+    const totp = document.createElement('button');
+    totp.type = 'button';
+    totp.className = 'button';
+    totp.textContent = authSettings.totpEnabled ? '2FAを再設定' : '2FA（TOTP）を設定';
+    totp.addEventListener('click', () => openAuthDialog({
+      title: authSettings.totpEnabled ? '2FAを再設定' : '2FA（TOTP）を設定',
+      description: '現在の認証情報を確認した後、認証アプリへ登録するQRコードを表示します。',
+      fields: credentialFields(),
+      submitLabel: 'QRコードを表示',
+      submit: async (values, dialog) => {
+        const setup = await beginTotpSetup(values.password, values.totp, controller.signal);
+        dialog.close();
+        openTotpSetupDialog(setup);
+        return false;
+      }
+    }));
+
+    const removeTotp = document.createElement('button');
+    removeTotp.type = 'button';
+    removeTotp.className = 'button is-danger';
+    removeTotp.textContent = '2FAを解除';
+    removeTotp.addEventListener('click', () => openAuthDialog({
+      title: '2FAを解除',
+      description: '解除後は管理者パスワードだけでログインできます。既存セッションは失効します。',
+      fields: credentialFields(),
+      submitLabel: '2FAを解除',
+      danger: true,
+      submit: async values => {
+        await disableTotp(values.password, values.totp, controller.signal);
+        return reloadAfterAuthChange();
+      }
+    }));
+    buttons.append(enable, password);
+    if (authSettings.enabled) {
+      buttons.append(totp);
+      if (authSettings.totpEnabled) buttons.append(removeTotp);
+    }
+    actions.body.append(buttons);
+    tab.append(overview.section, actions.section, compatibilityNotice);
+    return tab;
+  }
+
   function updateStatus() {
     if (!draft) return;
     const changes = configChanges(original, draft);
@@ -626,11 +920,15 @@ export function renderSettingsPage(container) {
     }
     const changes = configChanges(original, saveDraft);
     const dialog = document.createElement('dialog');
-    dialog.className = 'settings-save-dialog';
+    dialog.className = 'settings-save-dialog settings-config-dialog';
     const warning = draft.wuiOpenServer === false && original.wuiOpenServer !== false
-      ? '<p class="settings-danger-note">WUI公開サーバーをOFFにすると、再起動後に接続不能になる可能性があります。</p>' : '';
-    dialog.innerHTML = `<form method="dialog"><header><h2>設定変更の確認</h2><button value="cancel" aria-label="閉じる">×</button></header>${warning}<p>次の設定変更を保存します。サービスは再起動しません。</p><div class="settings-change-list"></div><footer><button class="button" value="cancel">キャンセル</button><button class="button primary" value="default" type="button" data-save>保存</button></footer><p role="status"></p></form>`;
+      ? '<p class="settings-danger-note">WUIサーバーをOFFにすると、再起動後に接続不能になる可能性があります。</p>' : '';
+    dialog.innerHTML = `<form method="dialog"><header><h2>設定変更の確認</h2><button value="cancel" aria-label="閉じる">×</button></header><p>次の設定変更を保存します。サービスは再起動しません。</p><div class="settings-change-list"></div><footer><button class="button" value="cancel">キャンセル</button><button class="button primary" value="default" type="button" data-save>保存</button></footer><p role="status"></p></form>`;
     const list = dialog.querySelector('.settings-change-list');
+    list.innerHTML = warning;
+    if (changes.some(change => change.key === 'wuiBlockGlobalAccess' && change.after === false)) {
+      list.append(globalAccessWarning());
+    }
     changes.forEach(change => {
       const row = document.createElement('div');
       row.innerHTML = '<strong></strong><span></span><span aria-hidden="true">→</span><span></span>';
@@ -702,7 +1000,7 @@ export function renderSettingsPage(container) {
       });
       tabs.append(button);
     });
-    content.append(createBasicTab(), createRecordingTab(), createStorageTab(), createHistoryTab(), createServicesTab(), createSeriesTab(), createAdvancedTab());
+    content.append(createBasicTab(), createRecordingTab(), createStorageTab(), createHistoryTab(), createServicesTab(), createSeriesTab(), createAuthTab(), createAdvancedTab());
     container.querySelector('.settings-save').addEventListener('click', openSaveDialog);
     container.querySelector('.settings-discard').addEventListener('click', openDiscardDialog);
     dependentUpdates.forEach(update => update());

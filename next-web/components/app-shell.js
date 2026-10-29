@@ -21,6 +21,7 @@ const sprite = `
     <symbol id="icon-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2zM12 9v5m0 4h.01"/></symbol>
     <symbol id="icon-bell" viewBox="0 0 24 24"><path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5zM10 20h4"/></symbol>
     <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"/></symbol>
+    <symbol id="icon-log-out" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></symbol>
   </svg>`;
 
 const primaryItems = [
@@ -89,6 +90,7 @@ export function createAppShell(root) {
         <button type="submit" class="header-program-search-button" aria-label="番組を検索" title="番組を検索">${icon('search', true)}</button>
       </form>
       <div class="header-common-actions">
+        <button class="icon-button header-logout-button" id="header-logout" type="button" aria-label="ログアウト" title="ログアウト" hidden>${icon('log-out')}</button>
         <button class="icon-button" id="theme-toggle" type="button" aria-label="ダークテーマへ切替" title="テーマ切替">${icon('sun')}</button>
         <button class="icon-button notification-button" id="notification-button" type="button" aria-label="通知" title="通知" aria-controls="notification-panel" aria-expanded="false">${icon('bell')}<span class="notification-count" hidden></span></button>
       </div>
@@ -157,6 +159,7 @@ export function createAppShell(root) {
   });
   const themeToggle = root.querySelector('#theme-toggle');
   const notificationButton = root.querySelector('#notification-button');
+  const logoutButton = root.querySelector('#header-logout');
   const notificationPanel = root.querySelector('#notification-panel');
   const header = root.querySelector('.app-header');
   const headerActions = root.querySelector('#header-page-actions');
@@ -677,6 +680,16 @@ export function createAppShell(root) {
     outlet: root.querySelector('#page-outlet'),
     title: root.querySelector('#page-title'),
     showToast,
+    setAuthentication(enabled, handler) {
+      logoutButton.hidden = !enabled;
+      logoutButton.onclick = enabled && typeof handler === 'function' ? () => {
+        logoutButton.disabled = true;
+        Promise.resolve(handler()).catch(error => {
+          logoutButton.disabled = false;
+          showToast(error.message || 'ログアウトできませんでした', 6000, 'error');
+        });
+      } : null;
+    },
     setPageActions(element = null) {
       const host = root.querySelector('#header-page-actions');
       host.replaceChildren(...(element ? [element] : []));

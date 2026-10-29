@@ -270,6 +270,7 @@ describe('WUI access model', function() {
 				'syobocal-channel-map-manager.js',
 				'syobocal-channel-map.js',
 				'syobocal-dictionary-manager.js',
+				'wui-auth.js',
 				'wui-config.js'
 			].forEach(name => {
 				fs.symlinkSync(path.join(repositoryRoot, 'lib', name), path.join(libDir, name));
@@ -286,7 +287,9 @@ describe('WUI access model', function() {
 					'\t\tthrow new Error("No private IPv4 address was detected. Configure `wuiOpenHost` explicitly; the WUI Open Server was not started.");',
 					'\t}',
 					"\treturn { host: '127.0.0.1', autoDetected: false, addresses: [] };",
-					'};'
+					'};',
+					'module.exports.isGlobalAccessBlockEnabled = function(value) { return value !== false; };',
+					'module.exports.isRemoteAddressAllowed = function() { return true; };'
 				].join('\n') + '\n'
 			);
 

@@ -6,6 +6,7 @@ const scheduleListeners = new Set();
 const seriesListeners = new Set();
 const connectionListeners = new Set();
 let socket = null;
+let authRefreshPending = false;
 let connectionSequence = 0;
 let connectionState = { status: 'idle', reason: null, id: 0 };
 
@@ -25,6 +26,8 @@ function disconnectIfUnused() {
   socket.off('notify-series');
   socket.off('connect');
   socket.off('disconnect');
+  socket.off('auth-expired');
+  socket.off('auth-refresh');
   socket.disconnect();
   socket = null;
   emitConnection('idle', 'client-unused');
@@ -56,8 +59,23 @@ function connect() {
     socket.on('notify-series', () => seriesListeners.forEach(listener => listener()));
     socket.on('connect', () => emitConnection('connected'));
     socket.on('disconnect', reason => {
+      if (reason === 'io server disconnect' && authRefreshPending) {
+        authRefreshPending = false;
+        const disconnected = socket;
+        disconnected.off();
+        socket = null;
+        emitConnection('disconnected', reason);
+        window.setTimeout(connect, 0);
+        return;
+      }
+      if (reason === 'io server disconnect') {
+        window.location.reload();
+        return;
+      }
       emitConnection(reason === 'io client disconnect' ? 'idle' : 'disconnected', reason || null);
     });
+    socket.on('auth-expired', () => window.location.reload());
+    socket.on('auth-refresh', () => { authRefreshPending = true; });
   } catch (_) {
     socket = null;
     emitConnection('unavailable');

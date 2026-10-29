@@ -105,6 +105,7 @@ const logHistory = require('./lib/log-history');
 const ledgerCleaner = require('./lib/ledger-cleaner');
 const ledgerCleanerJobsModule = require('./lib/ledger-cleaner-jobs');
 const wuiConfigStore = require('./lib/wui-config');
+const wuiAuthModule = require('./lib/wui-auth');
 const wuiRuntime = Object.freeze({
 	instanceId: Date.now().toString(36) + '-' + process.pid.toString(36) + '-' + Math.random().toString(36).slice(2, 10),
 	startedAt: Date.now()
@@ -172,6 +173,7 @@ try {
 }
 const STORAGE_REFRESH_SOCKET = runtimePaths.storageRefreshSocket;
 const RECORDED_THUMBNAIL_SOCKET = runtimePaths.recordedThumbnailSocket;
+const wuiAuth = wuiAuthModule.createAuthManager({ rootDir: __dirname, log: util.log });
 const seriesUseSyobocal = config.seriesUseSyobocal !== false;
 const officialRequests = seriesUseSyobocal ? syobocalChannelCatalogModule.createOfficialRequestQueue({
 	statePath: __dirname + '/data/syobocal-request-cooldown.json'
@@ -230,6 +232,8 @@ dictionaryManager = dictionaryManagerModule.createDictionaryManager({
 		notify: () => ios.emit('notify-series')
 	})
 });
+const initialAuthStatus = wuiAuth.statusFor(null);
+util.log('WUI Authentication: ' + (initialAuthStatus.locked ? 'locked' : (initialAuthStatus.enabled ? 'enabled' : 'disabled')));
 
 // Mirakurun Client
 const mirakurunPath = mirakurunConnection.configureClient(mirakurun, config);
@@ -292,8 +296,10 @@ const status = {
 
 // Open Server
 const openServerEnabled = config.wuiOpenServer === true;
+const globalAccessBlockEnabled = openHost.isGlobalAccessBlockEnabled(config.wuiBlockGlobalAccess);
 const OPEN_SERVER_HOST_RETRY_INTERVAL_MS = 1000;
 const OPEN_SERVER_HOST_RETRY_TIMEOUT_MS = 60000;
+util.log('WUI Global Access Block: ' + (globalAccessBlockEnabled ? 'enabled' : 'disabled'));
 
 var rules     = [];
 var schedule  = [];
@@ -493,6 +499,51 @@ function shutdownWui(signal) {
 	process.on(signal, () => shutdownWui(signal));
 });
 
+function isOpenServerRequestAllowed(req) {
+	return openHost.isRemoteAddressAllowed(
+		req && req.socket ? req.socket.remoteAddress : null,
+		config.wuiBlockGlobalAccess
+	);
+}
+
+function rejectOpenServerHttpRequest(req, res) {
+	res.writeHead(403, {
+		'content-type': 'text/plain; charset=utf-8',
+		'connection': 'close'
+	});
+	if (req.method !== 'HEAD') res.write('403 Forbidden\n');
+	res.end();
+}
+
+function rejectOpenServerUpgrade(socket) {
+	if (!socket || socket.destroyed) return;
+	socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+}
+
+// Socket.IOがHTTP/upgrade listenerを差し替えた後、その全受付経路の手前に共通判定を置く。
+function guardOpenServerRequests(server) {
+	const requestListeners = server.listeners('request').slice();
+	const upgradeListeners = server.listeners('upgrade').slice();
+
+	server.removeAllListeners('request');
+	server.on('request', (req, res) => {
+		if (!isOpenServerRequestAllowed(req)) {
+			rejectOpenServerHttpRequest(req, res);
+			return;
+		}
+		requestListeners.forEach(listener => listener.call(server, req, res));
+	});
+
+	server.removeAllListeners('upgrade');
+	server.on('upgrade', (req, socket, head) => {
+		if (!isOpenServerRequestAllowed(req)) {
+			rejectOpenServerUpgrade(socket);
+			return;
+		}
+		upgradeListeners.forEach(listener => listener.call(server, req, socket, head));
+	});
+}
+
 // Open Server for Access from LAN.
 function startOpenServer(startedAt) {
 	let selection;
@@ -618,6 +669,7 @@ function httpServer(req, res) {
 
 function httpServerMain(req, res, query) {
 	var remoteAddress = req.client.remoteAddress;
+	var transportMethod = req.method;
 
 	if (/^\:\:ffff\:[^\:]+/.test(remoteAddress) === true) {
 		remoteAddress = remoteAddress.split(':')[3];
@@ -661,6 +713,16 @@ function httpServerMain(req, res, query) {
 	}
 
 	// HTTPメソッド指定を上書き
+	if (['method', '_method'].some(function (key) {
+		return Object.prototype.hasOwnProperty.call(query, key) && typeof query[key] !== 'string';
+	})) {
+		res.writeHead(400, {'content-type': 'text/plain'});
+		if (req.method !== 'HEAD') res.write('400 Bad Request\n');
+		res.end();
+		log(400);
+		return;
+	}
+
 	if (query.method) {
 		req.method = query.method.toUpperCase();
 		delete query.method;
@@ -809,6 +871,40 @@ function httpServerMain(req, res, query) {
 	// ヘッダの確認
 	if (!req.headers.host) { return resErr(400); }
 
+	var responseAuthApi = function () {
+		wuiAuth.handleHttp(req, location, query).then(function (result) {
+			Object.keys(result.headers || {}).forEach(function (name) {
+				res.setHeader(name, result.headers[name]);
+			});
+				writeHead(result.status);
+				log(result.status);
+				var afterSend = result.afterSend;
+				var finishAuthResponse = function () {
+					if (!afterSend) return;
+					var callback = afterSend;
+					afterSend = null;
+					callback();
+				};
+				res.once('close', finishAuthResponse);
+				if (req.method === 'HEAD') return res.end(finishAuthResponse);
+				res.end(JSON.stringify(result.body), finishAuthResponse);
+		}).catch(function (error) {
+			console.error('AUTH API ERROR: ' + error.message);
+			resErr(500);
+		});
+	};
+
+	if (isApiRequest && wuiAuth.isAuthApiPath(location)) {
+		if (transportMethod !== req.method) return resErr(405);
+		return responseAuthApi();
+	}
+
+	if (isApiRequest) {
+		var authResult = wuiAuth.authorizeApi(req);
+		if (!authResult.ok) return resErr(authResult.status);
+		wuiAuth.registerResponse(authResult.session, res);
+	}
+
 	var responseStatic = function () {
 
 		if (fs.existsSync(filename) === false) { return resErr(404); }
@@ -822,7 +918,13 @@ function httpServerMain(req, res, query) {
 			res.setHeader('Cache-Control', 'private, max-age=86400');
 		}
 
-		var fstat = fs.statSync(filename);
+		var fstat;
+		try {
+			fstat = fs.statSync(filename);
+		} catch (error) {
+			return resErr(error.code === 'ENOENT' || error.code === 'ENOTDIR' ? 404 : 500);
+		}
+		if (!fstat.isFile()) { return resErr(404); }
 
 		res.setHeader('Accept-Ranges', 'bytes');
 		res.setHeader('Last-Modified', new Date(fstat.mtime).toUTCString());
@@ -856,7 +958,25 @@ function httpServerMain(req, res, query) {
 		}
 
 		if (req.method === 'GET') {
-			fs.createReadStream(filename, range || {}).pipe(res);
+			var stream;
+			var onReadError = function () {
+				if (res.destroyed || res.writableEnded) { return; }
+				if (res.headersSent) {
+					res.destroy();
+				} else {
+					res.removeHeader('Content-Length');
+					res.removeHeader('Content-Range');
+					resErr(500);
+				}
+			};
+			try {
+				stream = fs.createReadStream(filename, range || {});
+				stream.on('error', onReadError);
+				stream.pipe(res);
+			} catch (error) {
+				if (stream) { stream.destroy(); }
+				onReadError();
+			}
 		} else {
 			res.end();
 		}
@@ -1130,8 +1250,12 @@ function ioAddListener(server) {
 	// Preserve the pre-P1-E transport model: polling first, then WebSocket upgrade.
 	// WebTransport and the legacy Engine.IO 3 compatibility mode are not enabled.
 	var io = new SocketIOServer(server, {
-		transports: [ 'polling', 'websocket' ]
+		transports: [ 'polling', 'websocket' ],
+		allowRequest: function (req, callback) {
+			callback(null, isOpenServerRequestAllowed(req) && wuiAuth.authorizeSocket(req));
+		}
 	});
+	guardOpenServerRequests(server);
 
 	io.on('connection', ioServer);
 
@@ -1149,6 +1273,7 @@ function ioAddListener(server) {
 }
 
 function ioServer(socket) {
+	wuiAuth.registerSocket(socket);
 	ioServerMain(socket);
 }
 

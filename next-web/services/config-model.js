@@ -15,7 +15,7 @@ const KNOWN_KEYS = new Set([
   'storageLowSpaceCriticalNotifyIntervalMinutes', 'notificationCommand', 'matchRetentionDays',
   'reserves2RetentionDays', 'recordedHistoryRetentionDays', 'recordingResultCsvEnabled',
   'excludeServices', 'serviceOrder',
-  'wuiOpenServer', 'wuiOpenHost', 'wuiOpenPort',
+  'wuiOpenServer', 'wuiOpenHost', 'wuiOpenPort', 'wuiBlockGlobalAccess',
   'seriesUseSyobocal'
 ]);
 
@@ -25,6 +25,7 @@ export function cloneConfig(value) {
 
 export function configForSave(config) {
   const result = cloneConfig(config);
+  if (!Object.prototype.hasOwnProperty.call(result, 'wuiBlockGlobalAccess')) result.wuiBlockGlobalAccess = true;
   if (!Object.prototype.hasOwnProperty.call(result, 'seriesUseSyobocal')) result.seriesUseSyobocal = true;
   return result;
 }
