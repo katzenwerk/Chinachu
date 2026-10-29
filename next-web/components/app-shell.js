@@ -1,4 +1,5 @@
 import { createToastQueue } from './toast-queue.js';
+import { MOBILE_QUERY } from './mobile-layout.js';
 
 const icon = (name, small = false) => `<svg class="icon${small ? ' icon-small' : ''}"><use href="#icon-${name}"></use></svg>`;
 
@@ -16,6 +17,7 @@ const sprite = `
     <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M10 2h4l1 3 3 1 3-1 2 4-2 2v2l2 2-2 4-3-1-3 1-1 3h-4l-1-3-3-1-3 1-2-4 2-2v-2L1 9l2-4 3 1 3-1z"/></symbol>
     <symbol id="icon-menu" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18m3-13h6m-6 4h6m-6 4h6"/></symbol>
     <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/></symbol>
+    <symbol id="icon-options" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16M8 3v6m8 0v6m-5 0v6"/></symbol>
     <symbol id="icon-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2zM12 9v5m0 4h.01"/></symbol>
     <symbol id="icon-bell" viewBox="0 0 24 24"><path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5zM10 20h4"/></symbol>
     <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"/></symbol>
@@ -51,6 +53,7 @@ function navItem([route, iconName, label]) {
 }
 
 export function createAppShell(root) {
+  const mobile = window.matchMedia(MOBILE_QUERY);
   const desktopSidebar = window.matchMedia('(hover: hover) and (pointer: fine)');
   const readSidebarPinned = () => {
     try {
@@ -69,6 +72,7 @@ export function createAppShell(root) {
   root.innerHTML = `${sprite}
     <header class="app-header">
       <div class="header-heading">
+        <button class="icon-button mobile-menu-toggle" type="button" aria-label="全メニューを開く" aria-controls="sidebar" aria-expanded="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
         <a class="brand" href="#home" aria-label="Chinachu ホーム">
           <span class="brand-wordmark">Chinachu</span>
           <svg class="brand-thorn" viewBox="0 0 12 18" aria-hidden="true" focusable="false">
@@ -78,6 +82,7 @@ export function createAppShell(root) {
         <div class="header-page-title"><h1 id="page-title">ストレージ</h1></div>
       </div>
       <div class="header-page-actions" id="header-page-actions"></div>
+      <div class="mobile-header-actions" aria-label="ページ操作"></div>
       <form class="header-program-search" id="header-program-search" role="search" aria-label="番組検索" hidden>
         <label class="header-program-search-label"><span class="header-search-caption">番組を検索</span><input type="search" name="q" maxlength="120" placeholder="番組を検索…" autocomplete="off" aria-label="番組名・キーワード"></label>
         <button type="submit" class="header-program-search-button" aria-label="番組を検索" title="番組を検索">${icon('search', true)}</button>
@@ -95,13 +100,17 @@ export function createAppShell(root) {
         </div>
         <nav class="sidebar-nav">${primaryItems.map(navItem).join('')}</nav>
         <div class="sidebar-separator"></div>
-        <nav class="sidebar-nav">${adminItems.map(navItem).join('')}</nav>
+        <nav class="sidebar-nav">${adminItems.map(navItem).join('')}<a class="nav-item mobile-only" href="#cleaner" data-route="cleaner">${icon('storage')}<span class="nav-label">台帳整理</span></a></nav>
+        <button class="button mobile-drawer-close mobile-only" type="button">メニューを閉じる</button>
         <div class="sidebar-bottom"><div class="sidebar-separator"></div>${navItem(['settings','settings','設定'])}</div>
       </aside></div>
       <main class="main-content">
+        <div class="mobile-page-toolbar"></div>
         <div id="page-outlet"></div>
       </main>
     </div>
+    <button class="mobile-drawer-backdrop" type="button" aria-label="メニューを閉じる" hidden></button>
+    <nav class="mobile-bottom-nav" aria-label="主要ページ">${[['home','home','ホーム'],['guide','guide','番組表'],['reserves','calendar','予約'],['rules','rule','ルール'],['recorded','film','録画結果']].map(([route, name, label]) => `<a href="#${route}" data-route="${route}">${icon(name)}<span>${label}</span></a>`).join('')}</nav>
     <div class="wui-connection-overlay" id="wui-connection-overlay" role="alertdialog" aria-modal="true" aria-labelledby="wui-connection-title" hidden>
       <div class="wui-connection-message">
         <h2 id="wui-connection-title">WUIに接続できません</h2>
@@ -128,7 +137,7 @@ export function createAppShell(root) {
   const headerSearchButton = headerSearch.querySelector('button');
   const narrowSearch = window.matchMedia('(max-width: 1250px)');
   headerSearchButton.addEventListener('click', event => {
-    if (!narrowSearch.matches || headerSearch.classList.contains('is-expanded')) return;
+    if ((!mobile.matches && !narrowSearch.matches) || headerSearch.classList.contains('is-expanded')) return;
     event.preventDefault();
     headerSearch.classList.add('is-expanded');
     headerSearchInput.focus();
@@ -148,6 +157,156 @@ export function createAppShell(root) {
   const themeToggle = root.querySelector('#theme-toggle');
   const notificationButton = root.querySelector('#notification-button');
   const notificationPanel = root.querySelector('#notification-panel');
+  const header = root.querySelector('.app-header');
+  const headerActions = root.querySelector('#header-page-actions');
+  const mobileHeaderActions = root.querySelector('.mobile-header-actions');
+  const commonActions = root.querySelector('.header-common-actions');
+  const mobileToolbar = root.querySelector('.mobile-page-toolbar');
+  const menuToggle = root.querySelector('.mobile-menu-toggle');
+  const drawerBackdrop = root.querySelector('.mobile-drawer-backdrop');
+  const main = root.querySelector('.main-content');
+  const bottomNav = root.querySelector('.mobile-bottom-nav');
+  let drawerOpen = false;
+  let activeRoute = null;
+  let mobilePanelOpen = false;
+
+  function closeMobilePageToolbar(restoreFocus = false) {
+    if (!mobilePanelOpen) return;
+    mobilePanelOpen = false;
+    mobileToolbar.classList.remove('is-open');
+    const expanded = mobileHeaderActions.querySelector('[aria-expanded="true"]');
+    expanded?.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) expanded?.focus();
+  }
+
+  function openMobilePageToolbar(button, focusSelector = null) {
+    if (mobilePanelOpen && button.getAttribute('aria-expanded') === 'true') {
+      closeMobilePageToolbar(true);
+      return;
+    }
+    closeNotifications();
+    mobileHeaderActions.querySelectorAll('[aria-expanded]').forEach(item => item.setAttribute('aria-expanded', 'false'));
+    mobilePanelOpen = true;
+    mobileToolbar.classList.add('is-open');
+    button.setAttribute('aria-expanded', 'true');
+    if (focusSelector) window.requestAnimationFrame(() => headerActions.querySelector(focusSelector)?.focus());
+  }
+
+  function mobileActionButton(name, label) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `icon-button mobile-page-action is-${name}`;
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    button.innerHTML = icon(name === 'calendar' ? 'calendar' : name === 'search' ? 'search' : 'options');
+    return button;
+  }
+
+  function syncMobilePageActions() {
+    closeMobilePageToolbar();
+    mobileHeaderActions.replaceChildren();
+    const pageSearch = headerActions.querySelector('input[type="search"]');
+    const guideDate = headerActions.querySelector('.guide-date-controls input[type="date"]');
+    const isHomeSettings = headerActions.querySelector('.home-header-settings') !== null;
+    if (pageSearch) {
+      const searchButton = mobileActionButton('search', 'このページを検索');
+      searchButton.setAttribute('aria-controls', 'header-page-actions');
+      searchButton.setAttribute('aria-expanded', 'false');
+      const syncActive = () => searchButton.classList.toggle('is-active', pageSearch.value.trim() !== '');
+      pageSearch.addEventListener('input', syncActive);
+      syncActive();
+      window.requestAnimationFrame(syncActive);
+      searchButton.addEventListener('click', () => openMobilePageToolbar(searchButton, 'input[type="search"]'));
+      mobileHeaderActions.append(searchButton);
+    }
+    if (guideDate) {
+      const dateButton = mobileActionButton('calendar', '番組表の日付を選択');
+      const dateLabel = document.createElement('span');
+      dateLabel.className = 'mobile-action-date';
+      const syncDate = () => {
+        const [, month = '', day = ''] = guideDate.value.split('-');
+        dateLabel.textContent = month && day ? `${Number(month)}/${Number(day)}` : '';
+        dateButton.setAttribute('aria-label', `番組表の日付を選択、現在 ${dateLabel.textContent || '未選択'}`);
+      };
+      guideDate.addEventListener('input', syncDate);
+      guideDate.addEventListener('change', syncDate);
+      syncDate();
+      dateButton.append(dateLabel);
+      dateButton.addEventListener('click', () => {
+        closeNotifications();
+        closeMobilePageToolbar();
+        try { guideDate.showPicker(); } catch (_) { guideDate.click(); }
+      });
+      mobileHeaderActions.append(dateButton);
+    }
+    if (headerActions.children.length && !isHomeSettings) {
+      const optionsButton = mobileActionButton('options', 'ページの表示と操作');
+      optionsButton.setAttribute('aria-controls', 'header-page-actions');
+      optionsButton.setAttribute('aria-expanded', 'false');
+      optionsButton.addEventListener('click', () => openMobilePageToolbar(optionsButton));
+      mobileHeaderActions.append(optionsButton);
+    }
+  }
+  function closeDrawer(restoreFocus = false) {
+    drawerOpen = false;
+    shell.classList.remove('is-mobile-menu-open');
+    drawerBackdrop.hidden = true;
+    menuToggle.setAttribute('aria-expanded', 'false');
+    sidebar.inert = mobile.matches;
+    main.inert = false;
+    bottomNav.inert = false;
+    if (restoreFocus) menuToggle.focus();
+  }
+  function syncMobileLayout() {
+    closeDrawer();
+    if (mobile.matches) {
+      mobileToolbar.append(headerActions);
+      header.insertBefore(headerSearch, commonActions);
+      sidebar.querySelector('.sidebar-bottom').append(themeToggle);
+    } else {
+      header.insertBefore(headerActions, commonActions);
+      header.insertBefore(headerSearch, commonActions);
+      commonActions.prepend(themeToggle);
+    }
+  }
+  menuToggle.addEventListener('click', () => {
+    if (drawerOpen) { closeDrawer(true); return; }
+    closeNotifications();
+    drawerOpen = true;
+    shell.classList.add('is-mobile-menu-open');
+    sidebar.inert = false;
+    main.inert = true;
+    bottomNav.inert = true;
+    drawerBackdrop.hidden = false;
+    menuToggle.setAttribute('aria-expanded', 'true');
+    sidebar.querySelector('a').focus();
+  });
+  drawerBackdrop.addEventListener('click', () => closeDrawer(true));
+  root.querySelector('.mobile-drawer-close').addEventListener('click', () => closeDrawer(true));
+  sidebar.addEventListener('click', event => {
+    if (mobile.matches && event.target.closest('a')) closeDrawer(true);
+  });
+  document.addEventListener('keydown', event => {
+    if (!drawerOpen) return;
+    if (event.key === 'Escape') { event.preventDefault(); closeDrawer(true); }
+    if (event.key === 'Tab') {
+      const focusable = [menuToggle, ...sidebar.querySelectorAll('a,button')].filter(element => element.getClientRects().length);
+      const index = focusable.indexOf(document.activeElement);
+      event.preventDefault();
+      focusable[(index + (event.shiftKey ? -1 : 1) + focusable.length) % focusable.length].focus();
+    }
+  });
+  mobile.addEventListener('change', syncMobileLayout);
+  syncMobileLayout();
+  root.addEventListener('click', event => {
+    if (!mobile.matches) return;
+    const warning = event.target.closest('.storage-warning');
+    if (!warning) return;
+    event.preventDefault();
+    event.stopPropagation();
+    warning.tabIndex = 0;
+    warning.focus();
+  }, true);
   const notificationCount = notificationButton.querySelector('.notification-count');
   const connectionOverlay = root.querySelector('#wui-connection-overlay');
   const connectionTitle = connectionOverlay.querySelector('#wui-connection-title');
@@ -164,7 +323,45 @@ export function createAppShell(root) {
   const toastQueue = createToastQueue({
     show({ message, level }) {
       const markerLevel = level === 'warning' ? 'warning' : (level === 'error' || level === 'low' ? 'error' : 'activity');
-      toast.textContent = message;
+      toast.replaceChildren();
+      toast.classList.remove('has-thumbnail', 'is-clickable');
+      if (message && typeof message === 'object') {
+        const content = document.createElement(message.href ? 'a' : 'div');
+        content.className = 'toast-content';
+        if (message.href) {
+          content.href = message.href;
+          toast.classList.add('is-clickable');
+        }
+        if (message.thumbnailUrl) {
+          const image = document.createElement('img');
+          image.className = 'toast-thumbnail';
+          image.src = message.thumbnailUrl;
+          image.alt = '';
+          image.addEventListener('error', () => {
+            if (!image.isConnected || !toast.contains(image)) return;
+            image.remove();
+            toast.classList.remove('has-thumbnail');
+          }, { once: true });
+          content.append(image);
+          toast.classList.add('has-thumbnail');
+        }
+        const copy = document.createElement('span');
+        copy.className = 'toast-copy';
+        const heading = document.createElement('strong');
+        heading.textContent = '録画が完了しました';
+        const title = document.createElement('span');
+        title.textContent = message.title || message.text || '';
+        copy.append(heading, title);
+        if (message.subtitle) {
+          const subtitle = document.createElement('small');
+          subtitle.textContent = message.subtitle;
+          copy.append(subtitle);
+        }
+        content.append(copy);
+        toast.append(content);
+      } else {
+        toast.textContent = String(message || '');
+      }
       toast.classList.toggle('is-warning', markerLevel === 'warning');
       toast.classList.toggle('is-error', markerLevel === 'error');
       toast.classList.add('is-visible');
@@ -337,14 +534,34 @@ export function createAppShell(root) {
     const link = document.createElement('a');
     link.className = activity ? `notification-item is-activity ${item.kind || ''}` : `notification-item is-${item.level || 'warning'}`;
     link.href = item.href || '#home';
+    if (activity && item.thumbnailUrl) {
+      const image = document.createElement('img');
+      image.className = 'notification-item-thumbnail';
+      image.src = item.thumbnailUrl;
+      image.alt = '';
+      image.addEventListener('error', () => {
+        image.remove();
+        link.classList.remove('has-thumbnail');
+      }, { once: true });
+      link.classList.add('has-thumbnail');
+      link.append(image);
+    }
+    const body = document.createElement('span');
+    body.className = 'notification-item-body';
     const title = document.createElement('strong');
     title.textContent = activity ? item.title : `${item.name}：${item.message}`;
-    link.append(title);
+    body.append(title);
+    if (activity && item.subtitle) {
+      const subtitle = document.createElement('span');
+      subtitle.textContent = item.subtitle;
+      body.append(subtitle);
+    }
     if (!activity && item.detail) {
       const detail = document.createElement('span');
       detail.textContent = item.detail;
-      link.append(detail);
+      body.append(detail);
     }
+    link.append(body);
     if (activity && Number.isFinite(item.at)) {
       const time = document.createElement('time');
       time.dateTime = new Date(item.at).toISOString();
@@ -429,6 +646,7 @@ export function createAppShell(root) {
     themeToggle.setAttribute('aria-label', dark ? 'ライトテーマへ切替' : 'ダークテーマへ切替');
   });
   notificationButton.addEventListener('click', () => {
+    if (drawerOpen) closeDrawer();
     const open = notificationPanel.hidden;
     if (open) toastQueue.pause();
     notificationPanel.hidden = !open;
@@ -439,11 +657,17 @@ export function createAppShell(root) {
   connectionOverlay.querySelector('.wui-connection-retry').addEventListener('click', () => connectionRetryHandler?.());
   connectionOverlay.querySelector('.wui-connection-reload').addEventListener('click', () => window.location.reload());
   document.addEventListener('click', event => {
+    if (mobilePanelOpen && !mobileToolbar.contains(event.target) && !mobileHeaderActions.contains(event.target)) {
+      closeMobilePageToolbar();
+    }
     if (notificationPanel.hidden || notificationPanel.contains(event.target) || notificationButton.contains(event.target)) return;
     closeNotifications();
   });
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape') closeNotifications();
+    if (event.key === 'Escape') {
+      closeMobilePageToolbar(true);
+      closeNotifications();
+    }
   });
   updateSidebarToggle(initialSidebar === 'open');
   window.requestAnimationFrame(resumeTransientSidebarPreview);
@@ -455,6 +679,7 @@ export function createAppShell(root) {
     setPageActions(element = null) {
       const host = root.querySelector('#header-page-actions');
       host.replaceChildren(...(element ? [element] : []));
+      syncMobilePageActions();
     },
     setConnectionRetryHandler(handler) {
       connectionRetryHandler = typeof handler === 'function' ? handler : null;
@@ -514,6 +739,11 @@ export function createAppShell(root) {
       dot.classList.toggle('nav-status-dot-alert', hasConflicts);
     },
     setActiveRoute(route) {
+      closeDrawer();
+      closeMobilePageToolbar();
+      closeNotifications();
+      if (mobile.matches && activeRoute !== route) window.scrollTo({ top: 0, behavior: 'instant' });
+      activeRoute = route;
       headerSearch.hidden = route !== 'home' && route !== 'guide';
       headerSearch.classList.remove('is-expanded');
       root.querySelectorAll('[data-route]').forEach(item => {

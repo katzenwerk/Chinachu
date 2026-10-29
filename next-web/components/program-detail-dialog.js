@@ -4,6 +4,7 @@ import { deleteRecordedProgram, loadProgramDetail, ProgramDetailError } from '..
 import { buildProgramDetailModel } from '../services/program-detail-model.js';
 import { reserveProgram, setReserveSkip, unreserveProgram } from '../services/timetable-client.js';
 import { openRecordedPlaybackOverlay, openRecordingLiveOverlay } from '../services/live-player-adapter.js';
+import { copyProgramTitle, programSearchUrl } from '../services/program-actions.js';
 import { invalidateResources } from '../services/api-client.js';
 import { subscribeMatchNotifications, subscribeRecordedNotifications, subscribeRecordingNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
 
@@ -20,7 +21,9 @@ function addFact(list, label, value, className = '') {
 }
 
 function actionLabel(action) {
-  return { reserve: '予約', unreserve: '予約取消', skip: 'スキップ', unskip: 'スキップ解除' }[action] || '';
+  return {
+    reserve: '録画予約', 'reserve-now': '今から録画', unreserve: '予約取消', skip: 'スキップ', unskip: 'スキップ解除'
+  }[action] || '';
 }
 
 function errorText(error) {
@@ -265,7 +268,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     setMutationControlsDisabled(true);
     showFeedback('');
     try {
-      if (action === 'reserve') await reserveProgram(model.programId);
+      if (action === 'reserve' || action === 'reserve-now') await reserveProgram(model.programId);
       if (action === 'unreserve') await unreserveProgram(model.programId);
       if (action === 'skip') await setReserveSkip(model.programId, true);
       if (action === 'unskip') await setReserveSkip(model.programId, false);
@@ -311,6 +314,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     const search = footer.querySelector('.program-modal-search');
     const danger = footer.querySelector('.program-modal-danger');
     const feedback = footer.querySelector('[role="status"]');
+    const normalProgram = model.phase.key === 'program';
     if (model.actions.reservation) {
       const button = document.createElement('button');
       button.className = 'button primary';
@@ -346,14 +350,22 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     const rule = document.createElement('button');
     rule.className = 'button';
     rule.type = 'button';
-    rule.textContent = 'ルール';
+    rule.textContent = normalProgram && model.actions.rule.mode === 'create' ? 'ルール作成' : 'ルール';
     rule.title = model.actions.rule.label || '';
     rule.disabled = model.actions.rule.mode === 'unavailable';
     rule.addEventListener('click', () => openRuleEditor(model));
     primary.append(rule);
+    if (normalProgram) {
+      const copy = document.createElement('button');
+      copy.className = 'button';
+      copy.type = 'button';
+      copy.textContent = 'タイトルをコピー';
+      copy.addEventListener('click', () => copyProgramTitle(model.title).catch(cause => showFeedback(errorText(cause), true)));
+      search.append(copy);
+    }
     search.append(
-      searchLink('Google検索', `https://www.google.com/search?q=${encodeURIComponent(model.title)}`),
-      searchLink('Wikipedia', `https://ja.wikipedia.org/w/index.php?search=${encodeURIComponent(model.title)}`)
+      searchLink('Google検索', normalProgram ? programSearchUrl('google', model.title) : `https://www.google.com/search?q=${encodeURIComponent(model.title)}`),
+      searchLink(normalProgram ? 'Wikipedia検索' : 'Wikipedia', normalProgram ? programSearchUrl('wikipedia', model.title) : `https://ja.wikipedia.org/w/index.php?search=${encodeURIComponent(model.title)}`)
     );
     if (model.actions.deleteRecording) {
       const remove = document.createElement('button');

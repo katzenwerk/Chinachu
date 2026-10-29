@@ -120,6 +120,7 @@ export function createWuiConnectionMonitor(options = {}) {
   }
 
   function markSocketDisconnected() {
+    if (documentRef?.hidden) return;
     const firstOffline = state.status !== 'offline';
     const disconnectedAt = state.disconnectedAt || now();
     update({
@@ -144,7 +145,7 @@ export function createWuiConnectionMonitor(options = {}) {
     if (socketState.status === 'disconnected') {
       socketStatus = 'disconnected';
       invalidateProbe();
-      if (suspended) return;
+      if (suspended || documentRef?.hidden) return;
       if (resumeGraceActive) {
         update({ status: 'checking', failures: 0, disconnectedAt: null, prolonged: false, transition: null });
         scheduleResumeConfirmation();
@@ -170,6 +171,11 @@ export function createWuiConnectionMonitor(options = {}) {
     if (!documentRef?.hidden) {
       cancel(timer);
       timer = null;
+      if (socketStatus === 'disconnected') {
+        update({ status: 'checking', failures: 0, disconnectedAt: null, prolonged: false, transition: null });
+        resumeGraceActive = true;
+        scheduleResumeConfirmation();
+      }
       probe();
     }
   }

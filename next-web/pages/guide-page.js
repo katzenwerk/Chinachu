@@ -1,11 +1,13 @@
 import { createChannelLogo } from '../components/channel-logo.js';
+import { headerCompactMedia as createHeaderCompactMedia } from '../components/mobile-layout.js';
 import { invalidateResources, loadResource } from '../services/api-client.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor-dialog.js';
 import { closeActiveLiveOverlay, openRecordingLiveOverlay } from '../services/live-player-adapter.js';
+import { copyProgramTitle, programActionTitle, programSearchUrl } from '../services/program-actions.js';
 import { channelDetailText } from '../services/recording-model.js';
 import { programDetailUrl } from '../services/program-detail-client.js';
-import { ruleAction } from '../services/program-detail-model.js';
+import { programRecordingAction, ruleAction } from '../services/program-detail-model.js';
 import {
   loadTimetableData, loadWuiConfig, refreshTimetableData, reserveProgram, saveTimetableConfig,
   setReserveSkip, unreserveProgram
@@ -46,20 +48,6 @@ function programFlagsHtml(flags) {
     seen.add(flag.label);
     return true;
   }).map(flag => `<span class="guide-program-flag is-${flag.tone}">${escapeHtml(flag.label)}</span>`).join('');
-}
-
-async function copyText(value) {
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
-  const input = document.createElement('textarea');
-  input.value = value;
-  input.setAttribute('readonly', '');
-  input.style.position = 'fixed';
-  input.style.opacity = '0';
-  document.body.append(input);
-  input.select();
-  const copied = document.execCommand('copy');
-  input.remove();
-  if (!copied) throw new Error('copy failed');
 }
 
 function logoUrl(channel) {
@@ -111,7 +99,27 @@ function ruleProgram(program, reserves) {
   };
 }
 
-export function createGuideProgramMenu({ program, state, x, y, onAction, resolveRule, onRule, host = document.body }) {
+function guideLiveModel(program) {
+  const channelId = text(program?.channel?.id);
+  if (channelId === '' || programRecordingAction(program) !== 'reserve-now') return null;
+  return {
+    title: programActionTitle(program),
+    liveChannel: { id: channelId, name: text(program.channel?.name, '放送局未取得') },
+    liveProgram: {
+      id: text(program.id) || null,
+      title: text(program.title) || null,
+      fullTitle: text(program.fullTitle) || null,
+      detail: text(program.detail) || null,
+      start: Number(program.start),
+      end: Number(program.end) || Number(program.start) + Number(program.seconds || 0) * 1000
+    }
+  };
+}
+
+export function createGuideProgramMenu({
+  program, state, x, y, onAction, onLive = null, resolveRule, onRule,
+  unifiedNormalActions = false, host = document.body
+}) {
   document.querySelector('.guide-context-menu')?.remove();
   const menu = document.createElement('div');
   menu.className = 'guide-context-menu';
@@ -119,17 +127,23 @@ export function createGuideProgramMenu({ program, state, x, y, onAction, resolve
   const items = [];
   let ruleChoice = null;
   let ruleButton = null;
-  if (state.key === 'none') items.push(['録画予約', () => onAction('reserve')]);
+  const unifiedNormal = unifiedNormalActions && state.key === 'none';
+  const recordingAction = unifiedNormal ? programRecordingAction(program) : 'reserve';
+  if (state.key === 'none' && recordingAction !== null) {
+    items.push([recordingAction === 'reserve-now' ? '今から録画' : '録画予約', () => onAction('reserve')]);
+  }
+  if (state.key === 'none' && typeof onLive === 'function') items.push(['LIVE視聴', onLive]);
   if (state.key === 'manual') items.push(['予約取消', () => onAction('unreserve')]);
   if (['rule', 'conflict'].includes(state.key)) items.push(['この予約をスキップ', () => onAction('skip')]);
   if (state.key === 'skip') items.push(['スキップを取消', () => onAction('unskip')]);
   if (state.key !== 'recording') items.push(['ルール', () => onRule(ruleChoice), 'rule']);
   items.push(['番組詳細を開く', () => { location.hash = programDetailUrl({ id: program.id }); }]);
   items.push(null);
-  items.push(['タイトルをコピー', () => copyText(program.title || '')]);
+  const actionTitle = unifiedNormal ? programActionTitle(program) : program.title || '';
+  items.push(['タイトルをコピー', () => copyProgramTitle(actionTitle)]);
   items.push(null);
-  items.push(['Googleで検索', () => window.open(`https://www.google.com/search?q=${encodeURIComponent(program.title || '')}`, '_blank', 'noopener')]);
-  items.push(['Wikipediaで検索', () => window.open(`https://ja.wikipedia.org/wiki/${encodeURIComponent(program.title || '')}`, '_blank', 'noopener')]);
+  items.push([unifiedNormal ? 'Google検索' : 'Googleで検索', () => window.open(unifiedNormal ? programSearchUrl('google', actionTitle) : `https://www.google.com/search?q=${encodeURIComponent(actionTitle)}`, '_blank', 'noopener')]);
+  items.push([unifiedNormal ? 'Wikipedia検索' : 'Wikipediaで検索', () => window.open(unifiedNormal ? programSearchUrl('wikipedia', actionTitle) : `https://ja.wikipedia.org/wiki/${encodeURIComponent(actionTitle)}`, '_blank', 'noopener')]);
   items.forEach(item => {
     if (item === null) {
       const separator = document.createElement('hr');
@@ -388,8 +402,11 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
         cell.addEventListener('contextmenu', event => {
           event.preventDefault();
           event.stopPropagation();
+          const liveModel = state.key === 'none' ? guideLiveModel(displayProgram) : null;
           createGuideProgramMenu({ program: displayProgram, state, x: event.clientX, y: event.clientY,
             onAction: action => runAction(program, action),
+            onLive: liveModel === null ? null : () => openRecordingLiveOverlay(liveModel),
+            unifiedNormalActions: true,
             resolveRule: async () => {
               invalidateResources(['rules']);
               const rules = await loadResource('rules');
@@ -459,7 +476,7 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     </details>`;
     setHeaderActions(toolbar);
     const controls = toolbar.querySelector('.guide-header-controls');
-    headerCompactMedia = window.matchMedia('(max-width: 1100px)');
+    headerCompactMedia = createHeaderCompactMedia(1100);
     headerCompactListener = event => { controls.open = !event.matches; };
     controls.open = !headerCompactMedia.matches;
     headerCompactMedia.addEventListener('change', headerCompactListener);
@@ -525,8 +542,9 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
       displayRange = guideDisplayRange(dayStart);
       toolbar.querySelector('[data-date]').min = dateInputValue(latestCurrentDayStart);
       toolbar.querySelector('[data-date]').value = dateInputValue(dayStart);
+      toolbar.querySelector('[data-date]').dispatchEvent(new Event('input', { bubbles: true }));
       toolbar.querySelector('[data-prev]').disabled = dayStart <= latestCurrentDayStart;
-      renderGrid();
+      renderGrid(true);
     };
     toolbar.querySelector('[data-prev]').addEventListener('click', () => selectDay(dayStart - DAY_MS));
     toolbar.querySelector('[data-next]').addEventListener('click', () => selectDay(dayStart + DAY_MS));

@@ -109,7 +109,8 @@ const unsubscribeNotifications = subscribeNotificationCenter(state => {
   if (state.toast?.id && state.toast.id !== lastToastId) {
     lastToastId = state.toast.id;
     const recordingEvent = state.toast.kind === 'recording-start' || state.toast.kind === 'recording-complete';
-    shell.showToast(state.toast.text, recordingEvent ? 4000 : 10000, state.toast.level);
+    shell.showToast(recordingEvent && state.toast.kind === 'recording-complete' ? state.toast : state.toast.text,
+      recordingEvent ? 4000 : 10000, state.toast.level);
   }
 });
 const routeTitles = {

@@ -1,4 +1,5 @@
 import { createChannelLogo } from '../components/channel-logo.js';
+import { headerCompactMedia as createHeaderCompactMedia, appendMobileContextButton } from '../components/mobile-layout.js';
 import { openRuleEditorDialog } from '../components/rule-editor-dialog.js';
 import { createRulesContextMenu } from '../components/rules-context-menu.js';
 import {
@@ -74,7 +75,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
     <label class="rules-search"><input type="search" placeholder="タイトル・ジャンル・放送局など" aria-label="ルールを検索" autocomplete="off"></label>
   </div>`;
   setHeaderActions(headerControls);
-  const headerCompactMedia = window.matchMedia('(max-width: 1100px)');
+  const headerCompactMedia = createHeaderCompactMedia(1100);
   const headerCompactListener = event => { headerControls.open = !event.matches; };
   headerControls.open = !headerCompactMedia.matches;
   headerCompactMedia.addEventListener('change', headerCompactListener);
@@ -173,6 +174,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
         <a class="rule-count rule-recorded"></a><span class="rule-state"></span>
         <span class="rule-main"><strong></strong><small></small></span>
         <span class="rule-channels"></span>`;
+      appendMobileContextButton(item);
       const checkbox = item.querySelector('.rule-select');
       checkbox.dataset.ruleUid = row.uid;
       checkbox.setAttribute('aria-label', `ルール ${row.index + 1} を選択`);

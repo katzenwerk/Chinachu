@@ -147,6 +147,15 @@ export function ruleAction(program, rules, preferredRuleUid = null) {
   return { mode: 'unavailable', ruleUid: uid, index: null, label: indexes.length > 1 ? '関連ルールが複数あります' : '関連ルールは現在の一覧にありません' };
 }
 
+export function programRecordingAction(program, now = Date.now()) {
+  const start = finitePositive(program?.start);
+  if (start === null) return null;
+  if (now < start) return 'reserve';
+  const seconds = finitePositive(program?.seconds);
+  const end = finitePositive(program?.end) || (seconds === null ? null : start + seconds * 1000);
+  return end !== null && now < end ? 'reserve-now' : null;
+}
+
 function channelLogoUrl(channel) {
   const id = validText(channel?.id);
   return id !== null && channel?.hasLogoData === true ? `/api/channel/${encodeURIComponent(id)}/logo.png` : null;
@@ -227,14 +236,13 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
   ];
   const warnings = [];
   if (detail.historyAmbiguous) warnings.push('同じ番組IDの履歴が複数あるため、履歴情報は表示していません。');
-  const future = start !== null && start > now;
   const liveAvailable = channelId !== null && start !== null && end !== null && start <= now && now < end;
   const manualReservation = reservationProgram.isManualReserved === true;
   const reservationAction = state.key === 'reserved'
     ? (manualReservation ? 'unreserve' : 'skip')
     : state.key === 'skipped'
       ? 'unskip'
-      : state.key === 'program' && future ? 'reserve' : null;
+      : state.key === 'program' ? programRecordingAction({ start, end, seconds }, now) : null;
 
   return {
     title: validText(program.fullTitle) || validText(program.title) || validText(match.fullTitle) || 'タイトル未取得',

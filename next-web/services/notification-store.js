@@ -3,18 +3,24 @@ import { subscribeRecordedNotifications } from './realtime-client.js';
 import { subscribeRecordingData } from './recording-store.js';
 import { buildStorageWarnings } from './storage-model.js';
 import { subscribeStorageData } from './storage-store.js';
+import { loadRecordedThumbnailStatus, recordedThumbnailImageUrl } from './recorded-thumbnail-client.js';
+import { programDetailUrl } from './program-detail-client.js';
 
 const listeners = new Set();
 const pendingCompletions = new Map();
 let state = { issues: [], activities: [], pulseToken: 0, toast: null };
 let knownIssuePriorities = null;
 let previousRecordings = null;
-let recordedIds = null;
+let recordedPrograms = null;
 let activitySequence = 0;
 let unsubscribeStorage = null;
 let unsubscribeRecording = null;
 let unsubscribeRecorded = null;
 let recordedRefresh = null;
+const completionWaits = new Map();
+const THUMBNAIL_STATUS_INTERVAL_MS = 1000;
+const THUMBNAIL_STATUS_MAX_CHECKS = 95;
+const THUMBNAIL_TERMINAL_FAILURES = new Set(['failed', 'source-missing']);
 
 function emit() {
   listeners.forEach(listener => listener(state));
@@ -59,9 +65,13 @@ function programTitle(program) {
   return String(program?.fullTitle || program?.title || 'タイトル未取得');
 }
 
-function pushActivity(kind, title, href, toastText) {
-  const activity = { id: `${Date.now()}-${++activitySequence}`, kind, title, href, at: Date.now() };
-  state = { ...state, activities: [activity, ...state.activities].slice(0, 5), toast: { id: activity.id, kind, text: toastText, level: 'activity' } };
+function pushActivity(kind, title, href, toastText, details = {}) {
+  const activity = { id: `${Date.now()}-${++activitySequence}`, kind, title, href, at: Date.now(), ...details };
+  state = {
+    ...state,
+    activities: [activity, ...state.activities].slice(0, 5),
+    toast: { id: activity.id, kind, text: toastText, level: 'activity', href, title, ...details }
+  };
   emit();
 }
 
@@ -69,15 +79,72 @@ export function pushSystemActivity(kind, title, href = '#home', toastText = titl
   pushActivity(kind, title, href, toastText);
 }
 
-function completeRecording(id, title) {
+function wait(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+    };
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function waitForRecordedThumbnail(id, signal) {
+  for (let check = 0; check < THUMBNAIL_STATUS_MAX_CHECKS; check += 1) {
+    let thumbnail;
+    try {
+      thumbnail = await loadRecordedThumbnailStatus(id, { signal });
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      return null;
+    }
+    if (thumbnail?.status === 'complete' && thumbnail.available === true) {
+      return recordedThumbnailImageUrl(id, thumbnail.updatedAt);
+    }
+    if (THUMBNAIL_TERMINAL_FAILURES.has(thumbnail?.status)) return null;
+    await wait(THUMBNAIL_STATUS_INTERVAL_MS, signal);
+  }
+  return null;
+}
+
+function completeRecording(id, program, thumbnailUrl) {
+  const title = programTitle(program);
+  const channel = typeof program?.channel?.name === 'string' && program.channel.name.trim() !== ''
+    ? program.channel.name.trim()
+    : '放送局未取得';
+  const href = programDetailUrl({ id }) || '#recorded';
+  pushActivity('recording-complete', title, href, `録画が正常に終了しました：${title}`, {
+    subtitle: channel,
+    thumbnailUrl
+  });
+}
+
+function beginRecordingCompletion(id, program) {
+  if (completionWaits.has(id)) return;
   pendingCompletions.delete(id);
-  pushActivity('recording-complete', title, '#recorded', `録画が正常に終了しました：${title}`);
+  const controller = new AbortController();
+  const pending = waitForRecordedThumbnail(id, controller.signal)
+    .then(thumbnailUrl => {
+      if (!controller.signal.aborted) completeRecording(id, program, thumbnailUrl);
+    })
+    .catch(error => {
+      if (error?.name !== 'AbortError' && !controller.signal.aborted) completeRecording(id, program, null);
+    })
+    .finally(() => {
+      if (completionWaits.get(id)?.pending === pending) completionWaits.delete(id);
+    });
+  completionWaits.set(id, { controller, pending });
 }
 
 function reconcileCompletions() {
-  if (recordedIds === null) return;
-  pendingCompletions.forEach((title, id) => {
-    if (recordedIds.has(id)) completeRecording(id, title);
+  if (recordedPrograms === null) return;
+  pendingCompletions.forEach((program, id) => {
+    if (recordedPrograms.has(id)) beginRecordingCompletion(id, recordedPrograms.get(id) || program);
   });
 }
 
@@ -100,11 +167,10 @@ function handleRecordingState(recordingState) {
   });
   previousRecordings.forEach((program, id) => {
     if (current.has(id)) return;
-    const title = programTitle(program);
-    if (recordedIds?.has(id)) completeRecording(id, title);
-    else pendingCompletions.set(id, title);
+    pendingCompletions.set(id, program);
   });
   previousRecordings = current;
+  if (pendingCompletions.size > 0) refreshRecorded();
 }
 
 function refreshRecorded() {
@@ -112,7 +178,7 @@ function refreshRecorded() {
   invalidateResources(['recorded']);
   recordedRefresh = loadResource('recorded').then(programs => {
     if (!Array.isArray(programs)) throw new Error('Recorded API response is invalid');
-    recordedIds = new Set(programs.map(programId).filter(Boolean));
+    recordedPrograms = new Map(programs.map(program => [programId(program), program]).filter(([id]) => id !== null));
     reconcileCompletions();
   }).catch(() => {}).finally(() => {
     recordedRefresh = null;
@@ -136,6 +202,8 @@ function stopIfUnused() {
   unsubscribeStorage = null;
   unsubscribeRecording = null;
   unsubscribeRecorded = null;
+  completionWaits.forEach(({ controller }) => controller.abort());
+  completionWaits.clear();
 }
 
 export function subscribeNotificationCenter(listener) {

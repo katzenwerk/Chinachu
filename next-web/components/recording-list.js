@@ -1,4 +1,5 @@
 import { createRecordingCard } from './recording-card.js';
+import { appendMobileContextButton } from './mobile-layout.js';
 import { closeActiveLiveOverlay, openRecordingLiveOverlay } from '../services/live-player-adapter.js';
 import { buildRecordingViewModels } from '../services/recording-model.js';
 import { retryRecordingData, subscribeRecordingData } from '../services/recording-store.js';
@@ -49,6 +50,7 @@ export function mountRecordingList(container, {
       let card = cards.get(model.key);
       if (!card) {
         card = createRecordingCard(model, { onWatch: openRecordingLiveOverlay, variant: cardVariant });
+        if (typeof onContextMenu === 'function') appendMobileContextButton(card.element, card.element.querySelector('.recording-home-actions') || card.element);
         cards.set(model.key, card);
       } else {
         card.update(model);

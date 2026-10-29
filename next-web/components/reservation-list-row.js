@@ -1,5 +1,6 @@
 import { applyStorageWarning } from './storage-warning.js';
 import { createChannelLogo } from './channel-logo.js';
+import { appendMobileContextButton } from './mobile-layout.js';
 
 let previewTimer = null;
 let previewSource = null;
@@ -93,7 +94,8 @@ export function updateReservationListRow(row, model) {
   state.model = model;
   row.dataset.reservationKey = model.key;
   row.classList.toggle('is-skip', model.isSkip === true);
-  if (row instanceof HTMLAnchorElement && row.getAttribute('href') !== model.detailUrl) row.href = model.detailUrl;
+  const link = row.querySelector('.reservation-list-link');
+  if (link && link.getAttribute('href') !== model.detailUrl) link.href = model.detailUrl;
 
   setText(row.querySelector('.reservation-list-date span'), model.dateText);
   setText(row.querySelector('time'), model.timeText);
@@ -138,7 +140,7 @@ export function updateReservationListRow(row, model) {
 }
 
 export function createReservationListRow(model) {
-  const row = document.createElement(model.detailUrl === null ? 'div' : 'a');
+  const row = document.createElement('div');
   row.className = 'reservation-list-row';
   row.innerHTML = `
     <div class="reservation-list-date"><span></span></div>
@@ -149,6 +151,16 @@ export function createReservationListRow(model) {
 
   const channelLogo = createChannelLogo({}, { variant: 'list' });
   row.querySelector('.reservation-list-logo-slot').replaceWith(channelLogo.element);
+  if (model.detailUrl !== null) {
+    const link = document.createElement('a');
+    link.className = 'reservation-list-link';
+    link.append(...row.childNodes);
+    row.append(link);
+    row.addEventListener('click', event => {
+      if (event.target === row) link.click();
+    });
+  }
+  appendMobileContextButton(row);
   const state = { model, signature: null, channelLogo, tagsSignature: null };
   rowStates.set(row, state);
   bindProgramPreview(row.querySelector('h2'), state);

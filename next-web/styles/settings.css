@@ -46,6 +46,12 @@ textarea.settings-input { min-height: 86px; resize: vertical; font-family: ui-mo
 .settings-drop .settings-field-title,.settings-drop .settings-field-help { grid-column: 1; }
 .settings-drop .settings-field-control { grid-column: 2; grid-row: 1/3; align-self: center; }
 .settings-drop .settings-muted { grid-column: 1/-1; }
+.settings-recording .settings-field { padding: 11px 0; }
+.settings-recording .settings-field-help { min-height: 0; }
+.settings-recording .settings-field.is-wide .settings-field-control { max-width: 100%; }
+:is(.settings-recording,.settings-wui-column) .settings-field-title { flex-wrap: wrap; }
+:is(.settings-recording,.settings-wui-column) .settings-field-title code { min-width: 0; overflow-wrap: anywhere; }
+:is(.settings-recording,.settings-wui-column) .settings-field-control { min-width: 0; }
 .settings-subsection-title { grid-column: 1/-1; margin-top: 14px; }
 .settings-subsection-title p { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
 .settings-recorded-dirs { grid-column: 1/-1; display: grid; gap: 10px; margin-top: 10px; }

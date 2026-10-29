@@ -82,7 +82,7 @@
 }
 
 * { box-sizing: border-box; }
-html { min-width: 860px; background: var(--bg); }
+html { min-width: 0; background: var(--bg); }
 body { margin: 0; background: var(--bg); color: var(--text); font: var(--font-body-weight) 15px/1.55 var(--font-ui); }
 button, input { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }

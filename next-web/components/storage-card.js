@@ -43,7 +43,14 @@ export function createStorageCard(model, { onRefresh = null } = {}) {
     <div class="storage-primary-metric"><div><span>空き容量</span><strong>${escapeText(model.free)}</strong></div><div><span>使用率</span><strong>${model.usagePercent === null ? '未取得' : `${escapeText(model.usagePercent)}%`}</strong></div></div>
     ${usageBar(model)}
     <div class="storage-values"><div><span>使用量：</span><strong>${escapeText(model.usage)}</strong></div>${thresholdValues(model)}</div>
-    <div class="storage-card-footer">${note(model)}<div class="storage-links"><a href="${model.ruleHref}" data-filter-link>対象ルール ${model.ruleCount}件</a><a href="${model.reserveHref}" data-filter-link>録画予定 ${model.reserveCount}件</a></div></div>`;
+    <div class="storage-card-footer">${note(model)}<div class="storage-links"><a href="${model.ruleHref}" data-filter-link>対象ルール ${model.ruleCount}件</a><a href="${model.reserveHref}" data-filter-link>録画予定 ${model.reserveCount}件</a></div></div>
+    <button class="storage-mobile-details-toggle" type="button" aria-expanded="false">詳細を表示</button>`;
+  const detailsToggle = article.querySelector('.storage-mobile-details-toggle');
+  detailsToggle.addEventListener('click', () => {
+    const expanded = article.classList.toggle('is-mobile-expanded');
+    detailsToggle.setAttribute('aria-expanded', String(expanded));
+    detailsToggle.textContent = expanded ? '詳細を隠す' : '詳細を表示';
+  });
   if (onRefresh !== null) {
     const button = article.querySelector('.storage-refresh');
     button.addEventListener('click', async () => {

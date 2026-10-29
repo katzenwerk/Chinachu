@@ -1,4 +1,5 @@
 import { invalidateResources, loadResource } from '../services/api-client.js';
+import { headerCompactMedia, appendMobileContextButton } from '../components/mobile-layout.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { createChannelLogo } from '../components/channel-logo.js';
 import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor-dialog.js';
@@ -54,6 +55,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   let latestRequest = 0;
   let contextMenu = null;
   let ruleDialog = null;
+  let defaultUpcomingOnly = initialParams.size === 0;
   const preferredRuleUids = new Map();
   const releases = [];
 
@@ -87,7 +89,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   const pagination = section.querySelector('[data-pagination]');
   keyword.value = initialParams.get('q') || '';
 
-  const compactMedia = window.matchMedia('(max-width: 1100px)');
+  const compactMedia = headerCompactMedia(1100);
   const setCompact = event => { controls.open = !event.matches; };
   setCompact(compactMedia);
   compactMedia.addEventListener('change', setCompact);
@@ -102,7 +104,8 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
     closeMenu();
     const query = keyword.value.trim();
     const waves = waveChecks.filter(check => check.checked).map(check => check.value);
-    const found = searchSchedule(schedule, { query, types: waves, category: category.value });
+    const found = searchSchedule(schedule, { query, types: waves, category: category.value })
+      .filter(entry => !defaultUpcomingOnly || Number(entry.program?.end || (entry.start + Number(entry.program?.seconds || 0) * 1000)) > Date.now());
     const total = found.length;
     pageIndex = Math.min(pageIndex, Math.max(0, Math.ceil(total / PAGE_SIZE) - 1));
     count.textContent = `${total}件`;
@@ -162,6 +165,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
       details.append(head, sub);
       row.append(date, time, station, details);
       if (program.id) {
+        appendMobileContextButton(row);
         row.classList.add('is-actionable');
         row.tabIndex = 0;
         row.setAttribute('role', 'button');
@@ -169,7 +173,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
         const openDetail = () => openProgramDetailDialog({ id: program.id, onChanged: reloadReservations });
         row.addEventListener('click', openDetail);
         row.addEventListener('keydown', event => {
-          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDetail(); }
+          if (event.target === row && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openDetail(); }
         });
         row.addEventListener('contextmenu', event => {
           event.preventDefault();
@@ -260,6 +264,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   }
 
   function navigateKeyword() {
+    defaultUpcomingOnly = false;
     const query = keyword.value.trim();
     const nextHash = `#search${query ? `?q=${encodeURIComponent(query)}` : ''}`;
     if (window.location.hash !== nextHash) window.history.pushState(null, '', nextHash);
@@ -281,8 +286,8 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
       if (!disposed) navigateKeyword();
     }, 250);
   });
-  for (const check of waveChecks) check.addEventListener('change', () => { pageIndex = 0; redraw(); });
-  category.addEventListener('change', () => { pageIndex = 0; redraw(); });
+  for (const check of waveChecks) check.addEventListener('change', () => { defaultUpcomingOnly = false; pageIndex = 0; redraw(); });
+  category.addEventListener('change', () => { defaultUpcomingOnly = false; pageIndex = 0; redraw(); });
   pagination.querySelector('[data-prev]').addEventListener('click', () => { pageIndex -= 1; redraw(); });
   pagination.querySelector('[data-next]').addEventListener('click', () => { pageIndex += 1; redraw(); });
   const outsidePointer = event => { if (!contextMenu?.contains(event.target)) closeMenu(); };
@@ -290,6 +295,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   const onHistory = () => {
     if (disposed || !window.location.hash.startsWith('#search')) return;
     keyword.value = new URLSearchParams(window.location.hash.split('?')[1] || '').get('q') || '';
+    defaultUpcomingOnly = false;
     pageIndex = 0;
     redraw();
   };

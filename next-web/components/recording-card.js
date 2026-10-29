@@ -31,6 +31,8 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
       <div class="recording-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div>
     </div>
     <div class="recording-home-footer">
+      <strong class="mobile-card-title"></strong>
+      <span class="mobile-recording-state mobile-only"></span>
       <span class="recording-broadcast"></span>
       <span class="recording-home-actions">
         <span class="recording-storage-warning storage-warning is-align-right" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></span>
@@ -50,6 +52,7 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
       <p class="recording-program-meta"></p>
       <p class="recording-storage-warning storage-warning" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></p>
       <div class="recording-card-meta"><span class="recording-status" hidden></span><span class="recording-elapsed"></span><span class="recording-remaining"></span></div>
+      <a class="recording-detail mobile-only" href="">詳細</a>
       <p class="recording-watch-error" role="status" hidden></p>
     </div>`;
 
@@ -88,6 +91,7 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
     if (homeVariant) {
       const stateText = model.status === 'preparing' ? model.statusText : model.remainingText;
       stateBadge.textContent = stateText;
+      article.querySelector('.mobile-recording-state').textContent = stateText;
       stateBadge.setAttribute('aria-label', model.status === 'preparing' ? '録画準備中' : stateText);
     } else {
       article.querySelector('.recording-elapsed').textContent = model.elapsedText;
@@ -146,11 +150,12 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
     article.dataset.recordingId = model.id || '';
     title.textContent = model.title;
     title.title = model.title;
+    detailLink.href = model.detailUrl || '';
+    detailLink.hidden = model.detailUrl === null;
+    detailLink.setAttribute('aria-label', `${model.title}の詳細`);
     if (homeVariant) {
+      article.querySelector('.mobile-card-title').textContent = model.title;
       article.querySelector('.recording-broadcast').textContent = model.broadcastText;
-      detailLink.href = model.detailUrl || '';
-      detailLink.hidden = model.detailUrl === null;
-      detailLink.setAttribute('aria-label', `${model.title}の詳細`);
     } else {
       article.querySelector('.recording-program-meta').textContent = model.channelMetaText;
     }

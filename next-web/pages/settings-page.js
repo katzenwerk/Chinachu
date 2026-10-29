@@ -21,7 +21,6 @@ const FIELD = {
   mirakurunPath: { label: 'Mirakurun接続先', type: 'text', required: true },
   vaapiDevice: { label: 'VA-APIデバイス', type: 'text', empty: 'string' },
   recordedDir: { label: 'デフォルト録画先', type: 'text', required: true },
-  temporaryDir: { label: '一時フォルダ', type: 'text', empty: 'null' },
   recordedFormat: { label: '録画ファイル名フォーマット', type: 'text', required: true },
   recordedNameEnclosingCharacterMap: { label: '囲み文字の置換ルール', type: 'json', jsonType: 'object' },
   recordedCommand: { label: '録画後コマンド', type: 'text', empty: 'string' },
@@ -331,9 +330,10 @@ export function renderSettingsPage(container) {
 
   function createRecordingTab() {
     const tab = sectionFor('recording');
+    tab.classList.add('settings-recording');
     const destination = card('録画先', '録画ファイルを保存するフォルダと、保存先ごとの安全保護を設定します。');
-    const defaultDir = bindValueField('recordedDir', '録画ルールで保存先を指定していない場合に使用する録画先です。', { wide: true });
-    const rootProtection = fieldShell('システム領域への誤録画を防止', 'recordedStorage.protectRootFilesystem', '録画先がOSと同じ保存領域になった場合、録画を開始せず警告します。HDDのマウント外れによるシステムディスクへの誤録画を防ぎます。OSと同じ領域へ録画する構成ではOFFにしてください。', { wide: true });
+    const defaultDir = bindValueField('recordedDir', '録画ルールで保存先を指定していない場合に使用する録画先です。');
+    const rootProtection = fieldShell('システム領域への誤録画を防止', 'recordedStorage.protectRootFilesystem', '録画先がOSと同じ保存領域になった場合、録画を開始せず警告します。HDDのマウント外れによるシステムディスクへの誤録画を防ぎます。OSと同じ領域へ録画する構成ではOFFにしてください。');
     const rootProtectionSwitch = switchControl('デフォルト録画先のシステム領域への誤録画を防止', draft.recordedStorage?.protectRootFilesystem === true);
     rootProtectionSwitch.input.addEventListener('change', () => {
       updateRecordedStorageRootProtection(draft, rootProtectionSwitch.input.checked);
@@ -355,7 +355,7 @@ export function renderSettingsPage(container) {
     const naming = card('録画ファイル名', '録画ファイルの名前と、放送属性を表す囲み文字の扱いを設定します。');
     const format = bindValueField('recordedFormat', '録画ファイルの名前を決める設定です。番組名、放送日時、チャンネル名などを組み合わせて指定できます。', { wide: true });
     const replace = bindBoolean('recordedNameReplaceEnclosingCharacters', '囲み文字の置換', '録画ファイル名に含まれる「🈟」「🈞」「🈑」などを「[新]」「[再]」「[字]」へ置き換えます。番組表の表示は変更されません。');
-    const map = bindValueField('recordedNameEnclosingCharacterMap', '囲み文字をどの文字列へ置き換えるかをJSON形式で指定します。通常は標準の置換ルールを使用します。', { multiline: true, wide: true, placeholder: '例: {"🈟":"[新]","🈞":"[再]"}' });
+    const map = bindValueField('recordedNameEnclosingCharacterMap', '囲み文字をどの文字列へ置き換えるかをJSON形式で指定します。通常は標準の置換ルールを使用します。', { multiline: true, placeholder: '例: {"🈟":"[新]","🈞":"[再]"}' });
     dependentUpdates.push(() => { map.input.disabled = draft.recordedNameReplaceEnclosingCharacters !== true; map.wrap.classList.toggle('is-disabled', map.input.disabled); });
     naming.body.append(format.wrap, replace.wrap, map.wrap);
 
@@ -384,14 +384,13 @@ export function renderSettingsPage(container) {
     const commands = card('録画後処理と予約照合', '録画終了後の処理と、予約ルールの照合方法を設定します。変更した内容はOperatorの再起動後に反映されます。');
     const fields = document.createElement('div');
     fields.className = 'settings-fields';
-    const temporary = bindValueField('temporaryDir', '一時的な録画ファイルを通常の録画履歴と区別するためのフォルダです。通常の録画ファイルの保存先とは別の設定です。', { wide: true });
     const recordedCommand = bindValueField('recordedCommand', '録画が正常に終了した後に実行する外部コマンドです。空欄では何も実行しません。', { multiline: true, wide: true });
-    const ffprobe = bindValueField('ffprobeCommand', '録画ファイルの再生時間を調べるために使用するコマンドです。通常は変更不要です。', { wide: true, placeholder: '通常: ffprobe' });
+    const ffprobe = bindValueField('ffprobeCommand', '録画ファイルの再生時間を調べるために使用するコマンドです。通常は変更不要です。', { placeholder: '通常: ffprobe' });
     const timeout = bindValueField('recordedDurationProbeTimeoutMs', '再生時間の取得を待つ最大時間です。単位はミリ秒で、8000なら8秒です。', { compact: true });
     const normalization = bindValueField('normalizationForm', '番組名や番組説明と予約ルールを照合する際に、文字の表現の違いを調整します。変更すると、ルールに一致する番組が変わる場合があります。通常はNFKCを使用します。', {
       select: [{ value: '', label: '未指定（正規化なし）' }, { value: 'NFC', label: 'NFC' }, { value: 'NFD', label: 'NFD' }, { value: 'NFKC', label: 'NFKC' }, { value: 'NFKD', label: 'NFKD' }]
     });
-    fields.append(timeout.wrap, normalization.wrap);
+    fields.append(ffprobe.wrap, timeout.wrap, normalization.wrap);
     ['recordingPriority', 'conflictedPriority', 'handoffPrepSeconds'].forEach(key => {
       const descriptions = {
         recordingPriority: 'Mirakurunに通常録画を要求する際の優先度です。値が大きい要求が優先され、0を指定すると既定値の2が使われます。',
@@ -400,7 +399,7 @@ export function renderSettingsPage(container) {
       };
       fields.append(bindValueField(key, descriptions[key], { compact: true }).wrap);
     });
-    commands.body.append(temporary.wrap, recordedCommand.wrap, ffprobe.wrap, fields);
+    commands.body.append(fields, recordedCommand.wrap);
     tab.append(destination.section, naming.section, drop.section, commands.section);
     return tab;
   }
@@ -458,11 +457,9 @@ export function renderSettingsPage(container) {
       bindValueField('recordedHistoryRetentionDays', '録画済み一覧に使用する履歴情報を保持する日数です。整理しても録画ファイルは削除しません。', { compact: true }).wrap
     );
     retention.body.append(grid);
-    const behavior = card('履歴の記録と表示', '録画結果の保存方法と、番組詳細に表示する情報を設定します。');
+    const behavior = card('録画結果の記録', '録画結果をCSVファイルにも保存するか設定します。');
     behavior.body.append(
-      bindBoolean('recordingResultCsvEnabled', '録画結果CSVの自動保存', '録画結果を月ごとのCSVファイルへ自動で追記します。未指定時は無効です。').wrap,
-      bindBoolean('matchKeepRecordedSnapshot', '録画結果の詳細を履歴に保存', '録画結果の詳細情報を照合履歴にも保存します。録画済み履歴を整理した後も、過去の結果を確認しやすくなります。', { defaultTrue: true }).wrap,
-      bindBoolean('programViewShowMatchDebug', '番組詳細のデバッグ情報', '予約や録画結果の照合に使用した詳細情報を番組詳細画面に表示します。通常の利用ではOFFで構いません。').wrap
+      bindBoolean('recordingResultCsvEnabled', '録画結果CSVの自動保存', '録画結果を月ごとのCSVファイルへ自動で追記します。未指定時は無効です。').wrap
     );
     tab.append(retention.section, behavior.section);
     return tab;

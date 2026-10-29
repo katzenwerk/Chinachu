@@ -174,7 +174,8 @@
 .home-page.is-layout-c.is-custom-narrow .home-recording-host,
 .home-page.is-layout-c.is-custom-narrow .home-reservation-host,
 .home-page.is-layout-c.is-custom-narrow .home-recorded-host { grid-column: 1; }
-.home-page.is-layout-c.is-custom-narrow .recorded-recent-grid { grid-template-columns: 1fr; }
+.home-page.is-layout-c.is-custom-narrow .recording-grid { grid-template-columns: repeat(auto-fill,minmax(0,min(100%,var(--home-c-recording-card-width,350px)))); }
+.home-page.is-layout-c.is-custom-narrow .recorded-recent-grid { grid-template-columns: repeat(auto-fill,minmax(0,min(100%,var(--home-c-recorded-card-width,245px)))); }
 
 @media (hover:none), (pointer:coarse) { .recording-watch-button { opacity: 1; } }
 

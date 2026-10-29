@@ -6,7 +6,7 @@ export const DROP_DETECTION_MODES = [
 ];
 
 const KNOWN_KEYS = new Set([
-  'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs', 'temporaryDir',
+  'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs',
   'recordedFormat', 'recordedCommand', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
   'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm',
   'vaapiEnabled', 'vaapiDevice', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode',
@@ -14,7 +14,7 @@ const KNOWN_KEYS = new Set([
   'storageLowSpaceWarningIntervalMinutes', 'storageLowSpaceThresholdMB', 'storageLowSpaceAction',
   'storageLowSpaceCriticalNotifyIntervalMinutes', 'notificationCommand', 'matchRetentionDays',
   'reserves2RetentionDays', 'recordedHistoryRetentionDays', 'recordingResultCsvEnabled',
-  'matchKeepRecordedSnapshot', 'programViewShowMatchDebug', 'excludeServices', 'serviceOrder',
+  'excludeServices', 'serviceOrder',
   'wuiOpenServer', 'wuiOpenHost', 'wuiOpenPort'
 ]);
 

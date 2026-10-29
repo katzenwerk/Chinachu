@@ -1,4 +1,5 @@
 import { invalidateResources, loadResource } from '../services/api-client.js';
+import { appendMobileContextButton } from '../components/mobile-layout.js';
 import { createHomeProgramContextMenu } from '../components/home-program-context-menu.js';
 import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor-dialog.js';
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
@@ -223,6 +224,7 @@ function createReservationTimelineRenderer() {
     duration.className = 'home-reservation-timeline-duration';
     meta.append(warning, duration);
     row.append(channelLogo.element, title, meta);
+    appendMobileContextButton(row);
     return { element: row, channelLogo, title, warning, duration, signature: null };
   }
 
