@@ -1,0 +1,3 @@
+#!/bin/sh
+analyzer_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 3
+exec node "$analyzer_dir/ts-analyzer.js" "$@"
