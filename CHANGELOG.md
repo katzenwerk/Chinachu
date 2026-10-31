@@ -15,7 +15,12 @@ This release reduces interference from recording post-processing and background 
 - Defer dictionary work at safe batch boundaries near recording transitions, releasing its database and lock before resuming saved progress.
 - Move ProgLookup parsing and cache updates, and ChID generation, to Workers. Keep existing data usable during updates and preserve verified channel bindings.
 - Recover the ChID update and notification path when ProgLookup has committed its cache but its Worker exits before reporting success.
-- Retain series caches during automatic updates and rebuild them when explicitly accessed, avoiding unnecessary automatic projection of the complete series view.
+- Move complete series generation off the WUI main thread. Split overview, series and attention details, and event APIs so the Next WUI does not repeatedly fetch the complete snapshot.
+- Generate from captured inputs, publish completed results, and coalesce updates received during generation into the next rebuild. Keep the previous usable result if generation fails.
+- Revalidate correction targets immediately before saving rather than rejecting changes solely because the display generation changed. Use a shared file lock and merge into the latest manual-correction state to avoid overwriting unrelated changes.
+- Keep the hidden-series dialog open across status notifications and polling, and retain correction inputs while rechecking conflicts.
+
+Live behavior, performance, and concurrent Worker writes still require validation.
 
 ## Manual TS Analyzer
 
