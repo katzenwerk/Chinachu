@@ -11,13 +11,19 @@ const assert = require('node:assert/strict');
 
 const repositoryRoot = path.resolve(__dirname, '..');
 
-function reservePort(host) {
+function reservePort(host, excludedPort) {
 	return new Promise((resolve, reject) => {
 		const server = net.createServer();
 		server.once('error', reject);
-		server.listen(0, host, () => {
+		server.listen(0, host, async () => {
 			const port = server.address().port;
-			server.close(error => error ? reject(error) : resolve(port));
+			try {
+				// Hold an excluded port open while selecting its replacement.
+				const selected = port === excludedPort ? await reservePort(host) : port;
+				server.close(error => error ? reject(error) : resolve(selected));
+			} catch (error) {
+				server.close(() => reject(error));
+			}
 		});
 	});
 }
@@ -411,7 +417,9 @@ describe('WUI access model', function() {
 		const logDir = path.join(temporaryDir, 'log');
 		const recordedPath = path.join(temporaryDir, 'smoke.m2ts');
 		const openPort = await reservePort('127.0.0.1');
-		const legacyPort = await reservePort('127.0.0.1');
+		const legacyPort = await reservePort('127.0.0.1', openPort);
+		const portDiagnostic = 'openPort=' + openPort + ', legacyPort=' + legacyPort;
+		assert.notStrictEqual(openPort, legacyPort, portDiagnostic);
 		let child = null;
 		let socket = null;
 		let pollingSocket = null;
@@ -574,9 +582,9 @@ describe('WUI access model', function() {
 			await (async function() {
 				try {
 					await request(legacyPort, '/');
-					throw new Error('legacy wuiPort unexpectedly accepted a connection');
+					throw new Error('legacy wuiPort unexpectedly accepted a connection (' + portDiagnostic + ')');
 				} catch (error) {
-					if (error.message === 'legacy wuiPort unexpectedly accepted a connection') {
+					if (error.message === 'legacy wuiPort unexpectedly accepted a connection (' + portDiagnostic + ')') {
 						throw error;
 					}
 				}

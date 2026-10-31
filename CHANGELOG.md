@@ -23,6 +23,10 @@ This release reduces interference from recording post-processing and background 
 - Run `./tools/ts-analyzer FILE.ts` from the Chinachu directory; use `--help` for options.
 - These findings do not establish the cause or amount of missing video.
 
+## WUI Stability
+
+- Fixed repeated WUI reconnections when login authentication is disabled and no authentication data file exists.
+
 ## Updating and Recovery
 
 - thorn.30 uses the existing one-time manual Git update and the updated `./chinachu installer full`; an intermediate thorn.31 installation is not required. Check recordings and upcoming reservations before stopping services.
