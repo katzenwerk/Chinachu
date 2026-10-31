@@ -49,6 +49,22 @@ For existing PM2 installations, choose **No** when prompted for service setup. R
 
 For gamma and older thorn releases, full compatibility is not guaranteed. Some settings may require reconfiguration, and preserving older recording history requires a separate initial `match.json` build.
 
+thorn.30 can update directly to thorn.32 using this procedure; an intermediate thorn.31 installation is not required. Use the updated installer after the Git update rather than the old thorn.30 updater.
+
+Review local changes and untracked files before updating. Resolve conflicting paths individually; do not delete local files to force the update through.
+
+Before rolling back to an older Operator, finish pending history recovery and confirm that `data/recording.json` is empty after stopping Operator. Older Operators may clear that file at startup. Keep current ledgers; restoring all data from an older backup can discard newer recordings and reservation changes.
+
+## Manual TS Analyzer
+
+Run from the Chinachu directory with Node.js 24 available as `node` in your shell:
+
+```sh
+./tools/ts-analyzer --help
+```
+
+Pass one or more explicit TS file paths for a read-only analysis. The default output shows packet-error events, PCR time-gap candidates, and available TOT clock information; use `--summary`, `--events`, or `--json` to select another output format. This is a manually invoked tool. PCR gaps and CC errors alone do not establish missing video or its cause.
+
 ## Network access and authentication
 
 Chinachu is intended for use on private or access-controlled networks. Direct exposure of the WUI to the Internet is not recommended.

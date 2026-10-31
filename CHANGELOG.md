@@ -1,3 +1,33 @@
+# Chinachu 0.10.7-thorn.32
+
+This release reduces interference from recording post-processing and background updates, strengthens recording-history recovery, and adds a manual TS Analyzer. Improvements to DROP rates and resource usage still require observation under real recording loads.
+
+## Recording Stability
+
+- Run Operator match updates asynchronously and coalesce additional requests, allowing recording streams and timers to continue while matching runs.
+- Save recording history under a shared lock against the latest data. Retry temporary lock contention and retain unfinished recording information for recovery after an Operator restart.
+- Remove completed manual reservations asynchronously after history is saved, preserving the order of reservation removal and recording hooks.
+- Serialize duration probes and thumbnails, limit FFmpeg threads, and run post-processing at low CPU priority. Avoid starting optional post-processing around recording transitions and resume queued work afterwards.
+- Move Scheduler preflight calculations to a Worker. Release Scheduler execution state after launch failures without applying a successful-update receipt or processing termination events twice.
+
+## Background Series Updates (Beta)
+
+- Defer dictionary work at safe batch boundaries near recording transitions, releasing its database and lock before resuming saved progress.
+- Move ProgLookup parsing and cache updates, and ChID generation, to Workers. Keep existing data usable during updates and preserve verified channel bindings.
+- Recover the ChID update and notification path when ProgLookup has committed its cache but its Worker exits before reporting success.
+- Retain series caches during automatic updates and rebuild them when explicitly accessed, avoiding unnecessary automatic projection of the complete series view.
+
+## Manual TS Analyzer
+
+- Added `tools/ts-analyzer`, a manual, read-only tool using the existing recording DROP analysis engine with supplemental file diagnostics.
+- Display CC errors, PCR time-gap candidates, and TOT clock information, with summary, event, and JSON output modes. PCR backward jumps are marked for review in the standard summary.
+- PCR gaps and packet errors are diagnostic observations; they do not establish the cause or amount of missing video. See the README for usage.
+
+## Updating and Recovery
+
+- thorn.30 uses the existing one-time manual Git update and the updated `./chinachu installer full`; an intermediate thorn.31 installation is not required. Check recordings and upcoming reservations before stopping services.
+- Before rolling back to an older Operator, complete any pending history recovery and confirm that `recording.json` is empty. Older Operators may clear that file at startup. Preserve current ledgers rather than restoring all data from an older backup.
+
 # Chinachu 0.10.7-thorn.31
 
 This release introduces experimental Series management, optional WUI authentication, broadcast clock observation and adjustment support, and improvements to recording diagnostics, maintenance, and usability.
