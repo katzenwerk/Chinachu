@@ -6,7 +6,7 @@ import { createMonthCalendar } from '../components/month-calendar.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { invalidateResources, loadResource } from '../services/api-client.js';
 import { buildReservationListModels, filterReservationListModels, findReservationDateJumpTarget, nextReservationDisplayBoundaryDelay } from '../services/reservation-model.js';
-import { subscribeReservationNotifications } from '../services/realtime-client.js';
+import { subscribeReservationNotifications, subscribeSeriesNotifications } from '../services/realtime-client.js';
 import { subscribeStorageData } from '../services/storage-store.js';
 import { ruleAction } from '../services/program-detail-model.js';
 import { setReserveSkip, unreserveProgram } from '../services/timetable-client.js';
@@ -249,10 +249,10 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
         forceQueued = false;
         if (shouldForce) invalidateResources(['reserves']);
         try {
-          const [programs, seriesSnapshot] = await Promise.all([
-            loadResource('reserves'),
-            loadSeriesProjection().catch(() => null)
-          ]);
+          const programs = await loadResource('reserves');
+          const seriesSnapshot = await loadSeriesProjection({
+            eventKeys: programs.map(canonicalProgramKey)
+          }).catch(() => null);
           if (!isActive()) return;
           if (generation !== refreshGeneration) continue;
           latestPrograms = programs;
@@ -508,6 +508,9 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     hover: false
   });
   const unsubscribe = subscribeReservationNotifications(() => requestRefresh(true));
+  const unsubscribeSeries = subscribeSeriesNotifications(update => {
+    if (update?.generation) requestRefresh();
+  });
   const unsubscribeStorage = subscribeStorageData(state => {
     if (!isActive() || state.data === null) return;
     storageData = state.data;
@@ -528,6 +531,7 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     targetPopup.destroy();
     setHeaderActions();
     unsubscribe();
+    unsubscribeSeries();
     unsubscribeStorage();
     window.clearTimeout(jumpHighlightTimer);
     window.clearTimeout(jumpMessageTimer);

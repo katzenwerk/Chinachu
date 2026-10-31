@@ -6,7 +6,7 @@ import { reserveProgram, setReserveSkip, unreserveProgram } from '../services/ti
 import { openRecordedPlaybackOverlay, openRecordingLiveOverlay } from '../services/live-player-adapter.js';
 import { copyProgramTitle, programSearchUrl } from '../services/program-actions.js';
 import { invalidateResources } from '../services/api-client.js';
-import { subscribeMatchNotifications, subscribeRecordedNotifications, subscribeRecordingNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
+import { subscribeSeriesNotifications, subscribeMatchNotifications, subscribeRecordedNotifications, subscribeRecordingNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
 import { loadSeriesProjection } from '../services/series-client.js';
 import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
 import { openSeriesCorrectionDialog } from './series-correction-dialog.js';
@@ -256,6 +256,9 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   const unsubscribeRecording = subscribeRecordingNotifications(() => reloadFromNotification(['recording', 'reserves']));
   const unsubscribeRecorded = subscribeRecordedNotifications(() => reloadFromNotification(['recorded', 'recording']));
   const unsubscribeMatch = subscribeMatchNotifications(() => load());
+  const unsubscribeSeries = subscribeSeriesNotifications(update => {
+    if (update?.generation && !disposed && dialog.open) load();
+  });
 
   function showFeedback(message, error = false) {
     const feedback = dialog.querySelector('footer [role="status"]');
@@ -505,7 +508,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
         let seriesContext = null;
         let seriesError = null;
         try {
-          const snapshot = await loadSeriesProjection({ signal: requestController.signal });
+          const snapshot = await loadSeriesProjection({ signal: requestController.signal, eventKeys: model.eventKey ? [model.eventKey] : [] });
           seriesContext = model.eventKey ? buildSeriesEventIndex(snapshot).get(model.eventKey) || null : null;
         } catch (cause) {
           if (requestController.signal.aborted || cause?.name === 'AbortError') return;
@@ -561,6 +564,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     unsubscribeRecording();
     unsubscribeRecorded();
     unsubscribeMatch();
+    unsubscribeSeries();
     logo?.dispose();
     dialog.remove();
     if (activeDialog === dialog) activeDialog = null;

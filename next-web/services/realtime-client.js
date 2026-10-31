@@ -24,6 +24,7 @@ function disconnectIfUnused() {
   socket.off('notify-match');
   socket.off('notify-schedule');
   socket.off('notify-series');
+  socket.off('notify-series-status');
   socket.off('connect');
   socket.off('disconnect');
   socket.off('auth-expired');
@@ -56,7 +57,8 @@ function connect() {
     socket.on('notify-schedule', () => {
       scheduleListeners.forEach(listener => listener());
     });
-    socket.on('notify-series', () => seriesListeners.forEach(listener => listener()));
+    socket.on('notify-series', update => seriesListeners.forEach(listener => listener(update)));
+    socket.on('notify-series-status', () => seriesListeners.forEach(listener => listener({ statusOnly: true })));
     socket.on('connect', () => emitConnection('connected'));
     socket.on('disconnect', reason => {
       if (reason === 'io server disconnect' && authRefreshPending) {

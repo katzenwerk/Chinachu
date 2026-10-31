@@ -33,5 +33,35 @@
     "script": "series",
     "methods": ["post"],
     "types": ["json"]
+  },
+  "/overview": {
+    "script": "series",
+    "methods": ["get"],
+    "types": ["json"]
+  },
+  "/detail": {
+    "script": "series",
+    "methods": ["get"],
+    "types": ["json"]
+  },
+  "/attention": {
+    "script": "series",
+    "methods": ["get"],
+    "types": ["json"]
+  },
+  "/event": {
+    "script": "series",
+    "methods": ["get"],
+    "types": ["json"]
+  },
+  "/events": {
+    "script": "series",
+    "methods": ["post"],
+    "types": ["json"]
+  },
+  "/status": {
+    "script": "series",
+    "methods": ["get"],
+    "types": ["json"]
   }
 }

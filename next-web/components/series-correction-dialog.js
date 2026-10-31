@@ -1,6 +1,6 @@
 import {
   previewSeriesSelection, removeSeriesOverride, removeSeriesWorkRule, saveSeriesOverride,
-  saveSeriesOverridesBulk, searchSeriesTitles
+  saveSeriesOverridesBulk, searchSeriesTitles, loadSeriesProjection
 } from '../services/series-client.js';
 
 const dateTimeFormatter = new Intl.DateTimeFormat('ja-JP', {
@@ -208,6 +208,11 @@ export function openSeriesCorrectionDialog({
     `${activeWorkRule.serviceName || '同一放送局'}の同じ作品系統へTID ${activeWorkRule.tid}を適用中です。` : '';
   let episodeExplicit = manualEpisode !== null;
   let previewSequence = 0;
+  let contextToken = event.correctionToken || null;
+  let ruleToken = event.ruleToken || null;
+  let validationToken = null;
+  let changedContext = null;
+  let saving = false;
 
   function initialEpisodeStatus() {
     if (manualEpisode !== null) return `EP ${manualEpisode}を手動指定中です。`;
@@ -218,6 +223,10 @@ export function openSeriesCorrectionDialog({
   episodeStatus.textContent = initialEpisodeStatus();
 
   async function refreshPreview({ tidChanged = false, episodeChanged = false } = {}) {
+    validationToken = null;
+    save.disabled = true;
+    remove.disabled = true;
+    removeWorkRule.disabled = true;
     const tid = positiveInteger(tidSelect.value);
     if (tid === null) {
       subtitlePreview.textContent = '';
@@ -235,11 +244,14 @@ export function openSeriesCorrectionDialog({
     try {
       const preview = await previewSeriesSelection({
         eventKey: event.key,
+        generation: event.generation,
+        contextToken,
         tid,
         episode: episodeExplicit && episode.value ? Number(episode.value) : null
       });
       if (sequence !== previewSequence || !dialog.isConnected) return;
-      if (!episodeExplicit && episode.value === '' && preview.episodeConfirmed) {
+      if (!episodeExplicit && !preview.episodeConfirmed) episode.value = '';
+      if (!episodeExplicit && preview.episodeConfirmed) {
         episode.value = String(preview.episode);
         episodeStatus.textContent = `EP ${preview.episode}を既存データから確認しました。表示だけでは手動EPとして保存しません。`;
       } else if (tidChanged && preview.multipleEpisode) {
@@ -250,13 +262,34 @@ export function openSeriesCorrectionDialog({
         episodeStatus.textContent = preview.contradiction ?
           '既存の放送情報と矛盾するためEPを補完しません。' : 'この作品ではEPを安全に特定できません。';
       }
+      if (!episodeExplicit && !preview.episodeConfirmed) {
+        episodeStatus.textContent = preview.contradiction ? '既存の放送情報と矛盾するためEPを補完しません。' :
+          preview.multipleEpisode ? '複数話情報のため、単一EPには補完しません。' :
+          preview.episodeHint ? `EPG話数 #${preview.episodeHint} は候補です。確定EPではありません。` : 'EPは未確定です。';
+      }
       const dictionarySubtitle = episodeExplicit ? preview.requestedSubtitle : preview.dictionarySubtitle;
       subtitlePreview.textContent = dictionarySubtitle ? `辞書副題: ${dictionarySubtitle}` : '';
       workRuleStatus.textContent = preview.workRuleProposal?.reason || '';
+      contextToken = preview.contextToken;
+      validationToken = preview.validationToken;
+      save.disabled = saving || !validationToken;
+      remove.disabled = saving;
+      removeWorkRule.disabled = saving;
     } catch (error) {
       if (sequence !== previewSequence) return;
       episodeStatus.textContent = error.message;
       subtitlePreview.textContent = '';
+      validationToken = null;
+      save.disabled = true;
+      reconfirm.hidden = false;
+      if (error.status === 409) {
+        changedContext = error;
+        remove.disabled = true;
+        removeWorkRule.disabled = true;
+        if (error.currentContext) {
+          message.textContent = `最新: ${text(error.currentContext.fullTitle, error.currentContext.title || '')} · ${error.currentContext.manual ? `手動 TID ${error.currentContext.manual.tid}` : '個別補正なし'}。入力は保持しています。`;
+        }
+      }
     }
   }
 
@@ -286,7 +319,34 @@ export function openSeriesCorrectionDialog({
   save.type = 'submit';
   save.className = 'button primary';
   save.textContent = '保存';
-  actions.append(removeWorkRule, remove, cancel, save);
+  save.disabled = true;
+  const reconfirm = document.createElement('button');
+  reconfirm.type = 'button';
+  reconfirm.className = 'button';
+  reconfirm.textContent = '最新の条件で再プレビュー';
+  reconfirm.hidden = true;
+  reconfirm.addEventListener('click', async () => {
+    if (changedContext && !changedContext.contextToken) {
+      message.textContent = '対象イベントを確認できません。最新の一覧から開き直してください。';
+      return;
+    }
+    if (changedContext) {
+      contextToken = changedContext.contextToken;
+      const rule = changedContext.currentContext?.rules?.find(rule => rule.id === activeWorkRule?.id);
+      if (changedContext.currentContext) remove.hidden = !changedContext.currentContext.manual;
+      if (!rule && activeWorkRule) removeWorkRule.hidden = true;
+      if (rule) {
+        ruleToken = rule.token;
+        workRuleStatus.textContent = `最新の作品ルール: TID ${rule.tid}`;
+      }
+    }
+    changedContext = null;
+    reconfirm.hidden = true;
+    await refreshPreview();
+    remove.disabled = !validationToken;
+    removeWorkRule.disabled = !validationToken;
+  });
+  actions.append(removeWorkRule, remove, reconfirm, cancel, save);
   form.append(
     heading, target, evidence, picker.searchLabel, picker.searchStatus, picker.tidLabel,
     episodeLabel, episodeStatus, subtitlePreview, workRuleStatus, message, actions
@@ -295,6 +355,7 @@ export function openSeriesCorrectionDialog({
   document.body.append(dialog);
 
   async function run(action) {
+    saving = true;
     for (const button of actions.querySelectorAll('button')) button.disabled = true;
     message.textContent = '';
     try {
@@ -304,25 +365,36 @@ export function openSeriesCorrectionDialog({
     } catch (error) {
       message.textContent = error.message;
       for (const button of actions.querySelectorAll('button')) button.disabled = false;
-    }
+      validationToken = null;
+      save.disabled = true;
+      reconfirm.hidden = false;
+      if (error.status === 409) {
+        changedContext = error;
+        remove.disabled = true;
+        removeWorkRule.disabled = true;
+        if (error.currentContext) message.textContent += ` 最新: ${text(error.currentContext.fullTitle, error.currentContext.title || '')}。入力を保持しています。`;
+      }
+    } finally { saving = false; }
   }
   form.addEventListener('submit', submitEvent => {
     submitEvent.preventDefault();
-    if (!tidSelect.value) {
+    if (!tidSelect.value || !validationToken || saving) {
       message.textContent = '作品を選択してください。';
       tidSelect.focus();
       return;
     }
     run(() => saveSeriesOverride({
       eventKey: event.key,
+      generation: event.generation,
+      validationToken,
       tid: Number(tidSelect.value),
       episode: episodeExplicit && episode.value !== '' ? Number(episode.value) : null
     }));
   });
-  remove.addEventListener('click', () => run(() => removeSeriesOverride(event.key)));
+  remove.addEventListener('click', () => run(() => removeSeriesOverride(event.key, { generation: event.generation, contextToken })));
   removeWorkRule.addEventListener('click', () => {
     if (!window.confirm('この放送局・同作品系統へのTID対応を解除し、通常の自動判定へ戻します。\n個別の手動補正は維持されます。')) return;
-    run(() => removeSeriesWorkRule(activeWorkRule.id));
+    run(() => removeSeriesWorkRule(activeWorkRule.id, { generation: event.generation, eventKey: event.key, contextToken, ruleToken }));
   });
   dialog.addEventListener('close', () => {
     picker.dispose();
@@ -336,9 +408,9 @@ export function openSeriesCorrectionDialog({
 }
 
 export function openSeriesBulkCorrectionDialog({ group, onChanged = () => {} }) {
-  const events = Array.isArray(group?.events) ? group.events.filter(event => event?.key) : [];
+  let events = Array.isArray(group?.events) ? group.events.filter(event => event?.key) : [];
   if (!group?.id || events.length === 0) return null;
-  const eventKeys = events.map(event => event.key);
+  let eventKeys = events.map(event => event.key);
   const dialog = document.createElement('dialog');
   dialog.className = 'series-correction-dialog series-bulk-correction-dialog';
   const form = document.createElement('form');
@@ -395,7 +467,35 @@ export function openSeriesBulkCorrectionDialog({ group, onChanged = () => {} }) 
   save.type = 'submit';
   save.className = 'button primary';
   save.textContent = `${events.length}件をまとめて紐づけ`;
-  actions.append(cancel, save);
+  const refreshTargets = document.createElement('button');
+  refreshTargets.type = 'button';
+  refreshTargets.className = 'button';
+  refreshTargets.textContent = '最新の対象を確認';
+  refreshTargets.hidden = true;
+  refreshTargets.addEventListener('click', async () => {
+    refreshTargets.disabled = true;
+    try {
+      const data = await loadSeriesProjection({ groupId: group.id });
+      const latest = data.attention.find(item => item.id === group.id);
+      if (!latest?.events?.length) throw new Error('このグループは変更・消滅しました。最新の一覧から開き直してください。');
+      group = latest;
+      events = latest.events;
+      eventKeys = events.map(event => event.key);
+      target.textContent = `${text(group.title)} · 最新の対象 ${events.length}件`;
+      eventList.replaceChildren(...events.map(event => {
+        const item = document.createElement('li');
+        item.textContent = `${text(event.fullTitle, event.title)} · ${dateTime(event.start)} · ${text(event.channel?.name)}`;
+        return item;
+      }));
+      updateConfirmation();
+      save.textContent = `${events.length}件をまとめて紐づけ`;
+      save.disabled = false;
+      message.textContent = '対象を更新しました。選択TIDと対象を確認して保存してください。';
+      refreshTargets.hidden = true;
+    } catch (error) { message.textContent = error.message; }
+    finally { refreshTargets.disabled = false; }
+  });
+  actions.append(cancel, refreshTargets, save);
   form.append(
     heading, target, picker.searchLabel, picker.searchStatus, picker.tidLabel,
     confirmation, eventList, message, actions
@@ -414,14 +514,15 @@ export function openSeriesBulkCorrectionDialog({ group, onChanged = () => {} }) 
     for (const button of actions.querySelectorAll('button')) button.disabled = true;
     message.textContent = '';
     try {
-      await saveSeriesOverridesBulk({ groupId: group.id, eventKeys, tid });
+      await saveSeriesOverridesBulk({ groupId: group.id, eventKeys, tid, generation: group.generation, dictionaryGeneration: group.dictionaryGeneration });
       dialog.close();
       await onChanged({ conflict: false });
     } catch (error) {
       if (error.status === 409) {
-        dialog.close();
-        await onChanged({ conflict: true });
-        window.alert('要確認グループの対象が変更されました。最新の一覧を確認して、もう一度実行してください。');
+        message.textContent = error.message + ' 選択TIDを保持しています。最新の対象を確認してください。';
+        cancel.disabled = false;
+        refreshTargets.disabled = false;
+        refreshTargets.hidden = false;
         return;
       }
       if (error.resultUnknown) {

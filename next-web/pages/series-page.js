@@ -4,7 +4,7 @@ import { openProgramDetailDialog } from '../components/program-detail-dialog.js'
 import { openSeriesBulkCorrectionDialog, openSeriesCorrectionDialog } from '../components/series-correction-dialog.js';
 import { createSeriesContextMenu } from '../components/series-context-menu.js';
 import { recordedResultWarnings } from '../services/recorded-result-warnings.js';
-import { loadSeriesProjection, removeSeriesOverride, setSeriesHidden } from '../services/series-client.js';
+import { loadSeriesProjection, loadSeriesStatus, removeSeriesOverride, setSeriesHidden } from '../services/series-client.js';
 import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
 import {
   subscribeMatchNotifications, subscribeRecordedNotifications, subscribeReservationNotifications, subscribeSeriesNotifications
@@ -88,8 +88,19 @@ function createAvailabilityDialog(availability) {
   close.addEventListener('click', () => dialog.close());
   actions.append(close);
   dialog.append(header, purpose, message);
-  if (technical || dictionary) dialog.append(list);
-  dialog.append(actions);
+  list.hidden = !technical && !dictionary;
+  dialog.append(list, actions);
+  dialog.updateAvailability = next => {
+    const fresh = createAvailabilityDialog(next);
+    const nextMessage = fresh.querySelector('.series-availability');
+    message.className = nextMessage.className;
+    message.textContent = nextMessage.textContent;
+    const values = [...fresh.querySelectorAll('dd')];
+    [...list.querySelectorAll('dd')].forEach((entry, index) => {
+      if (entry.textContent !== values[index]?.textContent) entry.textContent = values[index]?.textContent || '';
+    });
+    list.hidden = fresh.querySelector('dl').hidden;
+  };
   return dialog;
 }
 
@@ -172,33 +183,55 @@ function createHiddenSeriesDialog(items, onRestore) {
   heading.textContent = '非表示シリーズ';
   const list = document.createElement('div');
   list.className = 'series-hidden-list';
-  for (const item of items) {
-    const row = document.createElement('div');
-    row.className = 'series-hidden-row';
-    const label = document.createElement('div');
-    const title = document.createElement('strong');
-    title.textContent = text(item.title, '作品名未取得');
-    const tid = document.createElement('span');
-    tid.textContent = `TID ${item.tid}`;
-    label.append(title, tid);
-    const restore = document.createElement('button');
-    restore.type = 'button';
-    restore.className = 'button';
-    restore.textContent = '再表示';
-    restore.addEventListener('click', async () => {
-      restore.disabled = true;
-      try {
-        await onRestore(item.tid);
-        row.remove();
-        if (!list.childElementCount) dialog.close();
-      } catch (error) {
-        restore.disabled = false;
-        window.alert(`シリーズを再表示できませんでした: ${error.message}`);
+  const rows = new Map();
+  const pendingRemovals = new Map();
+  dialog.updateItems = (nextItems, manualGeneration = 0) => {
+    const wanted = new Set();
+    for (const item of nextItems) {
+      const tid = Number(item.tid);
+      if (pendingRemovals.has(tid)) {
+        if (manualGeneration < pendingRemovals.get(tid)) continue;
+        pendingRemovals.delete(tid);
       }
-    });
-    row.append(label, restore);
-    list.append(row);
-  }
+      wanted.add(tid);
+      let entry = rows.get(tid);
+      if (!entry) {
+        const row = document.createElement('div');
+        row.className = 'series-hidden-row';
+        const label = document.createElement('div');
+        const title = document.createElement('strong');
+        const id = document.createElement('span');
+        id.textContent = `TID ${tid}`;
+        label.append(title, id);
+        const restore = document.createElement('button');
+        restore.type = 'button';
+        restore.className = 'button';
+        restore.textContent = '再表示';
+        restore.addEventListener('click', async () => {
+          restore.disabled = true;
+          try {
+            const result = await onRestore(tid);
+            pendingRemovals.set(tid, result.manualGeneration);
+            rows.get(tid)?.row.remove();
+            row.remove(); rows.delete(tid);
+            if (!list.childElementCount) dialog.close();
+          } catch (error) {
+            restore.disabled = false;
+            window.alert(`シリーズを再表示できませんでした: ${error.message}`);
+          }
+        });
+        row.append(label, restore);
+        entry = { row, title };
+        rows.set(tid, entry);
+        list.append(row);
+      }
+      entry.title.textContent = text(item.title, '作品名未取得');
+    }
+    for (const [tid, entry] of rows) {
+      if (!wanted.has(tid)) { entry.row.remove(); rows.delete(tid); }
+    }
+  };
+  dialog.updateItems(items);
   const actions = document.createElement('div');
   actions.className = 'series-data-dialog-actions';
   const close = document.createElement('button');
@@ -262,7 +295,7 @@ function seriesRows(data, tab) {
 
 function seriesHref(data, item, tab) {
   const seriesId = item.id && data.series.some(series => series.id === item.id) ? item.id : item.seriesId || null;
-  const eventKey = item.events?.[0]?.key;
+  const eventKey = item.firstEventKey || item.events?.[0]?.key;
   return seriesId ? `#series?tab=${tab}&id=${encodeURIComponent(seriesId)}` :
     eventKey ? `#series?tab=attention&event=${encodeURIComponent(eventKey)}` : `#series?tab=${tab}`;
 }
@@ -388,7 +421,7 @@ function renderSeriesList(host, data, tab, search, viewMode = 'list', context = 
     } else if (tab === 'recordings') {
       meta.textContent = `${seriesEpisodeSummary(item)} · ${item.counts.currentRecordings}件録画 · 最終録画 ${dateTime(item.latestRecordingAt)}`;
     } else {
-      meta.textContent = `${item.label} · ${item.events.length}件${item.progLookupLabel ? ` · ${item.progLookupLabel}` : ''}${item.candidateTids?.length ? ` · TID候補 ${item.candidateTids.join(', ')}` : ''}`;
+      meta.textContent = `${item.label} · ${item.eventCount ?? item.events.length}件${item.progLookupLabel ? ` · ${item.progLookupLabel}` : ''}${item.candidateTids?.length ? ` · TID候補 ${item.candidateTids.join(', ')}` : ''}`;
     }
     body.append(title, meta);
     row.append(body);
@@ -732,7 +765,13 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   const eventKey = query.get('event');
   let sequence = 0;
   let refreshTimer = null;
-  let reopenDataDialog = false;
+  let dataDialog = null;
+  let hiddenDialog = null;
+  let headerActions = null;
+  let availabilityKey = null;
+  let renderedGeneration = null;
+  let loading = false;
+  let refreshQueued = false;
   container.className = 'series-page';
   container.innerHTML = '<section class="panel series-loading"><p>シリーズ情報を生成しています…</p></section>';
 
@@ -779,7 +818,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       if (action === 'series-episode') return openCorrection(context, true);
       if (action === 'series-remove' && context.manual &&
           window.confirm('このイベントの手動指定を解除し、自動判定へ戻しますか？')) {
-        removeSeriesOverride(context.eventKey).then(() => afterCorrection(context.eventKey))
+        removeSeriesOverride(context.eventKey, { generation: context.event?.generation, contextToken: context.event?.correctionToken }).then(() => afterCorrection(context.eventKey))
           .catch(error => window.alert(`手動指定を解除できませんでした: ${error.message}`));
       }
       if (action === 'series-hidden' && context.kind === 'series') {
@@ -798,15 +837,29 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     }
   }
 
+  function updateState(data) {
+    const key = JSON.stringify(data.availability);
+    if (key === availabilityKey) return;
+    availabilityKey = key;
+    dataDialog?.updateAvailability(data.availability);
+    const button = headerActions?.querySelector('.series-data-button');
+    if (button) button.className = `button series-data-button is-${data.availability?.status || 'unknown'}`;
+  }
+
   function installHeader(data, config = {}) {
-    const dialog = createAvailabilityDialog(data.availability);
+    if (!dataDialog) {
+      dataDialog = createAvailabilityDialog(data.availability);
+      hiddenDialog = createHiddenSeriesDialog([], async tid => {
+        const result = await setSeriesHidden(tid, false);
+        scheduleRefresh(0);
+        return result;
+      });
+      document.body.append(dataDialog, hiddenDialog);
+    }
     const hiddenSeries = Array.isArray(data.hiddenSeries) ? data.hiddenSeries : [];
-    const hiddenDialog = createHiddenSeriesDialog(hiddenSeries, async tid => {
-      await setSeriesHidden(tid, false);
-      scheduleRefresh(0);
-    });
-    container.append(dialog, hiddenDialog);
-    if (reopenDataDialog) { dialog.showModal(); reopenDataDialog = false; }
+    hiddenDialog.updateItems(hiddenSeries, data.manualGeneration || 0);
+    updateState(data);
+    const dialog = dataDialog;
     const actions = makeHeaderActions({
       tab: config.showTabs === false ? null : tab,
       viewMode,
@@ -823,6 +876,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       },
       detailControls: config.detailControls || []
     });
+    headerActions = actions;
     setHeaderActions(actions.childElementCount ? actions : null);
   }
 
@@ -862,11 +916,17 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   }
 
   async function load() {
+    if (loading) { refreshQueued = true; return; }
+    loading = true;
     const current = ++sequence;
     try {
-      const data = await loadSeriesProjection({ signal: controller.signal });
+      const data = await loadSeriesProjection({ signal: controller.signal, id: selectedId || undefined, event: eventKey || undefined });
       if (controller.signal.aborted || current !== sequence) return;
-      reopenDataDialog = container.querySelector('.series-data-dialog:not(.series-hidden-dialog)')?.open === true;
+      if (renderedGeneration === data.generation) {
+        updateState(data);
+        return;
+      }
+      renderedGeneration = data.generation;
       const eventIndex = buildSeriesEventIndex(data);
       const eventContext = {
         eventIndex,
@@ -878,7 +938,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       };
       let selected = selectedId ? data.series.find(item => item.id === selectedId) : null;
       if (!selected && eventKey) {
-        selected = data.series.find(item => item.episodes.some(episode =>
+        selected = data.series.find(item => (item.episodes || []).some(episode =>
           episode.events.some(event => event.key === eventKey))) || null;
         if (!selected) tab = 'attention';
       }
@@ -891,7 +951,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
         return;
       }
       const attentionTarget = eventKey
-        ? data.attention.find(item => item.events.some(event => event.key === eventKey)) : null;
+        ? data.attention.find(item => (item.events || []).some(event => event.key === eventKey)) : null;
       if (attentionTarget) {
         renderAttentionDetail(container, attentionTarget, eventContext);
         installHeader(data, { showTabs: false });
@@ -900,9 +960,13 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       renderOverview(data);
     } catch (error) {
       if (controller.signal.aborted || current !== sequence) return;
+      renderedGeneration = null;
       container.innerHTML = '<section class="panel series-loading is-error"><h2>シリーズ情報を表示できません</h2><p></p></section>';
       container.querySelector('p').textContent = error?.message || String(error);
       setHeaderActions();
+    } finally {
+      loading = false;
+      if (refreshQueued && !controller.signal.aborted) { refreshQueued = false; scheduleRefresh(0); }
     }
   }
 
@@ -911,13 +975,26 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     refreshTimer = window.setTimeout(load, delay);
   }
 
+  async function checkStatus() {
+    if (loading) { refreshQueued = true; return; }
+    try {
+      const state = await loadSeriesStatus({ signal: controller.signal });
+      if (controller.signal.aborted) return;
+      if (state.generation === renderedGeneration) updateState(state);
+      else scheduleRefresh(0);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      updateState({ availability: { status: 'stale', message: `取得状態を確認できませんでした: ${error.message}` } });
+    }
+  }
+
   const unsubscribers = [
-    subscribeSeriesNotifications(() => scheduleRefresh()),
+    subscribeSeriesNotifications(update => update?.statusOnly ? checkStatus() : scheduleRefresh()),
     subscribeReservationNotifications(() => scheduleRefresh()),
     subscribeRecordedNotifications(() => scheduleRefresh()),
     subscribeMatchNotifications(() => scheduleRefresh())
   ];
-  const pollTimer = window.setInterval(() => scheduleRefresh(0), 60000);
+  const pollTimer = window.setInterval(checkStatus, 60000);
   load();
 
   return () => {
@@ -926,6 +1003,8 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     window.clearInterval(pollTimer);
     unsubscribers.forEach(unsubscribe => unsubscribe());
     contextMenu.destroy();
+    dataDialog?.remove();
+    hiddenDialog?.remove();
     setHeaderActions();
   };
 }

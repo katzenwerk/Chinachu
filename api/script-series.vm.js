@@ -1,62 +1,33 @@
-(function () {
+(async function () {
 	'use strict';
-
-	if (!seriesService || typeof seriesService.getSnapshot !== 'function') {
-		return response.error(501);
-	}
-
+	if (!seriesService || typeof seriesService.request !== 'function') return response.error(501);
 	try {
-		if (request.url.match(/^\/api\/series\/search\.json(?:\?|$)/)) {
-			if (request.method !== 'GET') return response.error(405);
-			var query = typeof request.query.q === 'string' ? request.query.q : '';
-			if (!query.trim()) return response.error(400);
-			response.head(200);
-			response.end(JSON.stringify({ schemaVersion: 1, results: seriesService.searchTitles(query, 20) }));
-			return;
-		}
-		if (request.url.match(/^\/api\/series\/preview\.json(?:\?|$)/)) {
-			if (request.method !== 'POST') return response.error(405);
-			response.head(200);
-			response.end(JSON.stringify({ schemaVersion: 1, result: seriesService.previewManualSelection(request.query || {}) }));
-			return;
-		}
-		if (request.url.match(/^\/api\/series\/override\.json(?:\?|$)/)) {
-			var result;
-			if (request.method === 'POST') result = seriesService.setManualOverride(request.query || {});
-			else if (request.method === 'DELETE') result = seriesService.removeManualOverride(request.query && request.query.eventKey);
-			else return response.error(405);
-			response.head(200);
-			response.end(JSON.stringify({ schemaVersion: 1, result: result }));
-			return;
-		}
-		if (request.url.match(/^\/api\/series\/override-bulk\.json(?:\?|$)/)) {
-			if (request.method !== 'POST') return response.error(405);
-			if (typeof seriesService.setManualOverrides !== 'function') return response.error(501);
-			var bulkResult = seriesService.setManualOverrides(request.query || {});
-			response.head(200);
-			response.end(JSON.stringify({ schemaVersion: 1, result: bulkResult }));
-			return;
-		}
-		if (request.url.match(/^\/api\/series\/work-rule\.json(?:\?|$)/)) {
-			if (request.method !== 'DELETE') return response.error(405);
-			response.head(200);
-			response.end(JSON.stringify({ schemaVersion: 1, result: seriesService.removeWorkRule(request.query || {}) }));
-			return;
-		}
-		if (request.url.match(/^\/api\/series\/hidden\.json(?:\?|$)/)) {
-			if (request.method !== 'POST') return response.error(405);
-			if (typeof seriesService.setSeriesHidden !== 'function') return response.error(501);
-			var hiddenResult = seriesService.setSeriesHidden(request.query || {});
-			response.head(200);
-			response.end(JSON.stringify({ schemaVersion: 1, result: hiddenResult }));
-			return;
-		}
-		if (request.method !== 'GET') return response.error(405);
-		var snapshot = seriesService.getSnapshot();
+		var route = request.url.split('?')[0];
+		var input = request.query || {};
+		var command;
+		var views = { '/api/series.json': 'full', '/api/series/overview.json': 'overview',
+			'/api/series/detail.json': 'series', '/api/series/attention.json': 'attention',
+			'/api/series/event.json': 'event', '/api/series/events.json': 'events' };
+		if (views[route]) {
+			if (request.method !== (views[route] === 'events' ? 'POST' : 'GET')) return response.error(405);
+			command = 'view';
+			input = Object.assign({}, input, { mode: views[route] });
+		} else if (route === '/api/series/status.json') command = 'status';
+		else if (route === '/api/series/search.json') {
+			if (typeof input.q !== 'string' || !input.q.trim()) return response.error(400);
+			command = 'searchTitles';
+		} else if (route === '/api/series/preview.json') command = 'previewManualSelection';
+		else if (route === '/api/series/override.json') command = request.method === 'DELETE' ? 'removeManualOverride' : 'setManualOverride';
+		else if (route === '/api/series/override-bulk.json') command = 'setManualOverrides';
+		else if (route === '/api/series/work-rule.json') command = 'removeWorkRule';
+		else if (route === '/api/series/hidden.json') command = 'setSeriesHidden';
+		else return response.error(404);
+		var body = await seriesService.request(command, input);
 		response.head(200);
-		response.end(JSON.stringify(snapshot));
+		response.end(body);
 	} catch (error) {
 		util.log('SERIES API: ' + (error && error.stack || error));
-		return response.error(error && error.statusCode || 500);
+		response.head(error && error.statusCode || 500);
+		response.end(JSON.stringify({ schemaVersion: 1, error: { message: error.message, code: error.code || 'series-api-failed', contextToken: error.contextToken || null, currentContext: error.currentContext || null } }));
 	}
 })();

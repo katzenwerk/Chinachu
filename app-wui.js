@@ -94,7 +94,7 @@ const storageRuntimeState = require('./lib/storage-runtime-state');
 const storageRefreshIpc = require('./lib/storage-refresh-ipc');
 const recordedThumbnail = require('./lib/recorded-thumbnail');
 const matchDetailResolver = require('./lib/match-detail-resolver');
-const seriesServiceModule = require('./lib/series-service');
+const seriesServiceModule = require('./lib/series-background-service');
 const dictionaryManagerModule = require('./lib/syobocal-dictionary-manager');
 const syobocalChannelCatalogModule = require('./lib/syobocal-channel-catalog');
 const syobocalChannelMapManagerModule = require('./lib/syobocal-channel-map-manager');
@@ -215,6 +215,10 @@ const seriesService = seriesServiceModule.createSeriesService({
 	dictionaryPath: SERIES_DICTIONARY_FILE,
 	getDictionaryStatus: () => dictionaryManager && dictionaryManager.getStatus(),
 	channelMapPath: SERIES_CHANNEL_MAP_FILE,
+	progLookupPath: SERIES_PROGLOOKUP_CACHE_FILE,
+	onPublished: generation => ios.emit('notify-series', { generation }),
+	onStatus: () => ios.emit('notify-series-status'),
+	log: util.log,
 	progLookupStore,
 	manualPath: SERIES_MANUAL_OVERRIDE_FILE,
 	thumbnailDir: RECORDED_THUMBNAIL_DIR,
@@ -250,7 +254,7 @@ const progLookupUpdater = progLookupUpdaterModule.createProgLookupUpdater({
 	onUpdateApplied: async update => {
 		await syobocalChannelMapManager.rebuild({ refreshCatalog: update.kind === 'full' });
 		seriesService.invalidate({ retain: true });
-		ios.emit('notify-series');
+		ios.emit('notify-series-status');
 	},
 	userAgent: `Chinachu-thorn/${pkg.version} (ProgLookup; WUI)`,
 	log: util.log
@@ -263,11 +267,11 @@ dictionaryManager = dictionaryManagerModule.createDictionaryManager({
 	userAgent: `Chinachu-thorn/${pkg.version} (TitleLookup dictionary; WUI)`,
 	getNextRequestAt: () => officialRequests ? officialRequests.getNextAt() : 0,
 	log: util.log,
-	onStatus: () => ios.emit('notify-series'),
+	onStatus: () => ios.emit('notify-series-status'),
 	onPublished: () => dictionaryManagerModule.applyDictionaryToSeries({
 		background: true, waitForBackground: waitForSeriesBackground,
 		seriesService, channelMapManager: syobocalChannelMapManager, progLookupUpdater,
-		notify: () => ios.emit('notify-series')
+		notify: () => ios.emit('notify-series-status')
 	})
 });
 const initialAuthStatus = wuiAuth.statusFor(null);
@@ -1308,6 +1312,7 @@ function ioAddListener(server) {
 	iosAddEventListner(io, 'notify-match');
 	iosAddEventListner(io, 'notify-schedule');
 	iosAddEventListner(io, 'notify-series');
+	iosAddEventListner(io, 'notify-series-status');
 
 	return io;
 }
@@ -1392,6 +1397,7 @@ chinachu.jsonWatcher(
 			return;
 		}
 
+		seriesService.invalidate({ retain: true });
 		reserves = data;
 		seriesTimingReady |= 1;
 		ios.emit('notify-reserves');
@@ -1426,6 +1432,7 @@ chinachu.jsonWatcher(
 			return;
 		}
 
+		seriesService.invalidate({ retain: true });
 		recorded = data;
 		ios.emit('notify-recorded');
 		util.log(mes);
@@ -1443,6 +1450,7 @@ chinachu.jsonWatcher(
 			return;
 		}
 
+		seriesService.invalidate({ retain: true });
 		ios.emit('notify-match');
 		util.log(mes);
 	},

@@ -14,7 +14,7 @@ import { openRecordedPlaybackOverlay } from '../services/live-player-adapter.js'
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { deleteRecordedFromContext } from '../services/recorded-delete-action.js';
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
-import { subscribeMatchNotifications } from '../services/realtime-client.js';
+import { subscribeMatchNotifications, subscribeSeriesNotifications } from '../services/realtime-client.js';
 import { openCleanerDialog } from '../components/cleaner-dialog.js';
 import { loadSeriesProjection } from '../services/series-client.js';
 import { buildSeriesTitleIndex } from '../services/program-title.js';
@@ -445,8 +445,10 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
         results: resultValues(),
         signal: controller.signal
       });
-      const seriesPromise = reset ? loadSeriesProjection({ signal: controller.signal }).catch(() => null) : null;
-      const [result, seriesSnapshot] = await Promise.all([resultPromise, seriesPromise]);
+      const result = await resultPromise;
+      const nextItems = reset ? result.items.slice() : appendUnique(items.slice(), result.items);
+      const seriesSnapshot = await loadSeriesProjection({ signal: controller.signal,
+        eventKeys: nextItems.map(item => item.key) }).catch(() => null);
       if (!isActive() || sequence !== requestSequence) return;
       if (seriesSnapshot !== null) {
         seriesTitleIndex = buildSeriesTitleIndex(seriesSnapshot);
@@ -493,7 +495,6 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     try {
       const refreshed = [];
       let lastResult = null;
-      const seriesPromise = loadSeriesProjection({ signal: controller.signal }).catch(() => null);
       for (let pageNumber = 1; pageNumber <= pagesToReload; pageNumber += 1) {
         const result = await loadResults({
           page: pageNumber,
@@ -507,7 +508,8 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
         lastResult = result;
         if (pageNumber >= result.totalPages) break;
       }
-      const seriesSnapshot = await seriesPromise;
+      const seriesSnapshot = await loadSeriesProjection({ signal: controller.signal,
+        eventKeys: refreshed.map(item => item.key) }).catch(() => null);
       if (!isActive() || sequence !== requestSequence || lastResult === null) return;
       if (seriesSnapshot !== null) {
         seriesTitleIndex = buildSeriesTitleIndex(seriesSnapshot);
@@ -844,6 +846,9 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     invalidateFilteredCache();
     requestDynamicRefresh();
   });
+  const unsubscribeSeries = subscribeSeriesNotifications(update => {
+    if (update?.generation) requestDynamicRefresh();
+  });
   loadPage(true);
 
   return () => {
@@ -859,6 +864,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     contextMenu.destroy();
     setHeaderActions();
     unsubscribe();
+    unsubscribeSeries();
     clearCards();
     dismissReservationProgramPreview();
   };
