@@ -90,6 +90,7 @@ function createFfmpegFixture(temporaryDir) {
 
 function createMirakurunStub(streamHandler) {
 	const sockets = new Set();
+	const recordingConnections = [];
 	const docs = {
 		swagger: '2.0',
 		basePath: '/api',
@@ -116,6 +117,11 @@ function createMirakurunStub(streamHandler) {
 		}
 
 		if (/^\/api\/programs\/1\/stream\?/.test(req.url)) {
+			// Register before the handler can end or destroy the stream. Keep
+			// the close result even when the test starts waiting afterwards.
+			const connection = { socket: req.socket, closed: false };
+			recordingConnections.push(connection);
+			connection.socket.once('close', () => { connection.closed = true; });
 			if (streamHandler) {
 				streamHandler(req, res);
 				return;
@@ -136,11 +142,11 @@ function createMirakurunStub(streamHandler) {
 		socket.once('close', () => sockets.delete(socket));
 	});
 
-	return { server, sockets };
+	return { server, sockets, recordingConnections };
 }
 
 describe('Operator recording stream termination', function() {
-	it('continues the same recording after a temporary silent input stream recovers', { timeout: 15000 }, async function() {
+	it('recovers a silent stream and keeps Operator responsive while serialized post-processing runs', { timeout: 40000 }, async function() {
 		const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-operator-silent-stream-'));
 		const dataDir = path.join(temporaryDir, 'data');
 		const logDir = path.join(temporaryDir, 'log');
@@ -149,8 +155,11 @@ describe('Operator recording stream termination', function() {
 		const ffprobePath = path.join(temporaryDir, 'ffprobe-fixture.js');
 		const ffmpegLog = path.join(temporaryDir, 'ffmpeg.log');
 		const thumbnailPath = path.join(dataDir, 'thumbnails', '1.jpg');
+		const matchingStarted = path.join(temporaryDir, 'matching.started');
+		const matchingRelease = path.join(temporaryDir, 'matching.release');
+		const matchingFinished = path.join(temporaryDir, 'matching.finished');
 		let streamResponse = null;
-		const { server, sockets } = createMirakurunStub((req, res) => {
+		const { server, sockets, recordingConnections } = createMirakurunStub((req, res) => {
 			streamResponse = res;
 			res.writeHead(200, {
 				'Content-Type': 'video/MP2T',
@@ -192,6 +201,26 @@ describe('Operator recording stream termination', function() {
 			fs.symlinkSync(path.join(repositoryRoot, 'node_modules'), path.join(temporaryDir, 'node_modules'), 'dir');
 			fs.copyFileSync(path.join(repositoryRoot, 'app-operator.js'), path.join(temporaryDir, 'app-operator.js'));
 			fs.copyFileSync(path.join(repositoryRoot, 'package.json'), path.join(temporaryDir, 'package.json'));
+			// These are required runtime entry points, not the Scheduler/matcher
+			// being tested here. Keep their effects local and controllable.
+			fs.writeFileSync(path.join(temporaryDir, 'chinachu'), '#!/usr/bin/env node\nprocess.exit(0);\n');
+			fs.chmodSync(path.join(temporaryDir, 'chinachu'), 0o755);
+			fs.writeFileSync(path.join(temporaryDir, 'app-matching.js'), [
+				'const fs = require("fs");',
+				'const path = require("path");',
+				'const release = path.join(__dirname, "matching.release");',
+				'let finished = false;',
+				'function finish(reason) {',
+				'  if (finished) return;',
+				'  finished = true; clearTimeout(deadline); watcher.close();',
+				'  fs.writeFileSync(path.join(__dirname, "matching.finished"), reason);',
+				'}',
+				'const watcher = fs.watch(__dirname, () => { if (fs.existsSync(release)) finish("released"); });',
+				'const deadline = setTimeout(() => finish("timeout"), 10000);',
+				'process.once("SIGTERM", () => finish("signal"));',
+				'fs.writeFileSync(path.join(__dirname, "matching.started"), "started");',
+				'if (fs.existsSync(release)) finish("released");'
+			].join('\n') + '\n');
 			fs.writeFileSync(ffprobePath, '#!/usr/bin/env node\nprocess.stdout.write("120\\n");\n');
 			fs.chmodSync(ffprobePath, 0o755);
 			createFfmpegFixture(temporaryDir);
@@ -252,25 +281,46 @@ describe('Operator recording stream termination', function() {
 				3000
 			);
 			await waitForCondition(
-				() => !processHasOpenPath(child.pid, recordedPath) && sockets.size === 0,
+				() => !processHasOpenPath(child.pid, recordedPath) &&
+					recordingConnections.length > 0 && recordingConnections.every(connection => connection.closed),
 				'Recovered recording resources remained open',
 				3000
 			);
+			await waitForCondition(() => fs.existsSync(matchingStarted),
+				'Match did not resume after the recording handoff window. Output:\n' + output, 22000);
+			assert.strictEqual(fs.existsSync(matchingFinished), false);
+			assert.strictEqual(fs.existsSync(ffmpegLog), false, 'Thumbnail overlapped a running match worker');
+			const readsBefore = (output.match(/READ: .*reserves\.json.*updated/g) || []).length;
+			const futureReserve = Object.assign({}, program, {
+				start: Date.now() + 3600000, end: Date.now() + 3660000
+			});
+			fs.writeFileSync(path.join(dataDir, 'reserves.json'), JSON.stringify([futureReserve]));
+			await waitForCondition(
+				() => (output.match(/READ: .*reserves\.json.*updated/g) || []).length > readsBefore,
+				'Operator event loop stopped while match was running. Output:\n' + output, 3000);
+			assert.strictEqual(fs.existsSync(matchingFinished), false);
+			assert.strictEqual(fs.existsSync(ffmpegLog), false);
+			fs.writeFileSync(matchingRelease, 'release');
 			await waitForCondition(
 				() => fs.existsSync(path.join(dataDir, 'bitrate-stats.json')) &&
 					fs.existsSync(thumbnailPath) &&
 					JSON.parse(fs.readFileSync(path.join(dataDir, 'recorded.json'), 'utf8'))[0].recordedDurationSeconds === 120,
 				'Normal recording did not update duration and bitrate statistics. Output:\n' + output,
-				3000
+				25000 // The held match has been released; the queued thumbnail must finish.
 			);
 
 			const recorded = JSON.parse(fs.readFileSync(path.join(dataDir, 'recorded.json'), 'utf8'));
 			assert.strictEqual(recorded.length, 1);
 			assert.strictEqual(recorded[0].recorded, recordedPath);
 			assert.strictEqual(recorded[0].recordedDurationSeconds, 120);
+			assert.strictEqual(fs.readFileSync(matchingFinished, 'utf8'), 'released');
 			assert.strictEqual(fs.readFileSync(recordedPath, 'utf8'), 'PART1PART2');
 			assert.deepStrictEqual(fs.readFileSync(thumbnailPath), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
 			assert.strictEqual(fs.readFileSync(ffmpegLog, 'utf8').trim().split('\n').length, 1);
+			const thumbnailArgs = JSON.parse(fs.readFileSync(ffmpegLog, 'utf8').trim());
+			assert.strictEqual(thumbnailArgs[thumbnailArgs.indexOf('-threads') + 1], '1');
+			assert.strictEqual(thumbnailArgs[thumbnailArgs.lastIndexOf('-threads') + 1], '1');
+			assert.strictEqual(thumbnailArgs[thumbnailArgs.indexOf('-filter_threads') + 1], '1');
 			assert.doesNotMatch(output, /NG RECORDING/);
 			assert.doesNotMatch(output, /uncaughtException/);
 
@@ -280,6 +330,12 @@ describe('Operator recording stream termination', function() {
 			assert.strictEqual(exit.signal, null);
 			assert.strictEqual(exit.code, 0);
 		} finally {
+			// Release the owned matcher before removing its watched directory,
+			// including assertion failures while it is held.
+			if (fs.existsSync(matchingStarted) && !fs.existsSync(matchingFinished)) {
+				fs.writeFileSync(matchingRelease, 'release');
+				await waitForCondition(() => fs.existsSync(matchingFinished), 'Match fixture did not exit', 2000).catch(() => {});
+			}
 			if (child && child.exitCode === null && child.signalCode === null) {
 				child.kill('SIGKILL');
 				await waitForExit(child, 2000).catch(() => {});
@@ -302,7 +358,7 @@ describe('Operator recording stream termination', function() {
 		const recordedPath = path.join(recordedDir, '1.m2ts');
 		const ffmpegLog = path.join(temporaryDir, 'ffmpeg.log');
 		const thumbnailPath = path.join(dataDir, 'thumbnails', '1.jpg');
-		const { server, sockets } = createMirakurunStub();
+		const { server, sockets, recordingConnections } = createMirakurunStub();
 		let child = null;
 		let output = '';
 
@@ -394,7 +450,7 @@ describe('Operator recording stream termination', function() {
 				3000
 			);
 			await waitForCondition(
-				() => sockets.size === 0,
+				() => recordingConnections.length > 0 && recordingConnections.every(connection => connection.closed),
 				'Mirakurun input stream socket remained open',
 				3000
 			);

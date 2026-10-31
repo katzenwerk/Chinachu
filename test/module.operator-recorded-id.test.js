@@ -69,7 +69,7 @@ async function stopChild(child) {
 }
 
 describe('Operator recorded ID collisions', function() {
-	it('keeps repeated recordings for one program as unique ledger entries and files', { timeout: 30000 }, async function() {
+	it('keeps repeated recordings unique, including replay of an already saved completion', { timeout: 30000 }, async function() {
 		const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-recorded-id-'));
 		const dataDir = path.join(temporaryDir, 'data');
 		const recordedDirs = [ 'A', 'B', 'C' ].map(name => path.join(temporaryDir, name));
@@ -79,6 +79,13 @@ describe('Operator recorded ID collisions', function() {
 		let streamRequestCount = 0;
 		let operator = null;
 		let mirakurunServer = null;
+		function startOperator() {
+			operator = childProcess.spawn(process.execPath, [ 'app-operator.js' ], {
+				cwd: temporaryDir,
+				stdio: 'ignore',
+				env: Object.assign({}, process.env, { CHINACHU_RUNTIME_DIR: path.join(temporaryDir, 'runtime') })
+			});
+		}
 
 		function readData(name) {
 			return JSON.parse(fs.readFileSync(path.join(dataDir, name + '.json'), 'utf8'));
@@ -94,6 +101,8 @@ describe('Operator recorded ID collisions', function() {
 			[ 'app-operator.js', 'package.json' ].forEach(name => {
 				fs.copyFileSync(path.join(repositoryRoot, name), path.join(temporaryDir, name));
 			});
+			fs.writeFileSync(path.join(temporaryDir, 'chinachu'), '#!/usr/bin/env node\nprocess.exit(0);\n');
+			fs.chmodSync(path.join(temporaryDir, 'chinachu'), 0o755);
 			[ 'reserves2', 'recording', 'recorded', 'match' ].forEach(name => {
 				fs.writeFileSync(path.join(dataDir, name + '.json'), '[]');
 			});
@@ -154,11 +163,7 @@ describe('Operator recorded ID collisions', function() {
 				createProgram(fixedStart, 'Part 1 metadata', recordedDirs[0])
 			]));
 
-			operator = childProcess.spawn(process.execPath, [ 'app-operator.js' ], {
-				cwd: temporaryDir,
-				stdio: 'ignore',
-				env: Object.assign({}, process.env, { CHINACHU_RUNTIME_DIR: path.join(temporaryDir, 'runtime') })
-			});
+			startOperator();
 
 			const expectedIds = [
 				[ '2' ],
@@ -193,6 +198,21 @@ describe('Operator recorded ID collisions', function() {
 				assert.strictEqual(new Set(finalized.map(program => program.id)).size, finalized.length);
 				assert.strictEqual(new Set(finalized.map(program => program.recorded)).size, finalized.length);
 				assert.ok(finalized.every(program => program.programId === '2'));
+				if (index === 0) {
+					// Reproduce a crash after recorded committed but before the
+					// recovery row was cleared. Replaying must not duplicate the row
+					// or overwrite duration metadata saved after that snapshot.
+					await stopChild(operator);
+					const pending = Object.assign({}, finalized[0], { _operatorHistoryPending: true });
+					const latest = Object.assign({}, finalized[0], { recordedDurationSeconds: 321 });
+					fs.writeFileSync(path.join(dataDir, 'recorded.json'), JSON.stringify([ latest ]));
+					fs.writeFileSync(path.join(dataDir, 'recording.json'), JSON.stringify([ pending ]));
+					startOperator();
+					await waitForCondition(() => readData('recording').length === 0,
+						'Already saved completion was not recovered', 8000);
+					assert.deepStrictEqual(readData('recorded'), [ latest ]);
+					assert.strictEqual(streamRequestCount, 1);
+				}
 
 				if (index < 2) {
 					const current = finalized.find(program => program.id === '2');
@@ -210,6 +230,7 @@ describe('Operator recorded ID collisions', function() {
 			const finalRecorded = readData('recorded');
 			assert.deepStrictEqual(finalRecorded.map(program => program.id), expectedIds[2]);
 			assert.deepStrictEqual(finalRecorded.map(program => program.recorded), recordedDirs.map(dir => path.join(dir, '2.m2ts')));
+			assert.strictEqual(finalRecorded[0].recordedDurationSeconds, 321);
 			recordedDirs.forEach((dir, index) => {
 				assert.strictEqual(fs.readFileSync(path.join(dir, '2.m2ts'), 'utf8'), 'PART' + (index + 1));
 			});

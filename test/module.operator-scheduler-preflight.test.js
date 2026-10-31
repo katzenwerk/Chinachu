@@ -3,6 +3,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -98,12 +100,12 @@ function createFixture(options) {
 		baselines: baselines
 	});
 
-	const calls = { jobs: 0, services: 0, tuners: 0 };
 	const preflight = new preflightModule.OperatorSchedulerPreflight({
+		worker: true,
 		stateStore: store,
-		fetchJobs: options.fetchJobs || (() => { calls.jobs++; return Promise.resolve(values.jobs); }),
-		fetchServices: options.fetchServices || (() => { calls.services++; return Promise.resolve(values.services); }),
-		fetchTuners: options.fetchTuners || (() => { calls.tuners++; return Promise.resolve(values.tuners); }),
+		fetchJobs: options.fetchJobs || (() => Promise.resolve(values.jobs)),
+		fetchServices: options.fetchServices || (() => Promise.resolve(values.services)),
+		fetchTuners: options.fetchTuners || (() => Promise.resolve(values.tuners)),
 		paths: paths,
 		now: () => 5000
 	});
@@ -114,9 +116,13 @@ function createFixture(options) {
 		values: values,
 		baselines: baselines,
 		store: store,
-		calls: calls,
 		preflight: preflight,
-		cleanup: () => fs.rmSync(directory, { recursive: true, force: true })
+		async cleanup() {
+			const worker = preflight.worker;
+			preflight.stop();
+			if (worker) await worker.terminate();
+			fs.rmSync(directory, { recursive: true, force: true });
+		}
 	};
 }
 
@@ -163,6 +169,48 @@ function createStateFixture() {
 	return { store, cleanup: () => fs.rmSync(directory, { recursive: true, force: true }) };
 }
 
+function createOperatorLaunchFixture(store) {
+	// Evaluate the actual launch/finalize/shutdown-completion functions without
+	// starting Operator, opening sockets or reading its production ledgers.
+	const source = fs.readFileSync(path.join(__dirname, '..', 'app-operator.js'), 'utf8');
+	const start = source.indexOf('function startScheduler() {');
+	const end = source.indexOf('function shutdownOperator(signal) {', start);
+	assert.ok(start >= 0 && end > start);
+	const children = [];
+	const exits = [];
+	const logs = [];
+	const runtime = {
+		scheduler: null, schedulerStartedAt: 0, shutdownStarted: false,
+		matchLedgerProcess: null, pendingRecordedLedgerWrites: 0,
+		activeRecordingOutputs: new Set(), activeDurationProbes: new Set(), failedRecordingSaves: new Set(),
+		process: { platform: process.platform, exit: code => exits.push(code) },
+		operatorLog: message => logs.push(message),
+		scheduleMatchLedgerUpdate: () => assert.fail('No overlapping match was started by this fixture'),
+		wakePostProcessing: () => {},
+		child_process: {
+			spawn() {
+				if (runtime.throwNext) { runtime.throwNext = false; throw new Error('spawn failed synchronously'); }
+				const child = new EventEmitter();
+				child.pid = runtime.failNext ? undefined : 100 + children.length;
+				child.stdout = runtime.failNext ? null : { resume() {} };
+				runtime.failNext = false;
+				children.push(child);
+				return child;
+			}
+		}
+	};
+	vm.runInNewContext(source.slice(start, end), runtime, { filename: 'app-operator-scheduler-fixture.js' });
+	const coordinator = operatorSchedulerRequest.createSchedulerRequest({
+		isSchedulerRunning: () => runtime.scheduler !== null,
+		getSchedulerStartedAt: () => runtime.schedulerStartedAt,
+		isShuttingDown: () => runtime.shutdownStarted,
+		startScheduler: runtime.startScheduler,
+		stateStore: store
+	});
+	runtime.schedulerRequest = coordinator;
+	return { runtime, children, exits, logs, coordinator };
+}
+
 describe('Operator scheduler preflight', function() {
 	it('classifies clean, content, metadata-only, and unavailable inputs', async function() {
 		const local = createFixture();
@@ -177,10 +225,32 @@ describe('Operator scheduler preflight', function() {
 			const future = new Date(Date.now() + 5000);
 			fs.utimesSync(local.paths.rules, future, future);
 			assert.strictEqual((await local.preflight.check()).reasons.includes('rules'), false);
+			let entered;
+			let release;
+			const fetching = new Promise(resolve => { entered = resolve; });
+			const remoteReady = new Promise(resolve => { release = resolve; });
+			const fetchJobs = local.preflight.fetchJobs;
+			local.preflight.fetchJobs = () => { entered(); return remoteReady.then(fetchJobs); };
+			const checking = local.preflight.check();
+			assert.strictEqual(local.preflight.check(), checking);
+			await fetching;
+			assert.ok(local.preflight.worker, 'The actual check must execute in a Worker');
 			writeJson(local.paths.rules, [ { types: [ 'BS' ] } ]);
+			release();
+			const changedWhileChecking = await checking;
+			assert.strictEqual(changedWhileChecking.dirty, true);
+			assert.ok(changedWhileChecking.reasons.includes('preflight-input-changed'));
+			assert.strictEqual(local.preflight.worker, null);
+			assert.strictEqual(local.preflight.getState().checkPending, false);
+			local.preflight.fetchJobs = fetchJobs;
 			assert.ok((await local.preflight.check()).reasons.includes('rules'));
+			writeJson(local.paths.rules, local.values.rules);
+			writeJson(local.paths.recorded, [{ id: 'new-recording' }]);
+			const recordedOnly = await local.preflight.check();
+			assert.strictEqual(recordedOnly.dirty, false);
+			assert.ok(recordedOnly.advisory.includes('recorded'));
 		} finally {
-			local.cleanup();
+			await local.cleanup();
 		}
 
 		const remote = createFixture();
@@ -194,58 +264,116 @@ describe('Operator scheduler preflight', function() {
 				remote.preflight[property] = original;
 			}
 		} finally {
-			remote.cleanup();
+			await remote.cleanup();
 		}
 	});
 
-	it('skips clean periodic checks and starts one scheduler for dirty results', async function() {
+	it('skips clean periodic checks, starts dirty updates, and falls back after worker failure', async function() {
 		for (const testCase of [
 			{
-				result: { dirty: false, reasons: [], advisory: [] },
+				workerFailure: false,
 				expectedStarted: false,
 				expectedStarts: 0
 			},
 			{
-				result: { dirty: true, reasons: [ 'rules' ], advisory: [] },
+				workerFailure: false,
+				changedRules: true,
+				expectedStarted: true,
+				expectedStarts: 1
+			},
+			{
+				workerFailure: true,
 				expectedStarted: true,
 				expectedStarts: 1
 			}
 		]) {
 			let starts = 0;
 			const logs = [];
+			const fixture = createFixture();
+			if (testCase.changedRules) writeJson(fixture.paths.rules, [{ types: ['BS'] }]);
+			if (testCase.workerFailure) {
+				fixture.preflight.fetchJobs = async () => {
+					await fixture.preflight.worker.terminate();
+					return jobsFixture();
+				};
+			}
 			const runner = new preflightModule.ShadowPeriodicScheduler({
-				preflight: { check: () => Promise.resolve(testCase.result) },
+				preflight: fixture.preflight,
 				startScheduler: () => { starts++; return true; },
 				log: message => logs.push(message)
 			});
-			const first = runner.request();
-			const second = runner.request();
-			assert.strictEqual(first, second);
-			assert.strictEqual((await first).started, testCase.expectedStarted);
-			assert.strictEqual(starts, testCase.expectedStarts);
-			assert.strictEqual(logs.length, 1);
+			try {
+				const first = runner.request();
+				const second = runner.request();
+				assert.strictEqual(first, second);
+				assert.strictEqual((await first).started, testCase.expectedStarted);
+				assert.strictEqual(starts, testCase.expectedStarts);
+				assert.strictEqual(logs.length, 1);
+				assert.strictEqual(fixture.preflight.worker, null);
+				assert.strictEqual(fixture.preflight.getState().checkPending, false);
+				if (testCase.workerFailure) assert.match(logs[0], /preflight-error/);
+			} finally {
+				runner.stop();
+				await fixture.cleanup();
+			}
 		}
 	});
 
 });
 
 describe('Operator EPG scheduler requests', function() {
-	it('starts once per clean parent and records it only after scheduler success', function() {
+	it('records successful parents and releases failed Scheduler launches exactly once', function() {
 		const fixture = createStateFixture();
 		try {
-			const request = createRequestFixture({ stateStore: fixture.store });
+			const request = createOperatorLaunchFixture(fixture.store);
 			assert.strictEqual(request.coordinator.requestEpgCycle('parent-1', cleanSummary()), true);
 			assert.strictEqual(request.coordinator.requestEpgCycle('parent-1', cleanSummary()), false);
-			assert.strictEqual(request.state.starts, 1);
+			assert.strictEqual(request.children.length, 1);
 			assert.strictEqual(fixture.store.load().lastAppliedParentId, null);
 
 			fixture.store.recordSchedulerSuccess(4500, 5000);
-			request.state.running = false;
-			request.coordinator.onSchedulerExit({ successful: true, finishedAt: 5100 });
+			request.children[0].emit('exit', 0, null);
+			request.children[0].emit('close', 0, null);
 			const saved = fixture.store.load();
 			assert.strictEqual(saved.lastSchedulerStartedAt, 4500);
 			assert.strictEqual(saved.lastSchedulerSuccessAt, 5000);
 			assert.strictEqual(saved.lastAppliedParentId, 'parent-1');
+			assert.strictEqual(request.runtime.scheduler, null);
+			assert.strictEqual(request.runtime.schedulerStartedAt, 0);
+
+			request.runtime.failNext = true;
+			assert.strictEqual(request.coordinator.requestEpgCycle('parent-2', cleanSummary()), true);
+			assert.strictEqual(request.coordinator.requestEpgCycle('parent-3', cleanSummary()), true);
+			const failedChild = request.children[1];
+			failedChild.emit('error', new Error('spawn ./chinachu ENOENT'));
+			assert.strictEqual(request.children.length, 3, 'Pending work must start after launch failure');
+			assert.strictEqual(request.runtime.scheduler, request.children[2]);
+			failedChild.emit('exit', 0, null);
+			failedChild.emit('close', 0, null);
+			assert.strictEqual(request.runtime.scheduler, request.children[2], 'Late events must not clear the next child');
+			assert.strictEqual(fixture.store.load().lastAppliedParentId, 'parent-1');
+			assert.strictEqual(request.coordinator.activeParentIds.has('parent-2'), false);
+			request.children[2].emit('error', new Error('kill EPERM'));
+			request.children[2].emit('error', new Error('kill EPERM'));
+			assert.strictEqual(request.runtime.scheduler, request.children[2], 'A signalling error must not release a running child');
+			request.children[2].emit('exit', 1, null);
+			request.children[2].emit('close', 1, null);
+			assert.strictEqual(request.runtime.scheduler, null);
+			assert.strictEqual(request.runtime.schedulerStartedAt, 0);
+
+			request.runtime.throwNext = true;
+			assert.strictEqual(request.coordinator.requestEpgCycle('parent-2', cleanSummary()), false);
+			assert.strictEqual(request.coordinator.activeParentIds.size, 0);
+			request.runtime.failNext = true;
+			assert.strictEqual(request.coordinator.requestEpgCycle('parent-2', cleanSummary()), true);
+			request.runtime.shutdownStarted = true;
+			request.children[3].emit('error', new Error('spawn ./chinachu EACCES'));
+			request.children[3].emit('close', -1, null);
+			assert.strictEqual(request.runtime.scheduler, null);
+			assert.strictEqual(request.runtime.schedulerStartedAt, 0);
+			assert.deepStrictEqual(request.exits, [0], 'Shutdown completion must run only once');
+			assert.strictEqual(fixture.store.load().lastAppliedParentId, 'parent-1');
+			assert.ok(request.logs.some(message => /Scheduler process failed.*ENOENT/.test(message)));
 		} finally {
 			fixture.cleanup();
 		}

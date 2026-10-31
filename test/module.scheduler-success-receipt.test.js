@@ -324,19 +324,29 @@ describe('Common scheduler success receipt', function() {
 });
 
 describe('Scheduler reservation snapshot propagation', function() {
-	it('reservation store serializes updates and rereads after a Cleaner-style deletion', async function() {
+	it('reservation store waits asynchronously and rereads after a Cleaner-style deletion', async function() {
 		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-reservation-store-race-'));
 		const historyFile = path.join(directory, 'reserves2.json');
 		const oldHistory = { id: 'old-history', start: 1, end: 2, seconds: 1, channel: { id: 'old' } };
 		const currentReserve = { id: 'current', start: 3, end: 4, seconds: 1, channel: { id: 'current' } };
+		const asyncReserve = { id: 'async-current', start: 5, end: 6, seconds: 1, channel: { id: 'async' } };
 		fs.writeFileSync(historyFile, JSON.stringify([oldHistory]));
 		const cleanerLock = reservationStore.acquire(historyFile);
 		let released = false;
+		let asyncSaved = null;
 		try {
 			assert.throws(() => reservationStore.updateArrayAtomic(historyFile, current => current, {
 				lock: { timeoutMs: 0 }
 			}), error => error.code === 'RESERVATION_LOCK_TIMEOUT');
 			assert.deepStrictEqual(JSON.parse(fs.readFileSync(historyFile, 'utf8')), [oldHistory]);
+			// Wait in this process while a synchronous Scheduler-style writer
+			// starts in another. The IPC release below cannot run if this wait
+			// blocks the event loop. Both writers must reread after the deletion.
+			asyncSaved = reservationStore.withLockAsync(historyFile, () => {
+				const latest = reservationStore.readArray(historyFile);
+				reservationStore.writeArrayAtomic(historyFile, latest.concat([asyncReserve]));
+			});
+			asyncSaved.catch(() => {}); // The result is awaited below, including failures.
 			const script = [
 				"const store = require(process.argv[1]);",
 				"const file = process.argv[2];",
@@ -362,9 +372,12 @@ describe('Scheduler reservation snapshot propagation', function() {
 			});
 			const result = await completed;
 			assert.strictEqual(result.status, 0, result.stderr);
-			assert.deepStrictEqual(JSON.parse(fs.readFileSync(historyFile, 'utf8')), [currentReserve]);
+			await asyncSaved;
+			const saved = JSON.parse(fs.readFileSync(historyFile, 'utf8')).sort((left, right) => left.id.localeCompare(right.id));
+			assert.deepStrictEqual(saved, [asyncReserve, currentReserve]);
 		} finally {
 			if (!released) cleanerLock.release();
+			if (asyncSaved) await asyncSaved.catch(() => {});
 			fs.rmSync(directory, { recursive: true, force: true });
 		}
 	});

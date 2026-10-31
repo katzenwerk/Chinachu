@@ -30,6 +30,7 @@ const fs = require('fs');
 const util = require('util');
 const http = require('http');
 const https = require('https');
+const os = require('os');
 
 function formatJstLogTime() {
 	const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
@@ -351,8 +352,14 @@ try {
 	process.exit(1);
 }
 
-// 録画中リストをクリア
-fs.writeFileSync(RECORDING_DATA_FILE, '[]');
+// Keep started recordings until their history transaction has committed. A
+// previous process may have exited while waiting for the recorded ledger lock.
+try {
+	recording = reservationStore.readArray(RECORDING_DATA_FILE);
+} catch (error) {
+	console.error('[fatal] recording recovery data cannot be read: ' + error.message);
+	process.exit(1);
+}
 
 // 保存先ディレクトリが存在しない場合には作成
 if (!fs.existsSync(config.recordedDir)) {
@@ -413,12 +420,26 @@ let broadcastClockState = null;
 let broadcastClockStateWritable = true;
 const activeRecordingOutputs = new Set();
 const activeDurationProbes = new Set();
+const durationProbeQueue = [];
+let recordedLedgerWrites = Promise.resolve();
+let pendingRecordedLedgerWrites = 0;
+const failedRecordingSaves = new Set();
+let lastRecordingTransitionAt = 0;
 const recordedThumbnailGenerator = recordedThumbnail.createGenerator({
 	outputDir: RECORDED_THUMBNAIL_DIR,
 	log: operatorLog,
 	timeoutMs: 30000,
-	maxPending: 4,
-	maxQueueAgeMs: 60000
+	maxPending: 64,
+	maxQueueAgeMs: 10 * 60 * 1000,
+	getRunDelay: job => {
+		if (shutdownStarted || matchLedgerProcess || activeDurationProbes.size !== 0 ||
+			pendingRecordedLedgerWrites !== 0) return Infinity;
+		const nextProbeAt = durationProbeQueue.length ? durationProbeQueue[0].queuedAt : Infinity;
+		const nextMatchAt = matchLedgerUpdateReason && scheduler === null ? matchLedgerPendingAt : Infinity;
+		if (job.requestedAt >= Math.min(nextProbeAt, nextMatchAt)) return Infinity;
+		return postProcessingDelay();
+	},
+	onIdle: () => wakePostProcessing()
 });
 
 // EPG由来のscheduler要求だけをsingle pendingへ集約する。
@@ -441,6 +462,7 @@ async function fetchMirakurunJobs() {
 }
 
 const schedulerPreflight = new operatorSchedulerPreflight.OperatorSchedulerPreflight({
+	worker: true,
 	stateStore: schedulerStateStore,
 	fetchJobs: fetchMirakurunJobs,
 	fetchServices: () => mirakurun.getServices(),
@@ -548,7 +570,7 @@ function hasPrepReserveCheckTarget() {
 	return false;
 }
 
-reserveCheckLoop();
+// Start checking reservations after recovering the previous recording state.
 
 // 裏ループ
 operatorInterval = setInterval(() => {
@@ -760,6 +782,7 @@ function recordingUpdater(program) {
 
 	for (let i = 0, l = recording.length; i < l; i++) {
 		if (recording[i].id === program.id) {
+			if (recording[i]._operatorHistoryPending || recording[i]._operatorManualRemovalPending) return;
 			copyKeys.forEach(k => {
 				if (program.hasOwnProperty(k)) {
 					recording[i][k] = program[k];
@@ -793,25 +816,32 @@ function stopScheduler() {
 function startScheduler() {
 	if (scheduler !== null) { return false; }
 
-	var finalize;
+	let finalized = false;
+	const overlappedMatch = matchLedgerProcess !== null;
 
-	scheduler = child_process.spawn('./chinachu', [ 'update' ], {
-		detached: process.platform !== 'win32'
-	});
+	try {
+		scheduler = child_process.spawn('./chinachu', [ 'update' ], {
+			detached: process.platform !== 'win32'
+		});
+	} catch (error) {
+		operatorLog('ERROR: Scheduler start failed: ' + error.message);
+		return false;
+	}
 	schedulerStartedAt = Date.now();
 	const startedScheduler = scheduler;
-	operatorLog('SPAWN: ./chinachu update (pid=' + scheduler.pid + ')');
 
-	// ./chinachu update 側の tee が scheduler log を保存する。
-	// 転送された stdout は再追記せず、pipe が詰まらないよう明示的に drain する。
-	scheduler.stdout.resume();
-
-	finalize = function (code, signal) {
+	const finalize = function (code, signal) {
+		if (finalized) return;
+		finalized = true;
 
 		operatorLog('EXIT: node app-scheduler.js (pid=' + startedScheduler.pid + ')');
 
 		scheduler = null;
 		schedulerStartedAt = 0;
+		// Its synchronous match worker may have timed out on our match lock,
+		// while our earlier snapshot missed the Scheduler's new reservations.
+		if (overlappedMatch) scheduleMatchLedgerUpdate('scheduler overlap');
+		wakePostProcessing();
 		schedulerRequest.onSchedulerExit({
 			successful: code === 0 && signal === null,
 			finishedAt: Date.now()
@@ -819,18 +849,31 @@ function startScheduler() {
 		completeOperatorShutdown();
 	};
 
-	scheduler.once('exit', finalize);
+	startedScheduler.on('error', error => {
+		operatorLog('ERROR: Scheduler process failed: ' + error.message);
+		// A failed spawn has no PID and may emit close without exit. Errors
+		// from signalling a running child must not release its execution slot.
+		if (!startedScheduler.pid) finalize(null, null);
+	});
+	startedScheduler.once('exit', finalize);
+	startedScheduler.once('close', finalize);
+	operatorLog('SPAWN: ./chinachu update (pid=' + startedScheduler.pid + ')');
+
+	// ./chinachu update 側の tee が scheduler log を保存する。
+	// 転送された stdout は再追記せず、pipe が詰まらないよう明示的に drain する。
+	if (startedScheduler.stdout) startedScheduler.stdout.resume();
 	return true;
 
 }
 
 function completeOperatorShutdown() {
-	if (!shutdownStarted || scheduler !== null || activeRecordingOutputs.size !== 0) {
+	if (!shutdownStarted || scheduler !== null || activeRecordingOutputs.size !== 0 ||
+		matchLedgerProcess !== null || activeDurationProbes.size !== 0 || pendingRecordedLedgerWrites !== 0) {
 		return;
 	}
 
-	operatorLog('SHUTDOWN: complete');
-	process.exit(0);
+	operatorLog('SHUTDOWN: ' + (failedRecordingSaves.size ? 'incomplete; recovery data retained in recording.json' : 'complete'));
+	process.exit(failedRecordingSaves.size ? 1 : 0);
 }
 
 function shutdownOperator(signal) {
@@ -839,6 +882,16 @@ function shutdownOperator(signal) {
 	}
 	shutdownStarted = true;
 	operatorLog('SHUTDOWN: ' + signal);
+	if (matchLedgerUpdateTimer !== null) {
+		clearTimeout(matchLedgerUpdateTimer);
+		matchLedgerUpdateTimer = null;
+	}
+	matchLedgerUpdateReason = '';
+	if (matchLedgerProcess) {
+		try { matchLedgerProcess.kill('SIGTERM'); } catch (error) {
+			operatorLog('WARNING: match stop failed: ' + error.message);
+		}
+	}
 
 	if (reserveCheckTimer !== null) {
 		clearTimeout(reserveCheckTimer);
@@ -874,6 +927,10 @@ function shutdownOperator(signal) {
 
 	setTimeout(() => {
 		operatorLog('FATAL: graceful shutdown timed out.');
+		if (matchLedgerProcess) {
+			try { matchLedgerProcess.kill('SIGKILL'); } catch (_) {}
+		}
+		activeDurationProbes.forEach(probe => { try { probe.kill('SIGKILL'); } catch (_) {} });
 		if (scheduler !== null && process.platform !== 'win32') {
 			try {
 				process.kill(-scheduler.pid, 'SIGKILL');
@@ -899,107 +956,267 @@ function printProgram(program) {
 
 // 録画中リストを書き込む
 function writeRecordingData() {
-	fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));
+	reservationStore.writeArrayAtomic(RECORDING_DATA_FILE, recording);
 	operatorLog('WRITE: ' + RECORDING_DATA_FILE);
 }
 
 // 録画済みTSの実ファイル長をffprobeで取得する。
 // probeは録画完了後のbest-effort処理であり、失敗しても完了状態を変更しない。
 function probeRecordedDuration(filePath, callback) {
-	if (shutdownStarted) {
+	if (shutdownStarted) return null;
+	if (durationProbeQueue.length >= 128) {
+		operatorLog('WARNING: ffprobe queue full: ' + filePath);
+		callback(null, Date.now());
 		return null;
 	}
-
-	const configuredCommand = typeof config.ffprobeCommand === 'string' ? config.ffprobeCommand.trim() : '';
-	const command = configuredCommand || 'ffprobe';
-	let probe = null;
-	let completed = false;
-
-	function complete(duration) {
-		if (completed) {
-			return;
-		}
-		completed = true;
-		if (probe) {
-			activeDurationProbes.delete(probe);
-		}
-		callback(duration);
-	}
-
-	try {
-		probe = child_process.execFile(
-			command,
-			[
-				'-v', 'fatal',
-				'-show_entries', 'format=duration',
-				'-of', 'default=noprint_wrappers=1:nokey=1',
-				filePath
-			],
-			{
-				timeout: recordedDurationProbeTimeoutMs,
-				maxBuffer: 64 * 1024,
-				encoding: 'utf8'
-			},
-			(error, stdout) => {
-				if (error) {
-					operatorLog('WARNING: ffprobe duration failed: ' + filePath + ' (' + error.message + ')');
-					complete(null);
-					return;
-				}
-
-				const duration = Number(String(stdout || '').trim());
-
-				if (!Number.isFinite(duration) || duration <= 0) {
-					operatorLog('WARNING: ffprobe duration invalid: ' + filePath + ' (' + String(stdout || '').trim() + ')');
-					complete(null);
-					return;
-				}
-
-				complete(Math.round(duration * 1000000) / 1000000);
-			}
-		);
-		activeDurationProbes.add(probe);
-	} catch (error) {
-		operatorLog('WARNING: ffprobe duration failed: ' + filePath + ' (' + error.message + ')');
-		complete(null);
-	}
-
-	return probe;
+	durationProbeQueue.push({ filePath, callback, queuedAt: Date.now() });
+	wakePostProcessing();
+	return null;
 }
 
-// probe開始後にもrecorded.jsonはcleanup等で変化し得るため、disk上の現行entryを再確認して追記する。
-function persistRecordedDuration(programId, recordedPath, duration) {
-	let currentRecorded;
-	let currentEntry;
-
-	try {
-		currentRecorded = JSON.parse(fs.readFileSync(RECORDED_DATA_FILE, { encoding: 'utf8' }));
-		if (!Array.isArray(currentRecorded)) {
-			throw new Error('recorded data is not an array');
-		}
-
-		currentEntry = currentRecorded.find(entry => entry && entry.id === programId && entry.recorded === recordedPath);
-		if (!currentEntry || currentEntry.operatorResumePending === true) {
-			operatorLog('WARNING: ffprobe duration target changed, skip update: ' + recordedPath);
-			return false;
-		}
-
-		currentEntry.recordedDurationSeconds = duration;
-		fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(currentRecorded));
-		operatorLog('WRITE: ' + RECORDED_DATA_FILE);
-
-		const memoryEntry = recorded.find(entry => entry && entry.id === programId && entry.recorded === recordedPath);
-		if (memoryEntry && memoryEntry.operatorResumePending !== true) {
-			memoryEntry.recordedDurationSeconds = duration;
-		}
-
-		operatorLog('DURATION: ' + duration.toFixed(6) + ' sec ' + recordedPath);
-		scheduleMatchLedgerUpdate('recorded duration');
-		return true;
-	} catch (error) {
-		operatorLog('WARNING: ffprobe duration update failed: ' + recordedPath + ' (' + error.message + ')');
-		return false;
+function lowerPostProcessingPriority(child, label) {
+	if (!child || !child.pid) return;
+	try { os.setPriority(child.pid, 19); } catch (error) {
+		operatorLog('WARNING: ' + label + ' priority adjustment failed: ' + error.message);
 	}
+}
+
+function startDurationProbe(job) {
+	const configuredCommand = typeof config.ffprobeCommand === 'string' ? config.ffprobeCommand.trim() : '';
+	let probe = null;
+	let completed = false;
+	function complete(duration) {
+		if (completed) return;
+		completed = true;
+		if (probe) activeDurationProbes.delete(probe);
+		try {
+			if (!shutdownStarted) job.callback(duration, job.queuedAt);
+		} finally {
+			wakePostProcessing();
+			recordedThumbnailGenerator.resume();
+			completeOperatorShutdown();
+		}
+	}
+	try {
+		probe = child_process.execFile(configuredCommand || 'ffprobe', [
+			'-v', 'fatal', '-threads', '1', '-show_entries', 'format=duration',
+			'-of', 'default=noprint_wrappers=1:nokey=1', job.filePath
+		], {
+			timeout: recordedDurationProbeTimeoutMs,
+			maxBuffer: 64 * 1024,
+			encoding: 'utf8',
+			killSignal: 'SIGKILL'
+		}, (error, stdout) => {
+			const duration = Number(String(stdout || '').trim());
+			if (error || !Number.isFinite(duration) || duration <= 0) {
+				operatorLog('WARNING: ffprobe duration failed: ' + job.filePath +
+					' (' + (error ? error.message : 'invalid duration: ' + String(stdout || '').trim()) + ')');
+				complete(null);
+				return;
+			}
+			complete(Math.round(duration * 1000000) / 1000000);
+		});
+		activeDurationProbes.add(probe);
+		lowerPostProcessingPriority(probe, 'ffprobe');
+	} catch (error) {
+		operatorLog('WARNING: ffprobe start failed: ' + job.filePath + ' (' + error.message + ')');
+		complete(null);
+	}
+}
+
+// Serialize short recorded transactions, not recording streams. Other writers use
+// the same existing recorded lock; no stale in-memory array is written back.
+function queueRecordedLedgerUpdate(reason, update, afterSave, retryLock) {
+	pendingRecordedLedgerWrites++;
+	const transaction = recordedLedgerWrites.then(async () => {
+		// Three bounded attempts span the existing 30s incomplete-lock grace
+		// period. Only contention is retried; parse/write/I/O failures are not.
+		const retryDelays = retryLock ? [1000, 5000] : [];
+		for (let attempt = 0; ; attempt++) {
+			try {
+				return await reservationStore.withLockAsync(RECORDED_DATA_FILE, () => {
+					const current = reservationStore.readArray(RECORDED_DATA_FILE);
+					const next = update(current);
+					if (next === null) return false;
+					reservationStore.writeArrayAtomic(RECORDED_DATA_FILE, next);
+					operatorLog('WRITE: ' + RECORDED_DATA_FILE);
+					return true;
+				}, { timeoutMs: 10000 });
+			} catch (error) {
+				if (error.code !== 'RESERVATION_LOCK_TIMEOUT' || attempt >= retryDelays.length || shutdownStarted) throw error;
+				operatorLog('WARNING: recorded lock busy (' + reason + '); retry ' + (attempt + 1));
+				await new Promise(resolve => setTimeout(resolve, retryDelays[attempt]));
+			}
+		}
+	});
+	// A later match-history reconciliation must not delay new recorded saves.
+	recordedLedgerWrites = transaction.catch(() => {});
+	const result = transaction.then(async saved => {
+		if (saved && afterSave) await afterSave();
+		return saved;
+	});
+	result.catch(error => {
+		operatorLog('ERROR: recorded ledger update failed (' + reason + '): ' + error.message);
+	}).finally(() => {
+		pendingRecordedLedgerWrites--;
+		if (pendingRecordedLedgerWrites === 0) {
+			try { recorded = reservationStore.readArray(RECORDED_DATA_FILE); } catch (error) {
+				operatorLog('WARNING: recorded ledger reload failed: ' + error.message);
+			}
+		}
+		wakePostProcessing();
+		completeOperatorShutdown();
+	});
+	return result;
+}
+
+function finishPendingRecording(program) {
+	const remaining = recording.filter(entry => entry !== program);
+	// Remove the durable recovery row before dropping its in-memory reference.
+	reservationStore.writeArrayAtomic(RECORDING_DATA_FILE, remaining);
+	recording = remaining;
+	operatorLog('WRITE: ' + RECORDING_DATA_FILE);
+	delete mirakurunDropSnapshots[program.id];
+	failedRecordingSaves.delete(program);
+}
+
+function reportRecordingSaveFailure(program, error) {
+	failedRecordingSaves.add(program);
+	operatorLog('ERROR: recording finalization incomplete #' + program.id + ': ' + error.message +
+		'; recording.json retained. Resolve the storage/lock error and restart Operator to recover.');
+}
+
+function saveCompletedRecording(program, recovering) {
+	const replayingPendingSave = recovering && program._operatorHistoryPending === true;
+	program._operatorHistoryPending = true;
+	try {
+		writeRecordingData();
+	} catch (error) {
+		// The previous started-recording row is still the recovery source if
+		// this snapshot cannot be written. Do not discard it on a save failure.
+		operatorLog('ERROR: recording recovery snapshot failed #' + program.id + ': ' + error.message);
+	}
+	let completedProgram = JSON.parse(JSON.stringify(program));
+	delete completedProgram._operatorHistoryPending;
+	operatorLog('FIN SAVE PENDING: ' + printProgram(program));
+	return queueRecordedLedgerUpdate('recorded finalize', current => {
+		// A crash can occur after recorded was saved but before recording was
+		// cleared. Keep later duration/metadata updates when replaying that row.
+		const saved = current.find(entry => entry.id === completedProgram.id &&
+			entry.recorded === completedProgram.recorded &&
+			entry.operatorRecordingStart === completedProgram.operatorRecordingStart);
+		if (recovering && saved &&
+			((replayingPendingSave && saved.operatorRecordingEnd === completedProgram.operatorRecordingEnd) ||
+			(!completedProgram.operatorRecordingEnd && saved.operatorRecordingEnd))) {
+			// Also covers a failed recording.json snapshot followed by a
+			// successful history save: an older running row must not undo it.
+			completedProgram = Object.assign({}, saved);
+			return current;
+		}
+		const previous = current.find(entry => entry.id === completedProgram.id);
+		if (previous && previous.recorded !== completedProgram.recorded) {
+			previous.id = getUniqueRecordedCollisionId(previous, current);
+		}
+		return current.filter(entry => entry.id !== completedProgram.id).concat(completedProgram);
+	}, async () => {
+		const isResumePending = completedProgram.operatorResumePending === true &&
+			completedProgram.operatorAbort !== true && completedProgram.operatorEndLack !== true;
+		if (!isResumePending) {
+			await removeManualReserve(program);
+		}
+		// Keep recovery data until both history and manual-reservation removal
+		// have succeeded. A hook never runs against an uncommitted history.
+		finishPendingRecording(program);
+		if (!isResumePending) {
+			scheduleMatchLedgerUpdate('recorded finalize', completedProgram.operatorRecordingEnd);
+			if (config.recordedCommand) {
+				try {
+					const postProcess = child_process.spawn(config.recordedCommand, [program.recorded, JSON.stringify(completedProgram)]);
+					operatorLog('SPAWN: ' + config.recordedCommand + ' (pid=' + postProcess.pid + ')');
+				} catch (error) {
+					operatorLog('ERROR: recorded hook could not start: ' + error.message);
+				}
+			}
+		}
+		if (recovering) operatorLog('RECOVERED HISTORY: ' + printProgram(program));
+		else if (isResumePending) operatorLog('FIN INTERRUPTED: resume pending: ' + printProgram(program));
+		else if (program._operatorEndLack) operatorLog('FIN END LACK: ' + printProgram(program));
+		else if (program._operatorAbort) operatorLog('FIN ABORT SHORT: ' + printProgram(program));
+		else operatorLog('FIN: ' + printProgram(program));
+	}, true).catch(error => {
+		reportRecordingSaveFailure(program, error);
+		return false;
+	});
+}
+
+function discardRecordingAfterManualRemoval(program) {
+	// Retain a pre-stream abort/NG until asynchronous reservation removal
+	// completes; reserveCheckLoop must not prepare the same manual job again.
+	program._operatorManualRemovalPending = true;
+	try { writeRecordingData(); } catch (error) {
+		operatorLog('ERROR: manual removal recovery snapshot failed: ' + error.message);
+	}
+	pendingRecordedLedgerWrites++;
+	removeManualReserve(program).then(() => finishPendingRecording(program)).catch(error => {
+		reportRecordingSaveFailure(program, error);
+	}).finally(() => {
+		pendingRecordedLedgerWrites--;
+		wakePostProcessing();
+		completeOperatorShutdown();
+	});
+}
+
+function recoverRecordingHistory() {
+	// These are ledger reads only; no recording-file existence checks or probes.
+	try {
+		reserves = reservationStore.readArray(RESERVES_DATA_FILE);
+		recorded = reservationStore.readArray(RECORDED_DATA_FILE);
+		const previous = recording;
+		for (const program of previous) {
+			if (!program || typeof program !== 'object' ||
+				(program._operatorHistoryPending && (typeof program.recorded !== 'string' || !program.recorded.trim()))) {
+				throw new Error('invalid recording recovery row');
+			}
+		}
+		recording = previous.filter(program => program &&
+			(program._operatorManualRemovalPending || (typeof program.recorded === 'string' && program.recorded.trim() !== '')));
+		for (const program of recording) {
+			if (!program.id || !Number.isFinite(program.start) || !Number.isFinite(program.end) || !program.channel) {
+				throw new Error('invalid started-recording recovery row');
+			}
+		}
+		writeRecordingData();
+	} catch (error) {
+		console.error('[fatal] recording recovery cannot start: ' + error.message);
+		process.exit(1);
+	}
+	for (const program of recording.slice()) {
+		delete program.pid;
+		if (program._operatorManualRemovalPending) {
+			discardRecordingAfterManualRemoval(program);
+			continue;
+		}
+		if (!program._operatorHistoryPending && !program.operatorRecordingEnd) {
+			// Actual crash/end time is unknown: do not invent a measured duration.
+			markRecordingInterruptedForResume(program);
+		}
+		saveCompletedRecording(program, true);
+	}
+}
+
+function persistRecordedDuration(programId, recordedPath, duration, requestedAt) {
+	return queueRecordedLedgerUpdate('recorded duration', current => {
+		const entry = current.find(value => value && value.id === programId && value.recorded === recordedPath);
+		if (!entry || entry.operatorResumePending === true) {
+			operatorLog('WARNING: ffprobe duration target changed, skip update: ' + recordedPath);
+			return null;
+		}
+		entry.recordedDurationSeconds = duration;
+		return current;
+	}, () => {
+		operatorLog('DURATION: ' + duration.toFixed(6) + ' sec ' + recordedPath);
+		scheduleMatchLedgerUpdate('recorded duration', requestedAt);
+	}).catch(() => false);
 }
 
 // close済み録画ファイル1件だけを実測し、正常録画のビットレート統計をbest-effortで更新する。
@@ -1042,6 +1259,7 @@ function updateBitrateStatsAfterClose(program, recordedPath, recordedDurationSec
 }
 
 function stopActiveDurationProbes() {
+	durationProbeQueue.length = 0;
 	activeDurationProbes.forEach(probe => {
 		try {
 			probe.kill('SIGTERM');
@@ -1053,21 +1271,115 @@ function stopActiveDurationProbes() {
 
 let matchLedgerUpdateTimer = null;
 let matchLedgerUpdateReason = '';
+let matchLedgerProcess = null;
+let matchLedgerReadyAt = 0;
+let matchLedgerPendingAt = 0;
+let matchLedgerProbesRemaining = null;
+let matchLedgerWakeAt = 0;
 
-function scheduleMatchLedgerUpdate(reason) {
-	matchLedgerUpdateReason = reason || matchLedgerUpdateReason || 'scheduled';
+// Merge overlapping start/end windows and wake at the next actual opening.
+// Queue expiry handles overload; waiting must never bypass a handoff window.
+function postProcessingDelay() {
+	const now = Date.now();
+	const windows = [[lastRecordingTransitionAt, lastRecordingTransitionAt + 15000]];
+	const addWindows = program => {
+		if (!program) return;
+		[program.start, program.end].forEach(value => {
+			const time = Number(value);
+			if (Number.isFinite(time) && time > 0 && time + 15000 > now) {
+				windows.push([time - 15000, time + 15000]);
+			}
+		});
+	};
+	reserves.forEach(program => {
+		if (program && !program.isSkip && !program.isConflict && !isRecordedForReserve(program)) addWindows(program);
+	});
+	recording.forEach(addWindows);
+	windows.sort((left, right) => left[0] - right[0]);
+	let readyAt = now;
+	for (const [start, end] of windows) {
+		if (start > readyAt) break;
+		if (end > readyAt) readyAt = end;
+	}
+	return readyAt - now;
+}
 
+function wakePostProcessing(delay = 0) {
+	if (shutdownStarted) return;
+	delay = Math.max(0, Math.min(delay, 0x7fffffff));
+	const wakeAt = Date.now() + delay;
 	if (matchLedgerUpdateTimer !== null) {
+		if (matchLedgerWakeAt <= wakeAt) return;
+		clearTimeout(matchLedgerUpdateTimer);
+	}
+	matchLedgerWakeAt = wakeAt;
+	matchLedgerUpdateTimer = setTimeout(() => {
+		matchLedgerUpdateTimer = null;
+		runPostProcessing();
+	}, delay);
+}
+
+function runPostProcessing() {
+	if (shutdownStarted || matchLedgerProcess || activeDurationProbes.size !== 0 ||
+		recordedThumbnailGenerator.getState().active) return;
+	if (pendingRecordedLedgerWrites !== 0) return;
+	const now = Date.now();
+	while (durationProbeQueue.length && now - durationProbeQueue[0].queuedAt >= 10 * 60 * 1000) {
+		const expired = durationProbeQueue.shift();
+		if (matchLedgerProbesRemaining > 0) matchLedgerProbesRemaining--;
+		operatorLog('WARNING: ffprobe job expired in queue: ' + expired.filePath);
+		expired.callback(null, expired.queuedAt);
+	}
+	// A failed/expired probe's fallback callback can start a thumbnail directly.
+	if (recordedThumbnailGenerator.getState().active) return;
+	const delay = postProcessingDelay();
+	if ((matchLedgerUpdateReason || durationProbeQueue.length) && delay > 0) {
+		const expiryDelay = durationProbeQueue.length ? durationProbeQueue[0].queuedAt + 10 * 60 * 1000 - now : Infinity;
+		wakePostProcessing(Math.min(delay, expiryDelay));
 		return;
 	}
-
-	matchLedgerUpdateTimer = setTimeout(() => {
-		const runReason = matchLedgerUpdateReason;
-
-		matchLedgerUpdateTimer = null;
+	const thumbnail = recordedThumbnailGenerator.getState();
+	const nextProbeAt = durationProbeQueue.length ? durationProbeQueue[0].queuedAt : Infinity;
+	const nextMatchAt = matchLedgerUpdateReason && scheduler === null ? matchLedgerPendingAt : Infinity;
+	// An older recording's thumbnail must not fall behind every later batch.
+	if (thumbnail.pending && thumbnail.pendingSince < Math.min(nextProbeAt, nextMatchAt)) {
+		recordedThumbnailGenerator.resume();
+		return;
+	}
+	const matchDue = matchLedgerUpdateReason && scheduler === null && now >= matchLedgerReadyAt;
+	// Drain up to the eight recordings in one handoff before rebuilding match.
+	// Later arrivals cannot extend the batch or crowd out older thumbnails.
+	if (matchLedgerUpdateReason && matchLedgerProbesRemaining === null) {
+		matchLedgerProbesRemaining = Math.min(8, durationProbeQueue.length);
+	}
+	if (durationProbeQueue.length && (!matchDue || matchLedgerProbesRemaining > 0)) {
+		if (matchLedgerProbesRemaining > 0) matchLedgerProbesRemaining--;
+		startDurationProbe(durationProbeQueue.shift());
+		return;
+	}
+	if (matchDue) {
+		const reason = matchLedgerUpdateReason;
 		matchLedgerUpdateReason = '';
-		updateMatchLedger(runReason);
-	}, Number(config.matchUpdateDelayMs) >= 0 ? Number(config.matchUpdateDelayMs) : 3000);
+		updateMatchLedger(reason);
+		return;
+	}
+	if (matchLedgerUpdateReason && scheduler === null) wakePostProcessing(Math.max(0, matchLedgerReadyAt - now));
+	else recordedThumbnailGenerator.resume();
+}
+
+function scheduleMatchLedgerUpdate(reason, sourceAt) {
+	if (shutdownStarted) return;
+	if (!matchLedgerUpdateReason) {
+		const requestedAt = Date.now();
+		// A recording's close callback can queue its probe before its ledger save
+		// requests match. Keep that batch ahead of its own thumbnails either way.
+		matchLedgerPendingAt = Number.isFinite(sourceAt) && sourceAt > 0 ? Math.min(requestedAt, sourceAt) : requestedAt;
+		matchLedgerProbesRemaining = null;
+		matchLedgerReadyAt = requestedAt +
+			(Number(config.matchUpdateDelayMs) >= 0 ? Number(config.matchUpdateDelayMs) : 3000);
+	}
+	matchLedgerUpdateReason = reason || matchLedgerUpdateReason || 'scheduled';
+	wakePostProcessing();
 }
 
 function compactMatchOutput(stdout) {
@@ -1169,45 +1481,58 @@ function emitMatchProcessOutput(commandProcess) {
 // match.json を更新する
 function updateMatchLedger(reason) {
 	const appMatchingFile = __dirname + '/app-matching.js';
-	let commandProcess;
-
-	try {
-		if (!fs.existsSync(appMatchingFile)) {
-			operatorLog('WARNING: `' + appMatchingFile + '`が存在しないため match.json 更新をスキップしました');
-			return;
+	const startedAt = Date.now();
+	let child = null;
+	let settled = false;
+	let spawnError = null;
+	let stdout = '';
+	let stderr = '';
+	function complete(code, signal) {
+		if (settled) return;
+		settled = true;
+		matchLedgerProcess = null;
+		emitMatchProcessOutput({ stdout, stderr });
+		operatorLog('MATCH EXIT: pid=' + (child && child.pid || '-') +
+			' elapsed_ms=' + (Date.now() - startedAt) + ' code=' + code + ' signal=' + (signal || '-'));
+		if (spawnError || code !== 0 || signal) {
+			operatorLog('WARNING: match.json update failed: ' +
+				(spawnError ? spawnError.message : 'code=' + code + ' signal=' + signal));
 		}
-
-		ensureJsonArrayFile(RECORDED_DATA_FILE);
-		ensureJsonArrayFile(RESERVES2_DATA_FILE);
-		ensureJsonArrayFile(MATCH_DATA_FILE);
-
+		wakePostProcessing();
+		recordedThumbnailGenerator.resume();
+		completeOperatorShutdown();
+	}
+	try {
+		if (!fs.existsSync(appMatchingFile)) throw new Error('app-matching.js is missing');
 		operatorLog('RUN: ' + appMatchingFile + (reason ? ' (' + reason + ')' : ''));
-
-		commandProcess = child_process.spawnSync(process.execPath, [
-				appMatchingFile,
-				'--recorded', RECORDED_DATA_FILE,
-				'--recording', RECORDING_DATA_FILE,
-				'--reserves2', RESERVES2_DATA_FILE,
+		child = child_process.spawn(process.execPath, [
+			appMatchingFile,
+			'--recorded', RECORDED_DATA_FILE,
+			'--recording', RECORDING_DATA_FILE,
+			'--reserves2', RESERVES2_DATA_FILE,
 			'--old-match', MATCH_DATA_FILE,
 			'--output', MATCH_DATA_FILE,
 			'--config', CONFIG_FILE
 		], {
-			cwd: __dirname,
-			encoding: 'utf8',
-			stdio: [ 'ignore', 'pipe', 'pipe' ]
+			cwd: __dirname, stdio: [ 'ignore', 'pipe', 'pipe' ],
+			// A stuck optional worker must not hold the other post-processing jobs
+			// indefinitely. Five minutes allows ample headroom over observed ~35s.
+			timeout: 5 * 60 * 1000, killSignal: 'SIGKILL'
 		});
-
-		emitMatchProcessOutput(commandProcess);
-
-		if (commandProcess.error) {
-			throw commandProcess.error;
-		}
-
-		if (commandProcess.status !== 0) {
-			operatorLog('WARNING: match.json の更新に失敗しました: exit status=' + commandProcess.status);
-		}
-	} catch (e) {
-		operatorLog('WARNING: match.json の更新に失敗しました: ' + (e && e.stack ? e.stack : e));
+		matchLedgerProcess = child;
+		child.once('error', error => { spawnError = error; });
+		child.once('close', complete);
+		lowerPostProcessingPriority(child, 'match');
+		// Drain both pipes even if verbose output exceeds the retained log tail.
+		child.stdout.setEncoding('utf8');
+		child.stderr.setEncoding('utf8');
+		child.stdout.on('data', chunk => { stdout = (stdout + chunk).slice(-1024 * 1024); });
+		child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-64 * 1024); });
+	} catch (error) {
+		spawnError = error;
+		if (child) {
+			try { child.kill('SIGTERM'); } catch (_) {}
+		} else complete(null, null);
 	}
 }
 
@@ -1514,23 +1839,23 @@ function removeRecording(programId, reason) {
 
 // 手動予約はskipではなく予約解除として扱う。
 // 録画開始後のfinalizeと、ユーザーによるstream取得前の停止で同じ削除処理を使う。
-function removeManualReserve(program) {
+async function removeManualReserve(program) {
 	if (!program || !program.isManualReserved) {
 		return false;
 	}
 
 	try {
-		return reservationStore.withLock(RESERVES_DATA_FILE, () => {
+		return await reservationStore.withLockAsync(RESERVES_DATA_FILE, () => {
 			const latestReserves = reservationStore.readArray(RESERVES_DATA_FILE);
 
 			for (let i = 0, l = latestReserves.length; i < l; i++) {
-				if (latestReserves[i].id !== program.id) {
+				if (latestReserves[i].id !== program.id || !latestReserves[i].isManualReserved) {
 					continue;
 				}
 
 				latestReserves.splice(i, 1);
+				reservationStore.writeArrayAtomic(RESERVES_DATA_FILE, latestReserves);
 				reserves = latestReserves;
-				reservationStore.writeArrayAtomic(RESERVES_DATA_FILE, reserves);
 				operatorLog('WRITE: ' + RESERVES_DATA_FILE);
 				return true;
 			}
@@ -1539,7 +1864,7 @@ function removeManualReserve(program) {
 		});
 	} catch (error) {
 		operatorLog('WARNING: manual reserve removal failed: ' + error.message);
-		return false;
+		throw error;
 	}
 
 }
@@ -2417,7 +2742,7 @@ function recordingStaleChecker() {
 	for (let i = recording.length - 1; i >= 0; i--) {
 		const program = recording[i];
 
-		if (!program || !program.end) {
+		if (!program || !program.end || program._operatorHistoryPending || program._operatorManualRemovalPending) {
 			continue;
 		}
 
@@ -2577,6 +2902,7 @@ function doRecord(program, stream) {
 		return;
 	}
 
+	lastRecordingTransitionAt = Date.now();
 	operatorLog('RECORD: ' + printProgram(program));
 
 	if (!program.operatorRecordingStart) {
@@ -2621,6 +2947,7 @@ function doRecord(program, stream) {
 	let inputEnded = false;
 	let probeDurationAfterClose = false;
 	let generateThumbnailAfterClose = false;
+	let historySave = Promise.resolve(false);
 	const tsDropAnalyzer = tsDropDetectionEnabled ? new TsDropAnalyzer() : null;
 	let tsDropLogTimer = null;
 	let tsDropLoggedSampleCount = 0;
@@ -2759,21 +3086,24 @@ function doRecord(program, stream) {
 		if (!shutdownStarted) {
 			checkStorageAfterRecordingClose(program);
 		}
-		if (probeDurationAfterClose && !shutdownStarted) {
-			probeRecordedDuration(recPath, duration => {
-				if (duration !== null) {
-					persistRecordedDuration(program.id, recPath, duration);
-					updateBitrateStatsAfterClose(program, recPath, duration);
-				}
-				if (generateThumbnailAfterClose && !shutdownStarted) {
-					recordedThumbnailGenerator.enqueue({
-						id: program.id,
-						inputPath: recPath,
-						durationSeconds: duration !== null ? duration : program.operatorActualSeconds
-					});
-				}
-			});
-		}
+		historySave.then(saved => {
+			if (saved && probeDurationAfterClose && !shutdownStarted) {
+				probeRecordedDuration(recPath, (duration, requestedAt) => {
+					if (duration !== null) {
+						persistRecordedDuration(program.id, recPath, duration, requestedAt);
+						updateBitrateStatsAfterClose(program, recPath, duration);
+					}
+					if (generateThumbnailAfterClose && !shutdownStarted) {
+						recordedThumbnailGenerator.enqueue({
+							id: program.id,
+							inputPath: recPath,
+							requestedAt: requestedAt,
+							durationSeconds: duration !== null ? duration : program.operatorActualSeconds
+						});
+					}
+				});
+			}
+		});
 		completeOperatorShutdown();
 	});
 
@@ -2808,6 +3138,7 @@ function doRecord(program, stream) {
 			return;
 		}
 		finalized = true;
+		lastRecordingTransitionAt = Date.now();
 
 		stream.removeListener('end', onInputEnd);
 		stream.removeListener('aborted', onInputAborted);
@@ -2843,7 +3174,6 @@ function doRecord(program, stream) {
 		// 録画開始後に確定した短縮録画も recorded.json の録画結果として扱う。
 		// ファイルが残る限り、通常終了と同じ保存済みサムネイル生成経路を利用する。
 		generateThumbnailAfterClose = probeDurationAfterClose;
-
 		if (!isNgRecording) {
 			for (let i = 0, l = recorded.length; i < l; i++) {
 				if (recorded[i].id === program.id) {
@@ -2856,40 +3186,12 @@ function doRecord(program, stream) {
 				}
 			}
 			recorded.push(program);
-			fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
-			operatorLog('WRITE: ' + RECORDED_DATA_FILE);
-			if (!isResumePending) {
-				scheduleMatchLedgerUpdate('recorded finalize');
-			}
+			historySave = saveCompletedRecording(program, false);
 		} else {
 			operatorLog(program._operatorNg + ': ' + printProgram(program));
-		}
-
-		const recordingIndex = recording.indexOf(program);
-		if (recordingIndex !== -1) {
-			recording.splice(recordingIndex, 1);
-		}
-		writeRecordingData();
-		delete mirakurunDropSnapshots[program.id];
-		// 再開待ちと再開直後の一時的なNGでは、手動予約を残して同じpending録画へ再試行できるようにする。
-		if (!isResumePending && !(isNgRecording && isResumedRecording)) {
-			removeManualReserve(program);
-		}
-
-		// ポストプロセス
-		if (!isNgRecording && !isResumePending && config.recordedCommand) {
-			const postProcess = child_process.spawn(config.recordedCommand, [recPath, JSON.stringify(program)]);
-			operatorLog('SPAWN: ' + config.recordedCommand + ' (pid=' + postProcess.pid + ')');
-		}
-
-		if (isResumePending) {
-			operatorLog('FIN INTERRUPTED: resume pending: ' + printProgram(program));
-		} else if (program._operatorEndLack) {
-			operatorLog('FIN END LACK: ' + printProgram(program));
-		} else if (program._operatorAbort) {
-			operatorLog('FIN ABORT SHORT: ' + printProgram(program));
-		} else {
-			operatorLog('FIN: ' + printProgram(program));
+			// A failed resume must leave its manual reservation available.
+			if (!isResumedRecording && program.isManualReserved) discardRecordingAfterManualRemoval(program);
+			else finishPendingRecording(program);
 		}
 	}
 
@@ -2903,6 +3205,10 @@ function stopRecording(programId, reason) {
 	const abortReason = reason || 'ABORT RECORDING';
 
 	if (!program) {
+		return;
+	}
+	if (program._operatorHistoryPending || program._operatorManualRemovalPending) {
+		operatorLog('WARNING: finalization already pending: #' + program.id);
 		return;
 	}
 
@@ -2922,10 +3228,8 @@ function stopRecording(programId, reason) {
 
 	// ストリーム取得前は録画ファイルが存在しないため、従来どおり NG 側で落とす。
 	markRecordingNg(program, abortReason);
-	removeRecording(program.id, abortReason);
-	if (abortReason === 'ABORT RECORDING') {
-		removeManualReserve(program);
-	}
+	if (abortReason === 'ABORT RECORDING' && program.isManualReserved) discardRecordingAfterManualRemoval(program);
+	else removeRecording(program.id, abortReason);
 }
 
 
@@ -2993,55 +3297,39 @@ function findRecordedCleanupCandidates(group, limit) {
 
 // 実ファイル削除後、recorded.json 側に同一パスの記録が残っていれば整合更新する
 // 削除対象の選定には recorded 台帳を使わない
-function markMatchRecordingDeleted(recordedEntries, filePath, deletedAt) {
-	try {
-		const changed = reservationStore.withLock(MATCH_DATA_FILE, () => {
-			const items = reservationStore.readArray(MATCH_DATA_FILE);
-			if (!storageLow.markMatchRecordingDeleted(items, recordedEntries, filePath, deletedAt, 'storage-low')) {
-				return false;
-			}
-			reservationStore.writeArrayAtomic(MATCH_DATA_FILE, items);
-			return true;
-		});
-		if (!changed) return false;
-		operatorLog('WRITE: ' + MATCH_DATA_FILE);
+async function markMatchRecordingDeleted(recordedEntries, filePath, deletedAt) {
+	const changed = await reservationStore.withLockAsync(MATCH_DATA_FILE, () => {
+		const items = reservationStore.readArray(MATCH_DATA_FILE);
+		if (!storageLow.markMatchRecordingDeleted(items, recordedEntries, filePath, deletedAt, 'storage-low')) return false;
+		reservationStore.writeArrayAtomic(MATCH_DATA_FILE, items);
 		return true;
-	} catch (error) {
-		operatorLog('WARNING: Storage cleanup match history update failed: ' + filePath + ' (' + error.message + ')');
-		return false;
-	}
+	}, { timeoutMs: 5 * 60 * 1000 + 2000 });
+	if (changed) operatorLog('WRITE: ' + MATCH_DATA_FILE);
+	return changed;
 }
 
 function removeRecordedLedgerEntriesByPath(filePath, deletedAt) {
 	const resolvedFilePath = path.resolve(filePath);
-	const removed = [];
-	const remaining = [];
-
-	recorded.forEach(entry => {
-		if (entry && entry.recorded && path.resolve(entry.recorded) === resolvedFilePath) removed.push(entry);
-		else remaining.push(entry);
+	let removed = [];
+	return queueRecordedLedgerUpdate('recorded cleanup', current => {
+		removed = current.filter(entry => entry && entry.recorded && path.resolve(entry.recorded) === resolvedFilePath);
+		if (!removed.length) return null;
+		return current.filter(entry => !removed.includes(entry));
+	}, async () => {
+		const matchUpdated = await markMatchRecordingDeleted(removed, filePath, deletedAt);
+		if (!matchUpdated) {
+			operatorLog('ERROR: Storage cleanup partial completion: fileDeleted=true recordedUpdated=true matchUpdated=false path=' + filePath + ' (do not retry file deletion)');
+		} else {
+			removed.forEach(entry => {
+				const id = entry && (entry.id || entry.recordedId || entry.origId || entry.programId);
+				if (!id) return;
+				try { recordedThumbnailGenerator.discard(String(id)); } catch (error) {
+					operatorLog('WARNING: Storage cleanup thumbnail removal failed: ' + id + ' (' + error.message + ')');
+				}
+			});
+		}
+		scheduleMatchLedgerUpdate('recorded cleanup', deletedAt);
 	});
-
-	if (removed.length === 0) return { recordedUpdated: false, matchUpdated: false, thumbnails: [] };
-	reservationStore.writeArrayAtomic(RECORDED_DATA_FILE, remaining);
-	recorded.splice(0, recorded.length, ...remaining);
-	operatorLog('WRITE: ' + RECORDED_DATA_FILE);
-	const matchUpdated = markMatchRecordingDeleted(removed, filePath, deletedAt);
-	const thumbnails = [];
-	if (matchUpdated) {
-		removed.forEach(entry => {
-			const id = entry && (entry.id || entry.recordedId || entry.origId || entry.programId);
-			if (!id) return;
-			try {
-				thumbnails.push({ id: String(id), result: recordedThumbnailGenerator.discard(String(id)) });
-			} catch (error) {
-				operatorLog('WARNING: Storage cleanup thumbnail removal failed: ' + id + ' (' + error.message + ')');
-				thumbnails.push({ id: String(id), result: { removed: false, reason: error.code || 'thumbnail-delete-failed' } });
-			}
-		});
-	}
-	scheduleMatchLedgerUpdate('recorded cleanup');
-	return { recordedUpdated: true, matchUpdated: matchUpdated, thumbnails: thumbnails };
 }
 
 // Low対象filesystemに属する録画先配下から、検証済みの最古候補を1件削除する。
@@ -3058,10 +3346,10 @@ function removeOldestRecordedFileOnFilesystem(group, candidate) {
 		fs.unlinkSync(target.path);
 		fileDeleted = true;
 		operatorLog('REMOVE: Storage cleanup -> ' + target.path + ' (' + target.size + ' bytes)');
-		const outcome = removeRecordedLedgerEntriesByPath(target.path, Date.now());
-		if (outcome.recordedUpdated && !outcome.matchUpdated) {
-			operatorLog('ERROR: Storage cleanup partial completion: fileDeleted=true recordedUpdated=true matchUpdated=false path=' + target.path + ' (do not retry file deletion)');
-		}
+		removeRecordedLedgerEntriesByPath(target.path, Date.now()).catch(error => {
+			operatorLog('ERROR: Storage cleanup ledger reconciliation failed after file deletion: ' + target.path +
+				' (' + error.message + '; do not retry file deletion)');
+		});
 		return true;
 	} catch (e) {
 		if (fileDeleted) {
@@ -3539,12 +3827,13 @@ chinachu.jsonWatcher(
 
 		reserves = data;
 		operatorLog(mes);
+		wakePostProcessing();
+		recordedThumbnailGenerator.resume();
 
 		if (recording.length > 0) {
 			reserves.forEach(recordingUpdater);
 
-			fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));
-			operatorLog('WRITE: ' + RECORDING_DATA_FILE);
+			writeRecordingData();
 		}
 	},
 	{ create: [], now: true }
@@ -3559,7 +3848,7 @@ chinachu.jsonWatcher(
 			return;
 		}
 
-		recorded = data;
+		if (pendingRecordedLedgerWrites === 0) recorded = data;
 		operatorLog(mes);
 	},
 	{ create: [], now: true }
@@ -3584,4 +3873,6 @@ chinachu.jsonWatcher(
 	{ create: [], now: false }
 );
 
+recoverRecordingHistory();
+reserveCheckLoop();
 startBroadcastClockMonitor();

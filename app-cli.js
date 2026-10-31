@@ -932,10 +932,10 @@ function chinachuProgramList(target) {
 function chinachuCleanup() {
 	var t = new Table;
 
-	recorded = (function() {
+	function clean(current) {
 		var array = [];
 
-		recorded.forEach(function(a) {
+		current.forEach(function(a) {
 			if (fs.existsSync(a.recorded)) {
 				array.push(a);
 
@@ -955,11 +955,10 @@ function chinachuCleanup() {
 		});
 
 		return array;
-	})();
-
-	if (!opts.get('simulation')) {
-		fs.writeFileSync(RECORDED_DATA_FILE, JSON.stringify(recorded));
 	}
+
+	recorded = opts.get('simulation') ? clean(recorded) :
+		reservationStore.updateArrayAtomic(RECORDED_DATA_FILE, clean);
 
 	console.log(t.print().trim());
 

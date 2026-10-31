@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const reservationStore = require('../lib/reservation-store');
 
 const repositoryRoot = path.resolve(__dirname, '..');
 
@@ -127,7 +128,17 @@ async function createOperatorFixture(programs, onStream, options) {
 	fs.chmodSync(path.join(temporaryDir, 'chinachu'), 0o755);
 	if (options.trackRecordedCommand) {
 		const recordedCommand = path.join(temporaryDir, 'recorded-command.js');
-		fs.writeFileSync(recordedCommand, '#!/usr/bin/env node\nrequire("fs").appendFileSync(process.env.CHINACHU_TEST_RECORDED_COMMAND_LOG, process.argv[2] + "\\n");\n');
+		fs.writeFileSync(recordedCommand, [
+			'#!/usr/bin/env node',
+			'const fs = require("fs");',
+			'const assert = require("node:assert/strict");',
+			'const program = JSON.parse(process.argv[3]);',
+			'const recorded = JSON.parse(fs.readFileSync("data/recorded.json", "utf8"));',
+			'const reserves = JSON.parse(fs.readFileSync("data/reserves.json", "utf8"));',
+			'assert.ok(recorded.some(item => item.id === program.id && item.recorded === process.argv[2]));',
+			'if (program.isManualReserved) assert.ok(!reserves.some(item => item.id === program.id && item.isManualReserved));',
+			'fs.appendFileSync(process.env.CHINACHU_TEST_RECORDED_COMMAND_LOG, process.argv[2] + "\\n");'
+		].join('\n') + '\n');
 		fs.chmodSync(recordedCommand, 0o755);
 		options.config = Object.assign({}, options.config, { recordedCommand: recordedCommand });
 	}
@@ -164,9 +175,40 @@ async function createOperatorFixture(programs, onStream, options) {
 
 	let output = '';
 	let child = null;
+	let recordedLock = null;
+	const lockEventsPath = path.join(temporaryDir, 'recorded-lock-events.jsonl');
+	const operatorArgs = [ 'app-operator.js' ];
+	if (Number.isFinite(options.recordedLockTimeoutMs)) {
+		// Exercise the real lock and Operator retry/recovery code. Only shorten
+		// this fixture's lock deadline; leave retry delays and all other locks intact.
+		const preloadPath = path.join(temporaryDir, 'recorded-lock-fixture.js');
+		fs.writeFileSync(preloadPath, [
+			'const fs = require("fs");',
+			'const path = require("path");',
+			'const store = require("./lib/reservation-store");',
+			'const original = store.withLockAsync;',
+			'const target = path.resolve("data/recorded.json");',
+			'const log = event => fs.appendFileSync(' + JSON.stringify(lockEventsPath) + ', JSON.stringify({event, at: Date.now()}) + "\\n");',
+			'store.withLockAsync = async function(file, callback, options) {',
+			'  if (path.resolve(file) !== target) return original(file, callback, options);',
+			'  log("attempt");',
+			'  try {',
+			'    return await original(file, callback, Object.assign({}, options, {timeoutMs: ' + options.recordedLockTimeoutMs + '}));',
+			'  } catch (error) { log(error.code); throw error; }',
+			'};'
+		].join('\n') + '\n');
+		operatorArgs.unshift('--require', preloadPath);
+		recordedLock = reservationStore.acquire(path.join(dataDir, 'recorded.json'), { timeoutMs: 0 });
+	}
+
+	function releaseRecordedLock() {
+		if (!recordedLock) return;
+		recordedLock.release();
+		recordedLock = null;
+	}
 
 	function startOperator() {
-		child = childProcess.spawn(process.execPath, [ 'app-operator.js' ], {
+		child = childProcess.spawn(process.execPath, operatorArgs, {
 			cwd: temporaryDir,
 			stdio: [ 'ignore', 'pipe', 'pipe' ],
 			env: Object.assign({}, process.env, {
@@ -219,6 +261,10 @@ async function createOperatorFixture(programs, onStream, options) {
 		recordedCommandLog,
 		matchingLog,
 		ffprobeLog,
+		releaseRecordedLock,
+		lockEvents() {
+			return fs.existsSync(lockEventsPath) ? fs.readFileSync(lockEventsPath, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
+		},
 		get child() {
 			return child;
 		},
@@ -232,6 +278,7 @@ async function createOperatorFixture(programs, onStream, options) {
 		},
 		async close() {
 			await stopOperator();
+			releaseRecordedLock();
 			for (const socket of sockets) {
 				socket.destroy();
 			}
@@ -331,7 +378,7 @@ describe('Operator recording preparation attempts', function() {
 						fs.existsSync(fixture.recordedCommandLog) &&
 						fs.existsSync(fixture.matchingLog),
 					'final ' + scenario.name + ' recording completion work did not finish',
-					5000
+					20000 // Recording completion is immediate; optional match waits out the 15s handoff window.
 				);
 				await waitForCondition(
 					() => fixture.read('recorded')[0].recordedDurationSeconds === 10.500001,
@@ -390,6 +437,139 @@ describe('Operator recording preparation attempts', function() {
 			assert.strictEqual(releasedFixture.requests.length, 1);
 		} finally {
 			await releasedFixture.close();
+		}
+	});
+
+	it('retains eight concurrent completions through recorded lock timeout and rereads before retry', { timeout: 25000 }, async function() {
+		const programs = Array.from({ length: 8 }, (_, index) => createProgram(String(index + 2), { isManualReserved: true }));
+		const responses = [];
+		const fixture = await createOperatorFixture(programs, request => {
+			responses.push(request.res);
+			request.res.writeHead(200, { 'Content-Type': 'video/MP2T' });
+			request.res.write('PART1');
+		}, {
+			recordedLockTimeoutMs: 4000,
+			trackRecordedCommand: true,
+			initialRecorded: recordedDir => [ { id: 'old', recorded: path.join(recordedDir, 'old.m2ts'), recordedDurationSeconds: 10 } ]
+		});
+		try {
+			await waitForCondition(() => responses.length === 8 && programs.every(program =>
+				fs.existsSync(path.join(fixture.recordedDir, program.id + '.m2ts')) &&
+				fs.readFileSync(path.join(fixture.recordedDir, program.id + '.m2ts'), 'utf8') === 'PART1'),
+			'all eight fixture streams did not start', 7000);
+			responses.forEach(response => response.end('PART2'));
+			await waitForCondition(() => fixture.lockEvents().length > 0 &&
+				fixture.read('recording').filter(program => program._operatorHistoryPending).length === 8,
+			'concurrent completions were not retained while the first save waited', 2000);
+			assert.strictEqual(fixture.read('recorded').length, 1);
+			assert.strictEqual(fs.existsSync(fixture.recordedCommandLog), false);
+
+			// The child must process a watcher event before the held lock times out.
+			const reads = (fixture.output().match(/READ: .*reserves\.json.*updated/g) || []).length;
+			const future = Object.assign(createProgram('91'), { start: Date.now() + 3600000, end: Date.now() + 3660000 });
+			reservationStore.writeArrayAtomic(path.join(fixture.dataDir, 'reserves.json'), programs.concat(future));
+			await waitForCondition(() => (fixture.output().match(/READ: .*reserves\.json.*updated/g) || []).length > reads,
+			'Operator event loop blocked during recorded lock acquisition', 1500);
+			assert.strictEqual(fixture.lockEvents().filter(event => event.event === 'RESERVATION_LOCK_TIMEOUT').length, 0);
+			await waitForCondition(() => fixture.lockEvents().some(event => event.event === 'RESERVATION_LOCK_TIMEOUT'),
+			'the held recorded lock did not time out', 5000);
+			assert.strictEqual(fixture.read('recording').length, 8);
+
+			// Another writer commits while owning the lock. Retry must use these
+			// rows rather than the Operator's pre-timeout in-memory snapshot.
+			const latest = fixture.read('recorded');
+			latest[0].recordedDurationSeconds = 321;
+			latest.push({ id: 'concurrent', recorded: path.join(fixture.recordedDir, 'concurrent.m2ts') });
+			reservationStore.writeArrayAtomic(path.join(fixture.dataDir, 'recorded.json'), latest);
+			fixture.releaseRecordedLock();
+			await waitForCondition(() => fixture.read('recording').length === 0 &&
+				fs.existsSync(fixture.recordedCommandLog) &&
+				fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length === 8,
+			'all eight saves and post-save hooks did not complete', 7000);
+			const recorded = fixture.read('recorded');
+			assert.strictEqual(recorded.length, 10);
+			assert.strictEqual(new Set(recorded.map(program => program.id)).size, 10);
+			assert.deepStrictEqual(recorded.filter(program => !programs.some(item => item.id === program.id)), latest);
+			assert.deepStrictEqual(recorded.slice(2).map(program => program.id),
+				(fixture.output().match(/FIN SAVE PENDING: #[2-9]\b/g) || []).map(line => line.slice(-1)));
+			for (const program of programs) {
+				assert.strictEqual(recorded.find(item => item.id === program.id).recorded, path.join(fixture.recordedDir, program.id + '.m2ts'));
+				assert.strictEqual(fs.readFileSync(path.join(fixture.recordedDir, program.id + '.m2ts'), 'utf8'), 'PART1PART2');
+			}
+			assert.deepStrictEqual(fixture.read('reserves').map(program => program.id), ['91']);
+			assert.strictEqual(new Set(fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n')).size, 8);
+			assert.match(fixture.output(), /recorded lock busy \(recorded finalize\); retry 1/);
+			assert.doesNotMatch(fixture.output(), /recording finalization incomplete/);
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it('retains unsaved history after retry exhaustion and recovers it idempotently on restart', { timeout: 25000 }, async function() {
+		const program = createProgram('2', { isManualReserved: true });
+		let response;
+		const fixture = await createOperatorFixture([program], request => {
+			response = request.res;
+			response.writeHead(200, { 'Content-Type': 'video/MP2T' });
+			response.write('PART1');
+		}, {
+			recordedLockTimeoutMs: 0,
+			trackRecordedCommand: true,
+			initialRecorded: recordedDir => [ { id: 'old', recorded: path.join(recordedDir, 'old.m2ts'), recordedDurationSeconds: 321 } ]
+		});
+		try {
+			await waitForCondition(() => response && fs.existsSync(path.join(fixture.recordedDir, '2.m2ts')) &&
+				fs.readFileSync(path.join(fixture.recordedDir, '2.m2ts'), 'utf8') === 'PART1',
+			'fixture recording did not start', 7000);
+			response.end('PART2');
+			await waitForCondition(() => /recording finalization incomplete #2:/.test(fixture.output()),
+			'failed save was not reported after bounded retries', 10000);
+			assert.strictEqual(fixture.lockEvents().filter(event => event.event === 'RESERVATION_LOCK_TIMEOUT').length, 3);
+			assert.strictEqual(fixture.read('recorded').length, 1);
+			const recovery = fixture.read('recording');
+			assert.strictEqual(recovery.length, 1);
+			assert.strictEqual(recovery[0]._operatorHistoryPending, true);
+			assert.ok(recovery[0].operatorRecordingEnd);
+			assert.strictEqual(fixture.read('reserves').length, 1);
+			assert.strictEqual(fs.existsSync(fixture.recordedCommandLog), false);
+			assert.doesNotMatch(fixture.output(), /FIN: #2\b/);
+			assert.deepStrictEqual(await fixture.gracefulStop(), { code: 1, signal: null });
+			assert.deepStrictEqual(fixture.read('recording'), recovery);
+
+			const oldHistory = fixture.read('recorded')[0];
+			fixture.releaseRecordedLock();
+			fixture.start();
+			await waitForCondition(() => fixture.read('recording').length === 0 &&
+				fs.existsSync(fixture.recordedCommandLog) && /RECOVERED HISTORY: #2\b/.test(fixture.output()),
+			'unsaved history did not recover after restarting Operator', 5000);
+			const saved = fixture.read('recorded');
+			assert.strictEqual(saved.length, 2);
+			assert.deepStrictEqual(saved[0], oldHistory);
+			assert.strictEqual(saved[1].id, '2');
+			assert.strictEqual(saved[1].recorded, recovery[0].recorded);
+			assert.strictEqual(saved[1].operatorRecordingStart, recovery[0].operatorRecordingStart);
+			assert.strictEqual(saved[1].operatorRecordingEnd, recovery[0].operatorRecordingEnd);
+			assert.strictEqual(saved[1]._operatorHistoryPending, undefined);
+			assert.deepStrictEqual(fixture.read('reserves'), []);
+			assert.strictEqual(fixture.requests.length, 1, 'recovery must not record the completed program again');
+			assert.deepStrictEqual(await fixture.gracefulStop(), { code: 0, signal: null });
+
+			// Replaying the durable snapshot after a crash must retain a later
+			// ffprobe update, rather than overwrite it or register the ID twice.
+			saved[1].recordedDurationSeconds = 123;
+			reservationStore.writeArrayAtomic(path.join(fixture.dataDir, 'recorded.json'), saved);
+			reservationStore.writeArrayAtomic(path.join(fixture.dataDir, 'recording.json'), recovery);
+			const recoveredCount = (fixture.output().match(/RECOVERED HISTORY: #2\b/g) || []).length;
+			fixture.start();
+			await waitForCondition(() => fixture.read('recording').length === 0 &&
+				(fixture.output().match(/RECOVERED HISTORY: #2\b/g) || []).length > recoveredCount &&
+				fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length === 2,
+			'recovery replay did not finish', 5000);
+			assert.deepStrictEqual(fixture.read('recorded'), saved);
+			assert.strictEqual(fixture.requests.length, 1);
+			assert.deepStrictEqual(fixture.read('reserves'), []);
+		} finally {
+			await fixture.close();
 		}
 	});
 

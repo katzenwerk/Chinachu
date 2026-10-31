@@ -1631,6 +1631,10 @@ function main() {
 	var schemaVersion;
 
 	try {
+		// Both Operator and Scheduler invoke this worker. Yield CPU to recording.
+		try { require("os").setPriority(0, 19); } catch (priorityError) {
+			console.error("WARNING: match priority adjustment failed: " + priorityError.message);
+		}
 		options = parseArgs(process.argv);
 
 		if (options.help) {
@@ -1679,10 +1683,17 @@ function main() {
 		recordedList = ledger.sourceRecordedList;
 		reserves2List = ledger.sourceReserves2List;
 
-		cleanup = cleanupRecordedHistory(recordedList, options.recordedHistoryDays, options.nowMs);
-		if (cleanup.enabled && cleanup.removedCount > 0) {
-			writeJsonAtomic(options.recorded, cleanup.kept);
-		}
+		// Do not write back the snapshot used to build match: recordings may have
+		// finished (or acquired duration metadata) while this process was running.
+		// Never hold the match lock while acquiring the recorded lock.
+		cleanup = reservationStore.withLock(options.recorded, function () {
+			var latest = reservationStore.readArray(options.recorded);
+			var result = cleanupRecordedHistory(latest, options.recordedHistoryDays, options.nowMs);
+			if (result.enabled && result.removedCount > 0) {
+				reservationStore.writeArrayAtomic(options.recorded, result.kept);
+			}
+			return result;
+		});
 
 		try {
 			var historyResult = recordingHistoryCsv.exportHistory({

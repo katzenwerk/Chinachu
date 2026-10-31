@@ -5,19 +5,14 @@ case 'GET':
 	break;
 
 case 'PUT':
-	data.recorded = (function() {
-		var array = [];
-		
-		data.recorded.forEach(function(a) {
-			if (fs.existsSync(a.recorded)) {
-				array.push(a);
-			}
+	try {
+		data.recorded = reservationStore.updateArrayAtomic(define.RECORDED_DATA_FILE, function(current) {
+			return current.filter(function(a) { return fs.existsSync(a.recorded); });
 		});
-		
-		return array;
-	})();
-	
-	fs.writeFileSync(define.RECORDED_DATA_FILE, JSON.stringify(data.recorded));
+	} catch (error) {
+		response.error(500);
+		break;
+	}
 	
 	response.head(200);
 	response.end(JSON.stringify(data.recorded, null, '  '));
