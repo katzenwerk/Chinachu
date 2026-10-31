@@ -176,6 +176,35 @@ const STORAGE_REFRESH_SOCKET = runtimePaths.storageRefreshSocket;
 const RECORDED_THUMBNAIL_SOCKET = runtimePaths.recordedThumbnailSocket;
 const wuiAuth = wuiAuthModule.createAuthManager({ rootDir: __dirname, log: util.log });
 const seriesUseSyobocal = config.seriesUseSyobocal !== false;
+const seriesBackgroundStop = new AbortController();
+let seriesTimingReady = 0;
+function seriesBackgroundDelay() {
+	// Initial jsonWatcher reads are asynchronous; do not interpret their
+	// not-yet-loaded arrays as proof that no handoff is approaching.
+	if (seriesTimingReady !== 3) return 30000;
+	const now = Date.now();
+	let until = now;
+	const upcoming = (reserves || []).filter(program => program && !program.isSkip && !program.isConflict);
+	for (const program of upcoming.concat(recording || [])) {
+		if (!program) continue;
+		for (const time of [Number(program.start), Number(program.end)]) {
+			if (Number.isFinite(time) && time - 15000 <= now && time + 15000 > until) until = time + 15000;
+		}
+	}
+	return until - now;
+}
+async function waitForSeriesBackground(signal) {
+	const combined = signal ? AbortSignal.any([signal, seriesBackgroundStop.signal]) : seriesBackgroundStop.signal;
+	// At most one complete 30s handoff window per work unit. Back-to-back
+	// transitions must not indefinitely starve dictionary/cache progress.
+	const deadline = Date.now() + 30000;
+	for (;;) {
+		combined.throwIfAborted();
+		const delay = Math.min(seriesBackgroundDelay(), deadline - Date.now());
+		if (delay <= 0) return;
+		await require('node:timers/promises').setTimeout(delay, undefined, { signal: combined });
+	}
+}
 const officialRequests = seriesUseSyobocal ? syobocalChannelCatalogModule.createOfficialRequestQueue({
 	statePath: __dirname + '/data/syobocal-request-cooldown.json'
 }) : null;
@@ -201,26 +230,33 @@ const syobocalChannelMapManager = syobocalChannelMapManagerModule.createSyobocal
 	catalogPath: SERIES_CHANNEL_CATALOG_FILE,
 	channelMapPath: SERIES_CHANNEL_MAP_FILE,
 	dictionaryPath: SERIES_DICTIONARY_FILE,
+	progLookupPath: SERIES_PROGLOOKUP_CACHE_FILE,
+	schedulePath: SCHEDULE_DATA_FILE,
+	waitForBackground: waitForSeriesBackground,
 	progLookupStore,
 	getAvailableChannels: () => schedule,
 	userAgent: `Chinachu-thorn/${pkg.version} (Syobocal channel catalog; WUI)`,
 	log: util.log
 });
 const progLookupUpdater = progLookupUpdaterModule.createProgLookupUpdater({
+	worker: true,
+	cachePath: SERIES_PROGLOOKUP_CACHE_FILE,
+	waitForBackground: waitForSeriesBackground,
 	request: officialRequests && officialRequests.request,
 	store: progLookupStore,
 	channelMapPath: SERIES_CHANNEL_MAP_FILE,
 	getAvailableChannels: () => schedule,
-	getBackfillRequests: () => seriesService.getBackfillRequests(),
+	getBackfillRequests: () => seriesService.getBackfillRequests({ background: true }),
 	onUpdateApplied: async update => {
 		await syobocalChannelMapManager.rebuild({ refreshCatalog: update.kind === 'full' });
-		seriesService.invalidate();
+		seriesService.invalidate({ retain: true });
 		ios.emit('notify-series');
 	},
 	userAgent: `Chinachu-thorn/${pkg.version} (ProgLookup; WUI)`,
 	log: util.log
 });
 dictionaryManager = dictionaryManagerModule.createDictionaryManager({
+	getBackgroundDelay: seriesBackgroundDelay,
 	path: SERIES_DICTIONARY_FILE,
 	enabled: seriesUseSyobocal,
 	request: officialRequests && officialRequests.request,
@@ -229,6 +265,7 @@ dictionaryManager = dictionaryManagerModule.createDictionaryManager({
 	log: util.log,
 	onStatus: () => ios.emit('notify-series'),
 	onPublished: () => dictionaryManagerModule.applyDictionaryToSeries({
+		background: true, waitForBackground: waitForSeriesBackground,
 		seriesService, channelMapManager: syobocalChannelMapManager, progLookupUpdater,
 		notify: () => ios.emit('notify-series')
 	})
@@ -465,6 +502,7 @@ function shutdownWui(signal) {
 		return;
 	}
 	shutdownStarted = true;
+	seriesBackgroundStop.abort();
 	util.log('SHUTDOWN: ' + signal);
 	mediaDelivery.close();
 	progLookupUpdater.stop();
@@ -1355,6 +1393,7 @@ chinachu.jsonWatcher(
 		}
 
 		reserves = data;
+		seriesTimingReady |= 1;
 		ios.emit('notify-reserves');
 		util.log(mes);
 	},
@@ -1371,6 +1410,7 @@ chinachu.jsonWatcher(
 		}
 
 		recording = data;
+		seriesTimingReady |= 2;
 		ios.emit('notify-recording');
 		util.log(mes);
 	},
