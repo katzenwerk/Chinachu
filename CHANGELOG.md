@@ -19,9 +19,9 @@ This release reduces interference from recording post-processing and background 
 
 ## Manual TS Analyzer
 
-- Added `tools/ts-analyzer`, a manual, read-only tool using the existing recording DROP analysis engine with supplemental file diagnostics.
-- Display CC errors, PCR time-gap candidates, and TOT clock information, with summary, event, and JSON output modes. PCR backward jumps are marked for review in the standard summary.
-- PCR gaps and packet errors are diagnostic observations; they do not establish the cause or amount of missing video. See the README for usage.
+- Added a manual TS Analyzer to check CC errors (suspected DROP) and PCR time gaps.
+- Run `./tools/ts-analyzer FILE.ts` from the Chinachu directory; use `--help` for options.
+- These findings do not establish the cause or amount of missing video.
 
 ## Updating and Recovery
 

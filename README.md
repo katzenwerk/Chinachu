@@ -55,16 +55,6 @@ Review local changes and untracked files before updating. Resolve conflicting pa
 
 Before rolling back to an older Operator, finish pending history recovery and confirm that `data/recording.json` is empty after stopping Operator. Older Operators may clear that file at startup. Keep current ledgers; restoring all data from an older backup can discard newer recordings and reservation changes.
 
-## Manual TS Analyzer
-
-Run from the Chinachu directory with Node.js 24 available as `node` in your shell:
-
-```sh
-./tools/ts-analyzer --help
-```
-
-Pass one or more explicit TS file paths for a read-only analysis. The default output shows packet-error events, PCR time-gap candidates, and available TOT clock information; use `--summary`, `--events`, or `--json` to select another output format. This is a manually invoked tool. PCR gaps and CC errors alone do not establish missing video or its cause.
-
 ## Network access and authentication
 
 Chinachu is intended for use on private or access-controlled networks. Direct exposure of the WUI to the Internet is not recommended.
