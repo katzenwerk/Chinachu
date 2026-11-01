@@ -49,10 +49,10 @@ function thresholdPosition(thresholdMB, total) {
   return Math.max(0, Math.min(100, (1 - thresholdBytes / total) * 100));
 }
 
-function formatCheckedAt(value) {
+function formatCheckedAt(value, options) {
   if (!value) return '未取得';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '未取得' : date.toLocaleString('ja-JP');
+  return Number.isNaN(date.getTime()) ? '未取得' : date.toLocaleString('ja-JP', options);
 }
 
 function formatCheckedAgo(value, now = Date.now()) {
@@ -290,14 +290,21 @@ function reservationStorageNotice(storage, thresholds, unresolved) {
           ? '録画先が容量不足のため、新規録画の開始を停止中です。'
           : '録画先が容量不足のため、録画停止・開始抑止の対象です。');
   }
-  const tooltip = [
+  const tooltip = issue.state.key === 'warning' ? [
+    '録画先の空き容量警告',
+    `録画先：${issue.name}`,
+    `空き容量：${formatCapacity(storage.available, storage.total)} / 警告閾値：${formatThreshold(thresholds.warningMB)}`,
+    `確認日時：${formatCheckedAt(storage.capacityCheckedAt, {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    })}`
+  ] : [
     `状態：${issue.state.label}`,
     `最終確認：${issue.checkedAgo}`,
     message
   ];
   if (issue.state.stale) {
-    tooltip.push('取得済みの容量は参考値です。');
-    tooltip.push('Storage画面の更新ボタンから現在の状態を確認できます。');
+    tooltip.push('※ 空き容量は前回の録画時、または手動更新時の参考値です。');
   }
   return {
     strong: issue.priority >= 3,

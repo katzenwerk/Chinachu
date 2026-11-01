@@ -9,10 +9,8 @@ import { buildReservationListModels, filterReservationListModels, findReservatio
 import { subscribeReservationNotifications, subscribeSeriesNotifications } from '../services/realtime-client.js';
 import { subscribeStorageData } from '../services/storage-store.js';
 import { ruleAction } from '../services/program-detail-model.js';
-import { setReserveSkip, unreserveProgram } from '../services/timetable-client.js';
 import { loadSeriesProjection } from '../services/series-client.js';
 import { buildSeriesTitleIndex, canonicalProgramKey } from '../services/program-title.js';
-import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
 
 function normalizeStatus(value) {
   return ['normal', 'skip', 'conflict'].includes(value) ? value : 'all';
@@ -24,7 +22,6 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
   let latestPrograms = [];
   let storageData = null;
   let seriesTitleIndex = new Map();
-  let seriesEventIndex = new Map();
   let status = normalizeStatus(query.get('status'));
   let search = query.get('search') || '';
   let ruleUid = query.get('ruleUid') || null;
@@ -39,7 +36,6 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
   let jumpMessageTimer = null;
   let displayBoundaryTimer = null;
   let refreshGeneration = 0;
-  const pendingReservations = new Set();
   const preferredRuleUids = new Map();
   let ruleDialog = null;
 
@@ -258,7 +254,6 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
           latestPrograms = programs;
           if (seriesSnapshot !== null) {
             seriesTitleIndex = buildSeriesTitleIndex(seriesSnapshot);
-            seriesEventIndex = buildSeriesEventIndex(seriesSnapshot);
           }
           models = buildReservationListModels(latestPrograms, { storageData, seriesTitleIndex });
           renderList({ preserveScroll: true });
@@ -406,20 +401,6 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     onAction(action, item) {
       if (!isActive()) return;
       if (action.startsWith('filter-')) return applyContextFilter(action, item);
-      if (action === 'series-view') {
-        const href = seriesEventHref(item.seriesContext, 'reservations');
-        if (href) window.location.hash = href;
-        return;
-      }
-      if (['series-change', 'series-episode', 'series-remove'].includes(action)) {
-        openProgramDetailDialog({
-          key: item.seriesContext?.eventKey,
-          id: item.id,
-          initialAction: action,
-          onChanged: () => requestRefresh(true)
-        });
-        return;
-      }
       if (action === 'copy-title') return void copyContextTitle(item.title).catch(showContextError);
       if (action === 'search-google' || action === 'search-wikipedia') {
         const url = action === 'search-google'
@@ -428,43 +409,12 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
         window.open(url, '_blank', 'noopener');
         return;
       }
-      if (action === 'detail') {
-        openProgramDetailDialog({ id: item.id, onChanged: () => requestRefresh(true) });
-        return;
-      }
       if (action === 'rule') {
         if (item.ruleAction?.mode === 'unavailable') {
           openProgramDetailDialog({ id: item.id, onChanged: () => requestRefresh(true) });
         } else openContextRule(item);
         return;
       }
-      if (action !== 'primary' || !item.id || pendingReservations.has(item.id)) return;
-      // 開いた後に更新された予約に対して、古いスキップ状態の操作をしない。
-      const program = latestPrograms.find(value => value?.id != null && String(value.id) === item.id);
-      if (!program) return;
-      const skipped = program.isSkip === true;
-      const manual = program.isManualReserved === true;
-      if (skipped !== (item.program.isSkip === true) ||
-          (!skipped && manual !== (item.program.isManualReserved === true))) {
-        void requestRefresh(true);
-        return;
-      }
-      const message = skipped ? 'このスキップを解除しますか？' :
-        manual ? 'この手動予約を取り消しますか？' : 'このルール予約をスキップしますか？';
-      if (!window.confirm(message)) return;
-      pendingReservations.add(item.id);
-      void (async () => {
-        try {
-          if (skipped) await setReserveSkip(item.id, false);
-          else if (manual) await unreserveProgram(item.id);
-          else await setReserveSkip(item.id, true);
-          await requestRefresh(true);
-        } catch (error) {
-          showContextError(error);
-        } finally {
-          pendingReservations.delete(item.id);
-        }
-      })();
     }
   });
 
@@ -475,15 +425,6 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     if (!model?.id) return;
     const program = latestPrograms.find(value => value?.id != null && String(value.id) === model.id);
     if (!program) return;
-    const eventKey = canonicalProgramKey(program);
-    const seriesContext = seriesEventIndex.get(eventKey) || (eventKey ? {
-      eventKey,
-      event: { ...program, key: eventKey, resolution: null },
-      seriesId: null,
-      tidConfirmed: false,
-      manual: false,
-      candidates: []
-    } : null);
     event.preventDefault();
     dismissReservationProgramPreview();
     const rect = row.getBoundingClientRect();
@@ -491,7 +432,7 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
       ? { x: event.clientX, y: event.clientY }
       : { x: rect.left + 16, y: rect.top + 16 };
     contextMenu.open({ kind: 'reservation', id: model.id,
-      title: program.title || program.fullTitle || '', program, seriesContext }, point);
+      title: program.title || program.fullTitle || '', program, refresh: () => requestRefresh(true) }, point);
   }
 
   content.addEventListener('contextmenu', openRowContext);

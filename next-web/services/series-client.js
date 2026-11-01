@@ -29,13 +29,16 @@ export function loadSeriesStatus({ signal } = {}) {
     return state;
   });
 }
-export async function loadSeriesProjection({ signal, id, groupId, event, eventKeys, retry = true } = {}) {
+export async function loadSeriesProjection({ signal, id, groupId, event, eventKeys, filter = 'all', view = 'list', page = 1, q = '', generation, retry = true } = {}) {
   const state = await loadSeriesStatus({ signal });
+  if (generation && state.generation !== generation) {
+    const error = new Error('シリーズ情報が更新されました'); error.status = 409; throw error;
+  }
   const query = id ? ['/api/series/detail.json?id=' + encodeURIComponent(id) + (event ? '&event=' + encodeURIComponent(event) : ''), {}] :
     groupId ? ['/api/series/attention.json?id=' + encodeURIComponent(groupId), {}] :
     event ? ['/api/series/event.json?event=' + encodeURIComponent(event), {}] :
     eventKeys ? ['/api/series/events.json', { method: 'POST', body: JSON.stringify({ eventKeys: [...new Set(eventKeys)].filter(Boolean).sort() }) }] :
-    ['/api/series/overview.json', {}];
+    ['/api/series/overview.json?' + new URLSearchParams({ filter, view, page, q }), {}];
   if (query[1].body) {
     query[1].body = JSON.stringify({ ...JSON.parse(query[1].body), generation: state.generation });
   } else query[0] += (query[0].includes('?') ? '&' : '?') + 'generation=' + encodeURIComponent(state.generation);
@@ -45,7 +48,7 @@ export async function loadSeriesProjection({ signal, id, groupId, event, eventKe
     try {
       data = await sharedRead(query[0], query[1], signal);
     } catch (error) {
-      if (retry && error.status === 409) return loadSeriesProjection({ signal, id, groupId, event, eventKeys, retry: false });
+      if (retry && error.status === 409) return loadSeriesProjection({ signal, id, groupId, event, eventKeys, filter, view, page, q, generation, retry: false });
       throw error;
     }
     if (!data || data.schemaVersion !== 1 || !Array.isArray(data.series) || !Array.isArray(data.attention)) {

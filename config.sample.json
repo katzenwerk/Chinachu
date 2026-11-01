@@ -35,6 +35,7 @@
   "broadcastClockIntervalHours": 3,
   "broadcastClockGrChannel": null,
   "seriesUseSyobocal": true,
+  "seriesMatchCleanupIntervalDays": 30,
   "storageLowSpaceWarningThresholdMB": 50000,
   "storageLowSpaceWarningIntervalMinutes": 1440,
   "storageLowSpaceThresholdMB": 3000,

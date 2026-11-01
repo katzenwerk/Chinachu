@@ -1,16 +1,16 @@
 import { createChannelLogo } from '../components/channel-logo.js';
+import { createHomeProgramContextMenu } from '../components/home-program-context-menu.js';
 import { headerCompactMedia as createHeaderCompactMedia } from '../components/mobile-layout.js';
 import { invalidateResources, loadResource } from '../services/api-client.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor-dialog.js';
-import { closeActiveLiveOverlay, openRecordingLiveOverlay } from '../services/live-player-adapter.js';
+import { closeActiveLiveOverlay } from '../services/live-player-adapter.js';
 import { copyProgramTitle, programActionTitle, programSearchUrl } from '../services/program-actions.js';
 import { channelDetailText } from '../services/recording-model.js';
 import { programDetailUrl } from '../services/program-detail-client.js';
-import { programRecordingAction, ruleAction } from '../services/program-detail-model.js';
+import { CONFLICT_DESCRIPTION, ruleAction } from '../services/program-detail-model.js';
 import {
-  loadTimetableData, loadWuiConfig, refreshTimetableData, reserveProgram, saveTimetableConfig,
-  setReserveSkip, unreserveProgram
+  loadTimetableData, loadWuiConfig, refreshTimetableData, saveTimetableConfig
 } from '../services/timetable-client.js';
 import {
   subscribeRecordingNotifications, subscribeReservationNotifications, subscribeScheduleNotifications
@@ -22,7 +22,7 @@ import {
 } from '../services/timetable-model.js';
 
 const DAY_MS = 86400000;
-const AXIS_WIDTH = 68;
+const AXIS_WIDTH = 48;
 const HEADER_HEIGHT = 60;
 const TYPES = ['GR', 'BS', 'CS', 'SKY'];
 const HIDDEN_CHANNELS_STORAGE_KEY = 'chinachu.next.guide.hiddenChannels.v1';
@@ -99,92 +99,34 @@ function ruleProgram(program, reserves) {
   };
 }
 
-function guideLiveModel(program) {
-  const channelId = text(program?.channel?.id);
-  if (channelId === '' || programRecordingAction(program) !== 'reserve-now') return null;
-  return {
-    title: programActionTitle(program),
-    liveChannel: { id: channelId, name: text(program.channel?.name, '放送局未取得') },
-    liveProgram: {
-      id: text(program.id) || null,
-      title: text(program.title) || null,
-      fullTitle: text(program.fullTitle) || null,
-      detail: text(program.detail) || null,
-      start: Number(program.start),
-      end: Number(program.end) || Number(program.start) + Number(program.seconds || 0) * 1000
-    }
-  };
+let activeGuideMenu = null;
+
+function closeGuideProgramMenu() {
+  activeGuideMenu?.destroy();
+  activeGuideMenu = null;
 }
 
-export function createGuideProgramMenu({
-  program, state, x, y, onAction, onLive = null, resolveRule, onRule,
-  unifiedNormalActions = false, host = document.body
-}) {
-  document.querySelector('.guide-context-menu')?.remove();
-  const menu = document.createElement('div');
-  menu.className = 'guide-context-menu';
-  menu.setAttribute('role', 'menu');
-  const items = [];
-  let ruleChoice = null;
-  let ruleButton = null;
-  const unifiedNormal = unifiedNormalActions && state.key === 'none';
-  const recordingAction = unifiedNormal ? programRecordingAction(program) : 'reserve';
-  if (state.key === 'none' && recordingAction !== null) {
-    items.push([recordingAction === 'reserve-now' ? '今から録画' : '録画予約', () => onAction('reserve')]);
-  }
-  if (state.key === 'none' && typeof onLive === 'function') items.push(['LIVE視聴', onLive]);
-  if (state.key === 'manual') items.push(['予約取消', () => onAction('unreserve')]);
-  if (['rule', 'conflict'].includes(state.key)) items.push(['この予約をスキップ', () => onAction('skip')]);
-  if (state.key === 'skip') items.push(['スキップを取消', () => onAction('unskip')]);
-  if (state.key !== 'recording') items.push(['ルール', () => onRule(ruleChoice), 'rule']);
-  items.push(['番組詳細を開く', () => { location.hash = programDetailUrl({ id: program.id }); }]);
-  items.push(null);
-  const actionTitle = unifiedNormal ? programActionTitle(program) : program.title || '';
-  items.push(['タイトルをコピー', () => copyProgramTitle(actionTitle)]);
-  items.push(null);
-  items.push([unifiedNormal ? 'Google検索' : 'Googleで検索', () => window.open(unifiedNormal ? programSearchUrl('google', actionTitle) : `https://www.google.com/search?q=${encodeURIComponent(actionTitle)}`, '_blank', 'noopener')]);
-  items.push([unifiedNormal ? 'Wikipedia検索' : 'Wikipediaで検索', () => window.open(unifiedNormal ? programSearchUrl('wikipedia', actionTitle) : `https://ja.wikipedia.org/wiki/${encodeURIComponent(actionTitle)}`, '_blank', 'noopener')]);
-  items.forEach(item => {
-    if (item === null) {
-      const separator = document.createElement('hr');
-      separator.setAttribute('role', 'separator');
-      menu.append(separator);
-      return;
+export function createGuideProgramMenu({ program, x, y, resolveRule, onRule, onChanged }) {
+  closeGuideProgramMenu();
+  const menu = createHomeProgramContextMenu({
+    resolveRule: () => resolveRule(),
+    onAction(action, item) {
+      if (action === 'rule') return onRule(item.ruleAction);
+      if (action === 'copy-title') return void copyProgramTitle(item.title).catch(error => window.alert(String(error?.message || error)));
+      if (action === 'search-google' || action === 'search-wikipedia') {
+        window.open(programSearchUrl(action === 'search-google' ? 'google' : 'wikipedia', item.title), '_blank', 'noopener');
+      }
     }
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.setAttribute('role', 'menuitem');
-    button.textContent = item[0];
-    if (item[2] === 'rule') {
-      ruleButton = button;
-      button.disabled = true;
-    }
-    button.addEventListener('click', async () => {
-      menu.remove();
-      try { await item[1](); } catch (_) {}
-    });
-    menu.append(button);
   });
-  host.append(menu);
-  const rect = menu.getBoundingClientRect();
-  menu.style.left = `${Math.max(8, Math.min(x, innerWidth - rect.width - 8))}px`;
-  menu.style.top = `${Math.max(8, Math.min(y, innerHeight - rect.height - 8))}px`;
-  if (ruleButton) {
-    Promise.resolve().then(resolveRule).then(action => {
-      if (!menu.isConnected) return;
-      ruleChoice = action;
-      ruleButton.disabled = false;
-      ruleButton.textContent = action.mode === 'edit' ? 'ルール編集' :
-        action.mode === 'create' ? 'ルール作成' : '関連ルールを確認';
-      if (action.mode === 'unavailable') ruleButton.title = action.label || '';
-    }).catch(error => {
-      if (!menu.isConnected) return;
-      ruleButton.textContent = 'ルールを取得できません';
-      ruleButton.title = String(error?.message || error);
-      ruleButton.disabled = true;
-    });
-  }
-  return menu;
+  activeGuideMenu = menu;
+  menu.open({ id: program.id, title: programActionTitle(program), program, refresh: onChanged }, { x, y });
+  return {
+    contains: target => menu.element.contains(target),
+    remove() {
+      menu.destroy();
+      if (activeGuideMenu === menu) activeGuideMenu = null;
+    }
+  };
 }
 
 function enableMouseDragScroll(scroll) {
@@ -301,16 +243,6 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     subscribeScheduleNotifications(() => handleRealtime(['schedule']))
   );
 
-  async function runAction(program, action) {
-    const messages = { reserve: 'この番組を録画予約しますか？', unreserve: 'この手動予約を取り消しますか？', skip: 'このルール予約をスキップしますか？', unskip: 'スキップを取り消しますか？' };
-    if (!window.confirm(messages[action])) return;
-    if (action === 'reserve') await reserveProgram(program.id);
-    if (action === 'unreserve') await unreserveProgram(program.id);
-    if (action === 'skip') await setReserveSkip(program.id, true);
-    if (action === 'unskip') await setReserveSkip(program.id, false);
-    await refreshState();
-  }
-
   function renderGrid(preserveScroll = false) {
     const scroll = container.querySelector('.guide-scroll');
     const previous = preserveScroll && scroll ? { left: scroll.scrollLeft, top: scroll.scrollTop } : null;
@@ -332,7 +264,7 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     header.className = 'guide-channel-row';
     header.style.width = `${canvasWidth}px`;
     header.style.gridTemplateColumns = `${AXIS_WIDTH}px repeat(${channels.length},${channelWidth}px)`;
-    header.innerHTML = '<div class="guide-corner">時刻</div>';
+    header.innerHTML = '<div class="guide-corner"></div>';
     channels.forEach(channel => {
       const cell = document.createElement('div');
       cell.className = 'guide-channel';
@@ -386,7 +318,8 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
         const renderedHeight = Math.max(2, position.height - 2);
         const contentLayout = programContentLayout(renderedHeight, channelWidth);
         cell.style.height = `${renderedHeight}px`;
-        cell.title = programTitlePresentation(program.fullTitle || program.title || '');
+        cell.title = [programTitlePresentation(program.fullTitle || program.title || ''),
+          state.reserve?.isConflict === true ? CONFLICT_DESCRIPTION : ''].filter(Boolean).join('\n');
         if (contentLayout.mode !== 'normal') cell.classList.add(`is-${contentLayout.mode}`);
         const episode = program.episode === null || program.episode === undefined ? '' : String(program.episode).trim();
         const subtitle = text(program.subTitle) || (episode ? `第${episode}話` : '');
@@ -402,11 +335,8 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
         cell.addEventListener('contextmenu', event => {
           event.preventDefault();
           event.stopPropagation();
-          const liveModel = state.key === 'none' ? guideLiveModel(displayProgram) : null;
-          createGuideProgramMenu({ program: displayProgram, state, x: event.clientX, y: event.clientY,
-            onAction: action => runAction(program, action),
-            onLive: liveModel === null ? null : () => openRecordingLiveOverlay(liveModel),
-            unifiedNormalActions: true,
+          createGuideProgramMenu({ program: displayProgram, x: event.clientX, y: event.clientY,
+            onChanged: () => refreshState(['recording', 'reserves']),
             resolveRule: async () => {
               invalidateResources(['rules']);
               const rules = await loadResource('rules');
@@ -576,7 +506,7 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
       } finally { button.disabled = false; }
     });
     const scroll = container.querySelector('.guide-scroll');
-    scroll.addEventListener('scroll', () => document.querySelector('.guide-context-menu')?.remove(), { passive: true });
+    scroll.addEventListener('scroll', () => closeGuideProgramMenu(), { passive: true });
     dragDispose = enableMouseDragScroll(scroll);
     renderGrid();
     scroll.scrollTop = Math.max(0, HEADER_HEIGHT + (Date.now() - displayRange.start) / 3600000 * config.hourHeight - 160);
@@ -599,9 +529,9 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
   });
 
   const dismissMenu = event => {
-    const menu = document.querySelector('.guide-context-menu');
-    if (event.key === 'Escape') menu?.remove();
-    if (event.type === 'pointerdown' && menu && !menu.contains(event.target)) menu.remove();
+    const menu = activeGuideMenu;
+    if (event.key === 'Escape') closeGuideProgramMenu();
+    if (event.type === 'pointerdown' && menu && !menu.element.contains(event.target)) closeGuideProgramMenu();
   };
   document.addEventListener('keydown', dismissMenu);
   document.addEventListener('pointerdown', dismissMenu);
@@ -614,7 +544,7 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     dragDispose?.();
     logoHandles.forEach(handle => handle.dispose());
     closeActiveLiveOverlay();
-    document.querySelector('.guide-context-menu')?.remove();
+    closeGuideProgramMenu();
     document.querySelector('.guide-program-dialog')?.close();
     ruleDialog?.close();
     document.removeEventListener('keydown', dismissMenu);

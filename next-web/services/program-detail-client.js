@@ -122,6 +122,24 @@ export function programDetailUrl({ key = null, id = null } = {}) {
   return `#program?${params}`;
 }
 
+const pendingRecordingStops = new Set();
+
+export async function stopRecordingProgram(id) {
+  id = validText(id);
+  if (id === null) throw new ProgramDetailError('invalid-request', '番組IDがありません');
+  if (pendingRecordingStops.has(id)) throw new ProgramDetailError('stop-pending', '録画中止を要求中です。');
+  pendingRecordingStops.add(id);
+  try {
+    const response = await fetch(`/api/recording/${encodeURIComponent(id)}.json`, {
+      method: 'DELETE', headers: { Accept: 'application/json' }, credentials: 'same-origin'
+    });
+    if (!response.ok) throw new ProgramDetailError('stop-failed', `録画中止を要求できませんでした (HTTP ${response.status})`);
+    invalidateResources(['recording', 'reserves']);
+  } finally {
+    pendingRecordingStops.delete(id);
+  }
+}
+
 export async function deleteRecordedProgram(recordedId, { signal } = {}) {
   recordedId = validText(recordedId);
   if (recordedId === null) throw new ProgramDetailError('invalid-request', '録画IDがありません');
@@ -176,6 +194,7 @@ export async function loadProgramDetail({ key = null, id = null, signal } = {}) 
       program: current ? current[1] : resolved.program,
       currentSource: current ? current[0] : null,
       historyAmbiguous: false,
+      reserves,
       rules
     };
   }
@@ -206,6 +225,7 @@ export async function loadProgramDetail({ key = null, id = null, signal } = {}) 
         program: current[1],
         currentSource: current[0],
         historyAmbiguous: false,
+        reserves,
         rules
       };
     }
@@ -218,13 +238,14 @@ export async function loadProgramDetail({ key = null, id = null, signal } = {}) 
       resolution: null,
       currentSource: current[0],
       historyAmbiguous: false,
+      reserves,
       rules
     };
   }
 
   const resolved = await loadResolvedMatchById(id, signal);
   if (resolved !== null) {
-    return { ...resolved, currentSource: null, historyAmbiguous: false, rules };
+    return { ...resolved, currentSource: null, historyAmbiguous: false, reserves, rules };
   }
 
   throw new ProgramDetailError('not-found', '指定された番組が見つかりません');

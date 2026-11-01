@@ -75,3 +75,13 @@ To disable 2FA or authentication locally:
 ./chinachu auth disable-totp
 ./chinachu auth disable-auth
 ```
+
+## Series management (Beta)
+
+The Next WUI series page combines recordings and active reservations by default. Filters select recordings, reservations, or attention groups. Search and pagination run in the series Worker; **もっと見る** loads 50 list entries or 25 cards at a time. Details still load one series or attention group. Program information comes from `reserves.json` and `recorded.json`; `match.json` supplements recording history and deletion state. Series generation does not read `reserves2.json`, and skipped-only reservations and missed events without a recording are excluded.
+
+`data/series-match.json` caches automatic TID/EP decisions before work propagation and manual correction. `data/series-overrides.json` remains the source of manual decisions. Decisions are reused only while the relevant program fields, published dictionary, ProgLookup programs/coverage, channel mappings, and resolver code match; recording status alone does not invalidate them. The existing propagation conditions apply to all events, including deleted recordings with sufficient evidence. There is no separate history-retention or recovery path. Only events still present in the input ledgers are projected; leftover cache entries cannot keep removed history visible. Recording-file deletion and ledger-history removal are distinct. Titles and subtitles are read from the dictionary or existing ledgers; unavailable historical EPG information remains unverified. No recording state, file paths, complete program payloads, subtitle text, or channel display metadata are cached. Lost decisions are not specially restored; future broadcasts are judged from their new program information.
+
+`seriesMatchCleanupIntervalDays` defaults to `30`; set it to `0` to disable automatic cache cleanup. Existing series rebuilds check the interval and remove only keys absent from the captured reservation, recording, and match ledgers. Cleanup is deferred if those inputs changed. No timer or manual-correction cleanup is added. Successful cleanup times are stored with cache content changes; a cleanup deleting nothing is remembered by the running coordinator without rewriting the cache, so a restart can repeat that check.
+
+`SERIES projection` logs include automatic-resolution time, cache hits and misses, cache read/save time, cleanup counts/time, and API-index time. Runtime behavior, performance, and concurrent Worker writes require live validation; static checks do not establish a speedup.

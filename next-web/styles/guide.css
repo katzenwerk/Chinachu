@@ -43,7 +43,7 @@ html:has(.guide-page) .main-content { padding-bottom: var(--space-3); }
 .guide-channel .channel-logo { width: 48px; height: 28px; }
 .guide-channel > span:last-child { min-width: 0; overflow: hidden; font-size: 12px; font-weight: var(--font-title-weight); text-overflow: ellipsis; white-space: nowrap; }
 .guide-time-axis { position: sticky; left: 0; z-index: 10; width: var(--guide-axis); margin-top: 0; border-right: 1px solid var(--border); background: color-mix(in srgb,var(--panel) 95%,transparent); pointer-events: none; }
-.guide-time-axis time { position: absolute; right: 8px; transform: translateY(-7px); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.guide-time-axis time { position: absolute; right: 5px; transform: translateY(-7px); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .guide-grid-line { position: absolute; z-index: 0; height: 1px; background: color-mix(in srgb,var(--border) 62%,transparent); pointer-events: none; }
 .guide-grid-line.is-hour { height: 1px; background: var(--border); }
 .guide-now-line { position: absolute; z-index: 9; height: 2px; background: #db3c48; box-shadow: 0 0 0 1px rgba(255,255,255,.45); pointer-events: none; }

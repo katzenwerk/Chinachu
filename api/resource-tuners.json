@@ -1,0 +1,7 @@
+{
+  "/": {
+    "script": "tuners",
+    "methods": ["get"],
+    "types": ["json"]
+  }
+}

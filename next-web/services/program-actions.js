@@ -1,3 +1,21 @@
+import { loadProgramDetail } from './program-detail-client.js';
+import { buildProgramDetailModel, programSeriesContext } from './program-detail-model.js';
+import { loadSeriesProjection } from './series-client.js';
+import { buildSeriesEventIndex } from './series-event-model.js';
+
+export async function loadProgramActionContext(id) {
+  const detail = await loadProgramDetail({ id });
+  const model = buildProgramDetailModel(detail);
+  let seriesContext = null;
+  if (model.eventKey) {
+    try {
+      const snapshot = await loadSeriesProjection({ eventKeys: [model.eventKey] });
+      seriesContext = programSeriesContext(model, detail.program, buildSeriesEventIndex(snapshot).get(model.eventKey) || null);
+    } catch (_) { /* 詳細モーダルと同様、シリーズ取得失敗でも番組操作は利用する。 */ }
+  }
+  return { detail, model, seriesContext };
+}
+
 function validTitle(value) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : 'タイトル未取得';
 }

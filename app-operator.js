@@ -405,6 +405,7 @@ const runManualStorageRefresh = storageManualRefresh.createSingleFlight(handleMa
 let storageRefreshServer = null;
 let recordedThumbnailServer = null;
 let recordingChecked = 0;
+const handoffEndLackUsed = new Set();
 let recordedStorageWakeupHistory = {};
 let mirakurunDropChecked = 0;
 let mirakurunDropChecking = false;
@@ -1918,11 +1919,23 @@ function findHandoffEndLackCandidate(nextProgram) {
 	return getHandoffEndLackCandidateInfo(nextProgram).candidate;
 }
 
-function getHandoffEndLackCandidateInfo(nextProgram) {
+function canHandoffAcrossTypes(currentType, nextType, tuners) {
+	if (!Array.isArray(tuners) || !tuners.every(tuner => tuner &&
+		Array.isArray(tuner.types) && tuner.types.length > 0 &&
+		tuner.types.every(type => typeof type === 'string' && type.length > 0))) {
+		return false;
+	}
+	const currentTuners = tuners.filter(tuner => tuner.types.includes(currentType));
+	return currentTuners.length > 0 && currentTuners.every(tuner => tuner.types.includes(nextType));
+}
+
+function getHandoffEndLackCandidateInfo(nextProgram, tuners = null) {
 	let candidate = null;
 	let candidateRemainSeconds = Infinity;
 	let skipped = null;
 	let skippedRemainSeconds = Infinity;
+	let needsTunerInfo = false;
+	const nextType = nextProgram && nextProgram.channel && nextProgram.channel.type;
 
 	for (let i = 0, l = recording.length; i < l; i++) {
 		const current = recording[i];
@@ -1932,7 +1945,7 @@ function getHandoffEndLackCandidateInfo(nextProgram) {
 			continue;
 		}
 
-		if (!current._stream || current._operatorNg || current._operatorEndLack) {
+		if (!current._stream || current._operatorNg || current._operatorAbort || current._operatorEndLack) {
 			continue;
 		}
 
@@ -1947,6 +1960,20 @@ function getHandoffEndLackCandidateInfo(nextProgram) {
 		// 既に終了時刻を過ぎている番組はLACKではなく通常終了/固着掃除側に任せる。
 		if (!current.end || Number(current.end) <= clock) {
 			continue;
+		}
+
+		const currentType = current.channel && current.channel.type;
+		if (typeof currentType !== 'string' || !currentType || typeof nextType !== 'string' || !nextType) {
+			continue;
+		}
+		if (currentType !== nextType) {
+			if (tuners === null) {
+				if (remainSeconds <= endLackMaxSeconds) needsTunerInfo = true;
+				continue;
+			}
+			if (!canHandoffAcrossTypes(currentType, nextType, tuners)) {
+				continue;
+			}
 		}
 
 		if (remainSeconds <= endLackMaxSeconds) {
@@ -1967,7 +1994,8 @@ function getHandoffEndLackCandidateInfo(nextProgram) {
 		candidate: candidate,
 		candidateRemainSeconds: candidateRemainSeconds,
 		skipped: skipped,
-		skippedRemainSeconds: skippedRemainSeconds
+		skippedRemainSeconds: skippedRemainSeconds,
+		needsTunerInfo: needsTunerInfo
 	};
 }
 
@@ -1983,19 +2011,12 @@ function logHandoffEndLackSkip(info, nextProgram) {
 }
 
 function isTunerShortageError(err) {
-	const statusCode = Number(err && err.statusCode || 0);
-	const text = [
-		err && err.code,
-		err && err.statusMessage,
-		err && err.message,
-		err && err.body
-	].join(' ').toLowerCase();
-
-	if (statusCode === 409 || statusCode === 503) {
-		return true;
-	}
-
-	return /tuner|busy|resource|conflict|unavailable|priority/.test(text);
+	const statusCode = Number(err && (err.statusCode || err.status) || 0);
+	const reason = err && (err.statusMessage || err.statusText || (err.body && err.body.reason));
+	// Mirakurunは資源不足だけをこのreasonの503で返す。
+	// 現行clientのstream取得ではHTTPエラーがmessageだけのErrorに変換される。
+	return (statusCode === 503 && reason === 'Tuner Resource Unavailable') ||
+		/^Bad status respond \(503 Tuner Resource Unavailable\)\.$/.test(String(err && err.message || ''));
 }
 
 function getEarlyFinishSeconds(program, at) {
@@ -2779,6 +2800,7 @@ function prepRecord(program) {
 
 	function isCurrentAttempt() {
 		return recordingAttempt.isCurrent(program, attempt) &&
+			!shutdownStarted &&
 			!program._operatorNg &&
 			!program._operatorAbort &&
 			isRecording(program) &&
@@ -2810,7 +2832,7 @@ function prepRecord(program) {
 			recordingAttempt.clear(program, attempt);
 			doRecord(program, stream);
 		})
-		.catch(err => {
+		.catch(async err => {
 
 			if (!isCurrentAttempt()) {
 				operatorLog('DROP STREAM ERROR: ' + printProgram(program));
@@ -2824,10 +2846,37 @@ function prepRecord(program) {
 				operatorLog("ERROR: " + printProgram(program), err.address, err.code);
 			}
 
-			if (isTunerShortageError(err)) {
-				const handoffInfo = getHandoffEndLackCandidateInfo(program);
+			clock = Date.now();
+			if (!isCurrentAttempt() || isRecordedForReserve(program)) {
+				recordingAttempt.clear(program, attempt);
+				return;
+			}
+			// 再試行や予約の再読込をまたいでも、同じ次番組のために複数録画を短縮しない。
+			// 終了・取消済みの印はHANDOFF検討時だけ整理する。
+			for (const id of handoffEndLackUsed) {
+				if (!reserves.some(item => item.id === id && item.end >= clock) &&
+					!recording.some(item => item.id === id && item.end >= clock)) {
+					handoffEndLackUsed.delete(id);
+				}
+			}
+			if (isTunerShortageError(err) && !handoffEndLackUsed.has(program.id)) {
+				let handoffInfo = getHandoffEndLackCandidateInfo(program);
+				if (!handoffInfo.candidate && handoffInfo.needsTunerInfo) {
+					const result = await getMirakurunJson('/tuners', 1000);
+					clock = Date.now();
+					if (!isCurrentAttempt() || isRecordedForReserve(program)) {
+						recordingAttempt.clear(program, attempt);
+						return;
+					}
+					if (!result.ok) {
+						operatorLog('HANDOFF END LACK SKIP: tuner compatibility unknown: ' + result.error);
+					}
+					// 待機中に録画状態や残り秒数が変わるため、候補も選び直す。
+					handoffInfo = getHandoffEndLackCandidateInfo(program, result.ok ? result.data : null);
+				}
 				if (handoffInfo.candidate) {
 					if (finishRecordingForEndLack(handoffInfo.candidate, program)) {
+						handoffEndLackUsed.add(program.id);
 						const recordingIndex = recording.indexOf(program);
 						if (recordingIndex !== -1) {
 							recording.splice(recordingIndex, 1);

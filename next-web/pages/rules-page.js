@@ -2,6 +2,9 @@ import { createChannelLogo } from '../components/channel-logo.js';
 import { headerCompactMedia as createHeaderCompactMedia, appendMobileContextButton } from '../components/mobile-layout.js';
 import { openRuleEditorDialog } from '../components/rule-editor-dialog.js';
 import { createRulesContextMenu } from '../components/rules-context-menu.js';
+import { applyStorageWarning } from '../components/storage-warning.js';
+import { buildReservationStorageDisplay } from '../services/storage-model.js';
+import { subscribeStorageData } from '../services/storage-store.js';
 import {
   buildRuleChannelMap, buildRuleRows, categoryLabel, filterRuleRows
 } from '../services/rule-model.js';
@@ -36,6 +39,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
   let active = true;
   let rows = [];
   let data = null;
+  let storageData = null;
   let listChannelMap = new Map();
   let search = query.get('search') || '';
   let status = ['enabled', 'disabled'].includes(query.get('status')) ? query.get('status') : 'all';
@@ -172,7 +176,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
         <label class="rule-select-cell"><input class="rule-select" type="checkbox"></label>
         <span class="rule-order"></span><a class="rule-count rule-reserves"></a>
         <a class="rule-count rule-recorded"></a><span class="rule-state"></span>
-        <span class="rule-main"><strong></strong><small></small></span>
+        <span class="rule-main"><strong></strong><small></small><span class="rule-storage-warning storage-warning" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></span></span>
         <span class="rule-channels"></span>`;
       appendMobileContextButton(item);
       const checkbox = item.querySelector('.rule-select');
@@ -189,6 +193,9 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
       item.querySelector('.rule-state').textContent = row.enabled ? '有効' : '無効';
       item.querySelector('.rule-state').classList.add(row.enabled ? 'is-enabled' : 'is-disabled');
       item.querySelector('.rule-main strong').textContent = row.summary;
+      applyStorageWarning(item.querySelector('.rule-storage-warning'), row.enabled
+        ? buildReservationStorageDisplay(storageData, row.rule).notice
+        : null);
       const categories = list(row.rule.categories).map(categoryLabel);
       item.querySelector('.rule-main small').textContent = [list(row.rule.types).join('・'), categories.join('・')].filter(Boolean).join(' / ') || '放送波・ジャンル指定なし';
       const channelHost = item.querySelector('.rule-channels');
@@ -220,7 +227,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
       recorded.title = !row.uid ? '識別子がないため厳密な絞り込みはできません' :
         row.achievementCount === null ? '録画実績を取得中です' : 'このルールの録画実績を表示';
       const show = () => showEditor(row);
-      item.addEventListener('click', event => { if (!event.target.closest('a,button,input,label')) show(); });
+      item.addEventListener('click', event => { if (!event.target.closest('a,button,input,label,.storage-warning')) show(); });
       item.addEventListener('keydown', event => { if ((event.key === 'Enter' || event.key === ' ') && event.target === item) { event.preventDefault(); show(); } });
       table.append(item);
     });
@@ -507,10 +514,21 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
   createButton.addEventListener('click', () => showEditor());
   schedulerButton.addEventListener('click', openSchedulerDialog);
   deleteButton.addEventListener('click', () => openDeleteDialog());
+  const unsubscribeStorage = subscribeStorageData(state => {
+    if (!active || state.data === null) return;
+    storageData = state.data;
+    listHost.querySelectorAll('.rule-row').forEach(item => {
+      const row = rowByElement.get(item);
+      applyStorageWarning(item.querySelector('.rule-storage-warning'), row.enabled
+        ? buildReservationStorageDisplay(storageData, row.rule).notice
+        : null);
+    });
+  });
   refresh().catch(() => {});
 
   return () => {
     active = false;
+    unsubscribeStorage();
     controller.abort();
     contextMenu.destroy();
     headerCompactMedia.removeEventListener('change', headerCompactListener);

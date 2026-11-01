@@ -4,9 +4,8 @@ import { openProgramDetailDialog } from '../components/program-detail-dialog.js'
 import { createChannelLogo } from '../components/channel-logo.js';
 import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor-dialog.js';
 import { createGuideProgramMenu } from './guide-page.js';
-import { ruleAction } from '../services/program-detail-model.js';
+import { CONFLICT_DESCRIPTION, programEndTime, ruleAction } from '../services/program-detail-model.js';
 import { subscribeRecordingNotifications, subscribeReservationNotifications, subscribeScheduleNotifications } from '../services/realtime-client.js';
-import { reserveProgram, setReserveSkip, unreserveProgram } from '../services/timetable-client.js';
 import { programState } from '../services/timetable-model.js';
 import { searchSchedule } from '../services/program-search-model.js';
 import { channelDetailText, channelIdentifier, channelLogoUrl } from '../services/recording-model.js';
@@ -55,7 +54,8 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   let latestRequest = 0;
   let contextMenu = null;
   let ruleDialog = null;
-  let defaultUpcomingOnly = initialParams.size === 0;
+  let defaultUpcomingOnly = !(initialParams.get('q') || '').trim();
+  let displayBoundaryTimer = null;
   const preferredRuleUids = new Map();
   const releases = [];
 
@@ -104,8 +104,15 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
     closeMenu();
     const query = keyword.value.trim();
     const waves = waveChecks.filter(check => check.checked).map(check => check.value);
+    const now = Date.now();
     const found = searchSchedule(schedule, { query, types: waves, category: category.value })
-      .filter(entry => !defaultUpcomingOnly || Number(entry.program?.end || (entry.start + Number(entry.program?.seconds || 0) * 1000)) > Date.now());
+      .filter(entry => !defaultUpcomingOnly || programEndTime(entry.program) > now);
+    window.clearTimeout(displayBoundaryTimer);
+    displayBoundaryTimer = null;
+    if (defaultUpcomingOnly && found.length) {
+      const nextEnd = found.reduce((next, entry) => Math.min(next, programEndTime(entry.program)), Infinity);
+      displayBoundaryTimer = window.setTimeout(redraw, Math.min(2147483647, Math.max(0, nextEnd - now)));
+    }
     const total = found.length;
     pageIndex = Math.min(pageIndex, Math.max(0, Math.ceil(total / PAGE_SIZE) - 1));
     count.textContent = `${total}件`;
@@ -157,6 +164,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
         const status = document.createElement('span');
         status.className = `reservation-list-tag program-search-status is-${state.key}`;
         status.textContent = state.label;
+        if (state.reserve?.isConflict === true) status.title = CONFLICT_DESCRIPTION;
         head.append(status);
       }
       head.append(title);
@@ -181,8 +189,8 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
           closeMenu();
           const displayProgram = { ...program, channel: displayChannel };
           contextMenu = createGuideProgramMenu({
-            program: displayProgram, state, x: event.clientX, y: event.clientY,
-            onAction: action => runAction(program, action),
+            program: displayProgram, x: event.clientX, y: event.clientY,
+            onChanged: reloadReservations,
             resolveRule: async () => {
               invalidateResources(['rules']);
               const rules = await loadResource('rules');
@@ -220,18 +228,6 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
     }
   }
 
-  async function runAction(program, action) {
-    const messages = { reserve: 'この番組を録画予約しますか？', unreserve: 'この手動予約を取り消しますか？', skip: 'このルール予約をスキップしますか？', unskip: 'スキップを取り消しますか？' };
-    if (!messages[action] || !window.confirm(messages[action])) return;
-    try {
-      if (action === 'reserve') await reserveProgram(program.id);
-      if (action === 'unreserve') await unreserveProgram(program.id);
-      if (action === 'skip') await setReserveSkip(program.id, true);
-      if (action === 'unskip') await setReserveSkip(program.id, false);
-      await reloadReservations();
-    } catch (error) { window.alert(String(error?.message || error)); }
-  }
-
   function openRuleAction(program, action) {
     if (!action || action.mode === 'unavailable') {
       openProgramDetailDialog({ id: program.id, onChanged: reloadReservations });
@@ -264,8 +260,8 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   }
 
   function navigateKeyword() {
-    defaultUpcomingOnly = false;
     const query = keyword.value.trim();
+    defaultUpcomingOnly = query === '';
     const nextHash = `#search${query ? `?q=${encodeURIComponent(query)}` : ''}`;
     if (window.location.hash !== nextHash) window.history.pushState(null, '', nextHash);
     pageIndex = 0;
@@ -286,8 +282,8 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
       if (!disposed) navigateKeyword();
     }, 250);
   });
-  for (const check of waveChecks) check.addEventListener('change', () => { defaultUpcomingOnly = false; pageIndex = 0; redraw(); });
-  category.addEventListener('change', () => { defaultUpcomingOnly = false; pageIndex = 0; redraw(); });
+  for (const check of waveChecks) check.addEventListener('change', () => { pageIndex = 0; redraw(); });
+  category.addEventListener('change', () => { pageIndex = 0; redraw(); });
   pagination.querySelector('[data-prev]').addEventListener('click', () => { pageIndex -= 1; redraw(); });
   pagination.querySelector('[data-next]').addEventListener('click', () => { pageIndex += 1; redraw(); });
   const outsidePointer = event => { if (!contextMenu?.contains(event.target)) closeMenu(); };
@@ -295,7 +291,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   const onHistory = () => {
     if (disposed || !window.location.hash.startsWith('#search')) return;
     keyword.value = new URLSearchParams(window.location.hash.split('?')[1] || '').get('q') || '';
-    defaultUpcomingOnly = false;
+    defaultUpcomingOnly = keyword.value.trim() === '';
     pageIndex = 0;
     redraw();
   };
@@ -336,6 +332,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   return () => {
     disposed = true;
     window.clearTimeout(keywordTimer);
+    window.clearTimeout(displayBoundaryTimer);
     latestRequest += 1;
     closeMenu();
     ruleDialog?.close?.();

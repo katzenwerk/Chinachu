@@ -5,7 +5,6 @@ import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
 import { deleteRecordedFromContext } from '../services/recorded-delete-action.js';
 import { ruleAction } from '../services/program-detail-model.js';
-import { setReserveSkip, unreserveProgram } from '../services/timetable-client.js';
 import { buildNextReservationTimelineView, buildNextReservationView, nextReservationDisplayBoundaryDelay } from '../services/reservation-model.js';
 import { subscribeMatchNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
 import { subscribeStorageData } from '../services/storage-store.js';
@@ -16,7 +15,7 @@ import { openProgramDetailDialog } from '../components/program-detail-dialog.js'
 import { createChannelLogo } from '../components/channel-logo.js';
 import { applyStorageWarning } from '../components/storage-warning.js';
 import { buildRecentRecordedModels, createRecordedCard } from '../components/recorded-card.js';
-import { openRecordedPlaybackOverlay, openRecordingLiveOverlay } from '../services/live-player-adapter.js';
+import { openRecordedPlaybackOverlay } from '../services/live-player-adapter.js';
 import { loadRecordedResultsPage } from '../services/recorded-results-client.js';
 
 const RECENT_RECORDED_FETCH_LIMIT = 50;
@@ -654,7 +653,6 @@ export function renderHomePage(container, options = {}) {
   options.setHeaderActions?.(headerSettings);
 
   const isActive = () => active && page.isConnected;
-  const pendingReservations = new Set();
   const preferredRuleUids = new Map();
   let ruleDialog = null;
   const showActionError = error => window.alert(`操作できませんでした: ${String(error?.message || error)}`);
@@ -737,31 +735,10 @@ export function renderHomePage(container, options = {}) {
       if (!isActive()) return;
       if (action === 'copy-title') return void copyTitle(item.title).catch(showActionError);
       if (action === 'search-google' || action === 'search-wikipedia') return searchWeb(action, item.title);
-      if (action === 'detail') return openDetail(item.id, null, null, item.refresh);
       if (action === 'rule') {
         if (item.ruleAction?.mode === 'unavailable') return openDetail(item.id, null, null, item.refresh);
         return openHomeRuleEditor(item);
       }
-      if (action !== 'primary') return;
-      if (item.kind === 'recording') {
-        return void openRecordingLiveOverlay(item.model).catch(showActionError);
-      }
-      if (item.kind !== 'reservation' || !item.id || pendingReservations.has(item.id)) return;
-      const manual = item.program?.isManualReserved === true;
-      const message = manual ? 'この手動予約を取り消しますか？' : 'このルール予約をスキップしますか？';
-      if (!window.confirm(message)) return;
-      pendingReservations.add(item.id);
-      void (async () => {
-        try {
-          if (manual) await unreserveProgram(item.id);
-          else await setReserveSkip(item.id, true);
-          await item.refresh?.(true);
-        } catch (error) {
-          showActionError(error);
-        } finally {
-          pendingReservations.delete(item.id);
-        }
-      })();
     }
   });
 

@@ -6,6 +6,34 @@ import {
   tsDropPidSummary
 } from './recorded-result-warnings.js';
 
+export const CONFLICT_DESCRIPTION = 'チューナー不足が予測されています。録画を試みますが、録画できない可能性があります。';
+
+export function reservationActionLabel(action) {
+  return { reserve: '録画予約', 'reserve-now': '今から録画', unreserve: '予約取消',
+    skip: 'この予約をスキップ', unskip: 'スキップを取消' }[action] || '';
+}
+
+export function seriesCorrectionActions(context) {
+  if (!context?.event?.key) return [];
+  return [
+    { action: 'series-change', label: context.tidConfirmed ? 'シリーズを変更' : 'シリーズに紐づけ' },
+    { action: 'series-episode', label: '話数を修正' },
+    ...(context.manual === true ? [{ action: 'series-remove', label: '手動指定を解除' }] : [])
+  ];
+}
+
+export function programSeriesContext(model, program, context) {
+  if (context || !model.eventKey) return context;
+  return {
+    eventKey: model.eventKey,
+    event: { ...program, key: model.eventKey, resolution: null },
+    seriesId: null,
+    tidConfirmed: false,
+    manual: false,
+    candidates: []
+  };
+}
+
 function validText(value) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
@@ -151,12 +179,17 @@ export function ruleAction(program, rules, preferredRuleUid = null) {
   return { mode: 'unavailable', ruleUid: uid, index: null, label: indexes.length > 1 ? '関連ルールが複数あります' : '関連ルールは現在の一覧にありません' };
 }
 
+export function programEndTime(program) {
+  const start = finitePositive(program?.start);
+  const seconds = finitePositive(program?.seconds);
+  return finitePositive(program?.end) || (start !== null && seconds !== null ? start + seconds * 1000 : null);
+}
+
 export function programRecordingAction(program, now = Date.now()) {
   const start = finitePositive(program?.start);
   if (start === null) return null;
   if (now < start) return 'reserve';
-  const seconds = finitePositive(program?.seconds);
-  const end = finitePositive(program?.end) || (seconds === null ? null : start + seconds * 1000);
+  const end = programEndTime(program);
   return end !== null && now < end ? 'reserve-now' : null;
 }
 
@@ -241,6 +274,20 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
   ];
   const warnings = [];
   if (detail.historyAmbiguous) warnings.push('同じ番組IDの履歴が複数あるため、履歴情報は表示していません。');
+  const reserves = Array.isArray(detail.reserves) ? detail.reserves : [];
+  const conflicted = program.isConflict === true || reserves.some(item => item.id === programId && item.isConflict === true);
+  if (conflicted) warnings.push(CONFLICT_DESCRIPTION);
+  const overlappingReservations = conflicted ? reserves
+    .filter(item => item.id !== programId && item.isSkip !== true &&
+      start !== null && end !== null && finitePositive(item.start) !== null &&
+      programEndTime(item) !== null && Number(item.start) < end && programEndTime(item) > start)
+    .sort((a, b) => Number(a.start) - Number(b.start))
+    .map(item => ({
+      id: item.id,
+      title: validText(item.fullTitle) || validText(item.title) || 'タイトル未取得',
+      channel: validText(item.channel?.name) || '放送局未取得',
+      dateTime: formatDateTime(Number(item.start), programEndTime(item))
+    })) : null;
   const liveAvailable = channelId !== null && start !== null && end !== null && start <= now && now < end;
   const manualReservation = reservationProgram.isManualReserved === true;
   const reservationAction = state.key === 'reserved'
@@ -282,6 +329,7 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
     deletion: deletionInfo(match.deletion),
     actions: {
       reservation: reservationAction,
+      stopRecording: state.key === 'recording' && programId !== null ? { requested: program.abort === true } : null,
       rule: ruleAction(reservationProgram, detail.rules, detail.preferredRuleUid),
       deleteRecording: playable && recordingPath?.copyValue ? {
         recordedId,
@@ -297,6 +345,7 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
       category: validText(program.category)
     },
     warnings,
+    overlappingReservations,
     media: {
       visible: liveAvailable || state.key === 'recording' || recordedState,
       kind: state.key === 'recording' ? 'recording' : 'recorded',

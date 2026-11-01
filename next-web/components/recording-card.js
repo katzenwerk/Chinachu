@@ -52,7 +52,7 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
       <p class="recording-program-meta"></p>
       <p class="recording-storage-warning storage-warning" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></p>
       <div class="recording-card-meta"><span class="recording-status" hidden></span><span class="recording-elapsed"></span><span class="recording-remaining"></span></div>
-      <a class="recording-detail mobile-only" href="">詳細</a>
+      <a class="recording-detail" href="">詳細</a>
       <p class="recording-watch-error" role="status" hidden></p>
     </div>`;
 

@@ -221,10 +221,11 @@ const seriesService = seriesServiceModule.createSeriesService({
 	log: util.log,
 	progLookupStore,
 	manualPath: SERIES_MANUAL_OVERRIDE_FILE,
+	matchCachePath: __dirname + '/data/series-match.json',
+	seriesMatchCleanupIntervalDays: config.seriesMatchCleanupIntervalDays ?? 30,
 	thumbnailDir: RECORDED_THUMBNAIL_DIR,
 	ledgerPaths: {
 		reserves: RESERVES_DATA_FILE,
-		reserves2: RESERVES2_DATA_FILE,
 		recorded: RECORDED_DATA_FILE,
 		match: MATCH_DATA_FILE
 	}

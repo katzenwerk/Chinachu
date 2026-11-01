@@ -14,7 +14,7 @@ const SIZE_KEY = 'chinachu.next.series.cardSize';
 const COLUMNS_KEY = 'chinachu.next.series.columns';
 const VIEW_KEY = 'chinachu.next.series.view';
 const SEARCH_KEY = 'chinachu.next.series.search';
-const TABS = new Set(['reservations', 'recordings', 'attention']);
+const TABS = new Set(['all', 'reservations', 'recordings', 'attention']);
 
 const dateTimeFormatter = new Intl.DateTimeFormat('ja-JP', {
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
@@ -137,7 +137,7 @@ function makeTabs(active) {
   const tabs = document.createElement('div');
   tabs.className = 'series-tabs';
   tabs.setAttribute('role', 'tablist');
-  for (const [key, label] of [['recordings', '録画から'], ['reservations', '予約から'], ['attention', '要確認']]) {
+  for (const [key, label] of [['all', 'すべて'], ['recordings', '録画済み'], ['reservations', '予約'], ['attention', '要確認']]) {
     const item = link(`#series?tab=${key}`, label);
     item.setAttribute('role', 'tab');
     item.setAttribute('aria-selected', String(active === key));
@@ -282,15 +282,7 @@ function makeHeaderActions({
 }
 
 function seriesRows(data, tab) {
-  if (tab === 'reservations') {
-    return data.series.filter(item => item.hidden !== true && item.counts.reservations > 0)
-      .sort((left, right) => Number(left.nextReservationAt || Infinity) - Number(right.nextReservationAt || Infinity));
-  }
-  if (tab === 'recordings') {
-    return data.series.filter(item => item.hidden !== true && item.counts.currentRecordings > 0)
-      .sort((left, right) => Number(right.latestRecordingAt || 0) - Number(left.latestRecordingAt || 0));
-  }
-  return data.attention;
+  return tab === 'attention' ? data.attention : data.series;
 }
 
 function seriesHref(data, item, tab) {
@@ -348,8 +340,7 @@ function attachSeriesOperations(target, item, context) {
 }
 
 function renderSeriesList(host, data, tab, search, viewMode = 'list', context = {}) {
-  const query = search.normalize('NFKC').toLowerCase();
-  const rows = seriesRows(data, tab).filter(item => !query || text(item.title).normalize('NFKC').toLowerCase().includes(query));
+  const rows = seriesRows(data, tab);
   host.replaceChildren();
   host.className = viewMode === 'card' && tab !== 'attention' ? 'series-card-grid' : 'series-list';
   if (!rows.length) {
@@ -396,7 +387,7 @@ function renderSeriesList(host, data, tab, search, viewMode = 'list', context = 
       tid.setAttribute('aria-label', item.tid === null ? 'ローカルシリーズ' : `TID ${item.tid}`);
       const summary = document.createElement('div');
       summary.className = 'series-list-card-summary';
-      summary.textContent = seriesEpisodeSummary(item);
+      summary.textContent = `${seriesEpisodeSummary(item)} · 録画 ${item.counts.currentRecordings}件 · 予約 ${item.counts.reservations}件`;
       primary.append(title, tid);
       body.append(primary, summary);
       card.append(media, body);
@@ -417,9 +408,11 @@ function renderSeriesList(host, data, tab, search, viewMode = 'list', context = 
     title.textContent = text(item.title, '作品名未取得');
     const meta = document.createElement('span');
     if (tab === 'reservations') {
-      meta.textContent = `${seriesEpisodeSummary(item)} · ${item.counts.reservations}件予約 · 次回 ${dateTime(item.nextReservationAt)}${item.nextReservationChannel ? ` · ${item.nextReservationChannel}` : ''}`;
+      meta.textContent = `${seriesEpisodeSummary(item)} · ${item.counts.reservations}件予約 · 録画 ${item.counts.currentRecordings}件 · 次回 ${dateTime(item.nextReservationAt)}${item.nextReservationChannel ? ` · ${item.nextReservationChannel}` : ''}`;
     } else if (tab === 'recordings') {
-      meta.textContent = `${seriesEpisodeSummary(item)} · ${item.counts.currentRecordings}件録画 · 最終録画 ${dateTime(item.latestRecordingAt)}`;
+      meta.textContent = `${seriesEpisodeSummary(item)} · ${item.counts.currentRecordings}件録画 · 予約 ${item.counts.reservations}件 · 最終録画 ${dateTime(item.latestRecordingAt)}`;
+    } else if (tab === 'all') {
+      meta.textContent = `${seriesEpisodeSummary(item)} · 録画 ${item.counts.currentRecordings}件 · 予約 ${item.counts.reservations}件`;
     } else {
       meta.textContent = `${item.label} · ${item.eventCount ?? item.events.length}件${item.progLookupLabel ? ` · ${item.progLookupLabel}` : ''}${item.candidateTids?.length ? ` · TID候補 ${item.candidateTids.join(', ')}` : ''}`;
     }
@@ -758,7 +751,7 @@ function renderAttentionDetail(host, group, context) {
 export function renderSeriesPage(container, query = new URLSearchParams(), options = {}) {
   const controller = new AbortController();
   const setHeaderActions = typeof options.setHeaderActions === 'function' ? options.setHeaderActions : () => {};
-  let tab = TABS.has(query.get('tab')) ? query.get('tab') : 'recordings';
+  let tab = TABS.has(query.get('tab')) ? query.get('tab') : 'all';
   let viewMode = readPreference(VIEW_KEY, ['list', 'card'], 'list');
   let searchValue = readStoredText(SEARCH_KEY);
   const selectedId = query.get('id');
@@ -772,6 +765,15 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   let renderedGeneration = null;
   let loading = false;
   let refreshQueued = false;
+  let listData = null;
+  let renderedQuery = null;
+  let searchTimer = null;
+  const listKey = () => JSON.stringify([tab, viewMode, searchValue]);
+  function reloadList(delay = 0) {
+    renderedQuery = null;
+    window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(() => scheduleRefresh(0), delay);
+  }
   container.className = 'series-page';
   container.innerHTML = '<section class="panel series-loading"><p>シリーズ情報を生成しています…</p></section>';
 
@@ -881,6 +883,9 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   }
 
   function renderOverview(data) {
+    const oldSearch = headerActions?.querySelector('input[type="search"]');
+    const focused = oldSearch && document.activeElement === oldSearch;
+    const selection = focused ? [oldSearch.selectionStart, oldSearch.selectionEnd] : null;
     container.replaceChildren();
     const searchLabel = document.createElement('label');
     searchLabel.className = 'series-header-search';
@@ -900,7 +905,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     const applySearch = () => {
       searchValue = search.value;
       writeStoredText(SEARCH_KEY, searchValue);
-      render();
+      reloadList(200);
     };
     search.addEventListener('compositionstart', () => { searchComposing = true; });
     search.addEventListener('compositionend', () => {
@@ -912,21 +917,53 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       applySearch();
     });
     render();
-    installHeader(data, { searchControl: searchLabel, onViewChange: () => renderOverview(data) });
+    const pagination = data.pagination;
+    if (pagination) {
+      const footer = document.createElement('div');
+      footer.className = 'series-pagination';
+      const count = document.createElement('p');
+      count.textContent = `${pagination.total}件中 ${seriesRows(data, tab).length}件表示 · ${pagination.page}/${Math.max(1, pagination.totalPages)}ページ`;
+      footer.append(count);
+      if (pagination.hasMore) {
+        const more = document.createElement('button');
+        more.className = 'button';
+        more.type = 'button';
+        more.textContent = 'もっと見る';
+        more.addEventListener('click', () => { if (!loading) { more.disabled = true; load(true); } });
+        footer.append(more);
+      }
+      container.append(footer);
+    }
+    installHeader(data, { searchControl: searchLabel, onViewChange: () => reloadList() });
+    if (focused) {
+      search.focus();
+      if (selection[0] !== null) search.setSelectionRange(...selection);
+    }
   }
 
-  async function load() {
+  async function load(append = false) {
     if (loading) { refreshQueued = true; return; }
     loading = true;
     const current = ++sequence;
+    const requestedQuery = listKey();
+    const isList = !selectedId && !eventKey;
+    const page = append && listData?.pagination ? listData.pagination.page + 1 : 1;
     try {
-      const data = await loadSeriesProjection({ signal: controller.signal, id: selectedId || undefined, event: eventKey || undefined });
+      let data = await loadSeriesProjection({ signal: controller.signal, id: selectedId || undefined, event: eventKey || undefined,
+        filter: tab, view: viewMode, q: searchValue, page, generation: append ? renderedGeneration : undefined });
       if (controller.signal.aborted || current !== sequence) return;
-      if (renderedGeneration === data.generation) {
+      if (isList && requestedQuery !== listKey()) { refreshQueued = true; return; }
+      if (!append && renderedGeneration === data.generation && (!isList || renderedQuery === requestedQuery)) {
         updateState(data);
         return;
       }
+      if (append) {
+        if (!listData || listData.generation !== data.generation || renderedQuery !== requestedQuery) { reloadList(); return; }
+        data = { ...data, series: [...listData.series, ...data.series], attention: [...listData.attention, ...data.attention] };
+      }
       renderedGeneration = data.generation;
+      renderedQuery = requestedQuery;
+      if (isList) listData = data;
       const eventIndex = buildSeriesEventIndex(data);
       const eventContext = {
         eventIndex,
@@ -957,9 +994,20 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
         installHeader(data, { showTabs: false });
         return;
       }
+      if (selectedId || eventKey) {
+        const message = document.createElement('section');
+        message.className = 'panel series-empty';
+        const text = document.createElement('p');
+        text.textContent = '対象のシリーズ・イベントは現在の一覧にありません。';
+        message.append(text, link(`#series?tab=${tab}`, '一覧へ戻る'));
+        container.replaceChildren(message);
+        installHeader(data, { showTabs: false });
+        return;
+      }
       renderOverview(data);
     } catch (error) {
       if (controller.signal.aborted || current !== sequence) return;
+      if (error.status === 409) { reloadList(); return; }
       renderedGeneration = null;
       container.innerHTML = '<section class="panel series-loading is-error"><h2>シリーズ情報を表示できません</h2><p></p></section>';
       container.querySelector('p').textContent = error?.message || String(error);
@@ -972,7 +1020,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
 
   function scheduleRefresh(delay = 200) {
     window.clearTimeout(refreshTimer);
-    refreshTimer = window.setTimeout(load, delay);
+    refreshTimer = window.setTimeout(() => load(), delay);
   }
 
   async function checkStatus() {
@@ -1000,6 +1048,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   return () => {
     controller.abort();
     window.clearTimeout(refreshTimer);
+    window.clearTimeout(searchTimer);
     window.clearInterval(pollTimer);
     unsubscribers.forEach(unsubscribe => unsubscribe());
     contextMenu.destroy();

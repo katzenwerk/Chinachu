@@ -2,6 +2,7 @@ import { channelDetailText, channelIdentifier, channelLogoUrl } from './recordin
 import { buildReservationStorageDisplay } from './storage-model.js';
 import { programDetailUrl } from './program-detail-client.js';
 import { buildProgramDisplayTitle } from './program-title.js';
+import { CONFLICT_DESCRIPTION } from './program-detail-model.js';
 
 export const NEXT_RESERVATION_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const NEXT_RESERVATION_MAX_ITEMS = 8;
@@ -78,7 +79,7 @@ function formatDateInputValue(value) {
 function reservationTags(program) {
   const tags = [];
   if (program.isSkip === true) tags.push({ key: 'skip', label: 'スキップ' });
-  if (program.isConflict === true) tags.push({ key: 'conflict', label: '競合' });
+  if (program.isConflict === true) tags.push({ key: 'conflict', label: '競合', description: CONFLICT_DESCRIPTION });
   tags.push(program.isManualReserved === true
     ? { key: 'manual', label: '手動予約' }
     : { key: 'rule', label: 'ルール予約' });

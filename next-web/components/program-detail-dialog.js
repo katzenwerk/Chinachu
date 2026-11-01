@@ -1,7 +1,7 @@
 import { createChannelLogo } from './channel-logo.js';
 import { openRuleEditorDialog, programRuleSeed } from './rule-editor-dialog.js';
-import { deleteRecordedProgram, loadProgramDetail, ProgramDetailError } from '../services/program-detail-client.js';
-import { buildProgramDetailModel } from '../services/program-detail-model.js';
+import { deleteRecordedProgram, loadProgramDetail, ProgramDetailError, stopRecordingProgram } from '../services/program-detail-client.js';
+import { buildProgramDetailModel, programSeriesContext, reservationActionLabel, seriesCorrectionActions } from '../services/program-detail-model.js';
 import { reserveProgram, setReserveSkip, unreserveProgram } from '../services/timetable-client.js';
 import { openRecordedPlaybackOverlay, openRecordingLiveOverlay } from '../services/live-player-adapter.js';
 import { copyProgramTitle, programSearchUrl } from '../services/program-actions.js';
@@ -33,12 +33,6 @@ function formatParsedProgramValue(value) {
   } catch (_) {
     return String(value);
   }
-}
-
-function actionLabel(action) {
-  return {
-    reserve: '録画予約', 'reserve-now': '今から録画', unreserve: '予約取消', skip: 'スキップ', unskip: 'スキップ解除'
-  }[action] || '';
 }
 
 function errorText(error) {
@@ -80,6 +74,29 @@ function createDescription(model) {
       attributes.append(badge);
     });
     section.append(attributes);
+  }
+  if (model.overlappingReservations !== null) {
+    const overlap = document.createElement('section');
+    const heading = document.createElement('h3');
+    heading.textContent = '同時間帯に重なる予約';
+    const note = document.createElement('p');
+    note.textContent = '放送時間が重なる予約です。実際のチューナー不足の原因を特定するものではありません。';
+    const list = document.createElement('ul');
+    model.overlappingReservations.forEach(item => {
+      const entry = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'button';
+      button.textContent = `${item.title} · ${item.channel} · ${item.dateTime}`;
+      button.disabled = !item.id;
+      button.addEventListener('click', () => openProgramDetailDialog({ id: item.id }));
+      entry.append(button);
+      list.append(entry);
+    });
+    if (!model.overlappingReservations.length) note.textContent += ' 現在の予約一覧に該当する予約はありません。';
+    overlap.className = 'program-modal-overlaps';
+    overlap.append(heading, note, list);
+    section.append(overlap);
   }
   return section;
 }
@@ -239,13 +256,14 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   let controller = null;
   let logo = null;
   let busy = false;
+  let stopRequested = false;
   let latestDetail = null;
   let latestSeriesContext = null;
   let latestSeriesError = null;
   let preferredRuleUid = null;
   let boundaryTimer = null;
   let ruleDialog = null;
-  let pendingInitialAction = ['rule', 'delete', 'series-change', 'series-episode', 'series-remove'].includes(initialAction)
+  let pendingInitialAction = ['reserve', 'reserve-now', 'unreserve', 'skip', 'unskip', 'rule', 'delete', 'stop', 'series-change', 'series-episode', 'series-remove'].includes(initialAction)
     ? initialAction : null;
   const reloadFromNotification = resources => {
     if (disposed || !dialog.open) return;
@@ -268,9 +286,10 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   }
 
   async function refreshAfterMutation() {
-    await load();
+    const loaded = await load();
     if (disposed) return;
     await onChanged?.();
+    return loaded;
   }
 
   function setMutationControlsDisabled(disabled) {
@@ -332,13 +351,15 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     }
   };
 
-  async function mutate(model, action) {
+  async function mutate(model, action, confirmReservation = false) {
     if (busy || !model.programId) return;
     busy = true;
     setMutationControlsDisabled(true);
     showFeedback('');
     try {
-      if (action === 'reserve' || action === 'reserve-now') await reserveProgram(model.programId);
+      if (action === 'reserve' || action === 'reserve-now') {
+        if (!await reserveProgram(model.programId, { confirmReservation })) return;
+      }
       if (action === 'unreserve') await unreserveProgram(model.programId);
       if (action === 'skip') await setReserveSkip(model.programId, true);
       if (action === 'unskip') await setReserveSkip(model.programId, false);
@@ -348,6 +369,27 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     } finally {
       busy = false;
       setMutationControlsDisabled(false);
+    }
+  }
+
+  async function stopRecording(model) {
+    if (busy || stopRequested || latestDetail?.program?.abort === true || model.phase.key !== 'recording') return;
+    if (!window.confirm(`${model.title}\n\n録画を中止しますか？\nストリーム開始後は、そこまでの録画が短縮録画として保存されます。準備中は録画ファイルが残らず、手動予約は取り消され、ルール予約はNG扱いになります。ルール予約はスキップされます。\n録画ファイルの削除とは別の操作です。`)) return;
+    busy = true;
+    setMutationControlsDisabled(true);
+    showFeedback('録画中止を要求しています…');
+    try {
+      await stopRecordingProgram(model.programId);
+      stopRequested = true;
+      const refreshed = await refreshAfterMutation();
+      if (refreshed && latestDetail?.currentSource === 'recording') showFeedback('録画中止を要求しました。終了処理の完了を待っています。');
+    } catch (cause) {
+      showFeedback(`${stopRequested ? '録画中止要求は成功しましたが、表示の更新に失敗しました。' : ''}${errorText(cause)}`, true);
+    } finally {
+      busy = false;
+      setMutationControlsDisabled(false);
+      const stop = dialog.querySelector('[data-stop-recording]');
+      if (stop) stop.disabled = stopRequested || latestDetail?.program?.abort === true;
     }
   }
 
@@ -395,12 +437,17 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     const search = footer.querySelector('.program-modal-search');
     const danger = footer.querySelector('.program-modal-danger');
     const feedback = footer.querySelector('[role="status"]');
+    if (stopRequested || (model.phase.key === 'recording' && latestDetail?.program?.abort === true)) {
+      feedback.textContent = model.phase.key === 'recording'
+        ? '録画中止要求済みです。終了処理の完了を待っています。'
+        : '録画中一覧から外れました。最終結果は録画結果・履歴で確認してください。';
+    }
     const normalProgram = model.phase.key === 'program';
     if (model.actions.reservation) {
       const button = document.createElement('button');
       button.className = 'button primary';
       button.type = 'button';
-      button.textContent = actionLabel(model.actions.reservation);
+      button.textContent = reservationActionLabel(model.actions.reservation);
       button.addEventListener('click', () => mutate(model, model.actions.reservation));
       primary.append(button);
     }
@@ -449,14 +496,14 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       });
       primary.append(viewSeries);
     }
-    if (seriesContext?.event?.key) {
+    seriesCorrectionActions(seriesContext).forEach(action => {
       const changeSeries = document.createElement('button');
       changeSeries.className = 'button';
       changeSeries.type = 'button';
-      changeSeries.textContent = seriesContext.tidConfirmed ? '紐づけを変更' : 'シリーズに紐づけ';
-      changeSeries.addEventListener('click', () => openSeriesCorrection(seriesContext));
+      changeSeries.textContent = action.label;
+      changeSeries.addEventListener('click', () => openSeriesCorrection(seriesContext, action.action === 'series-episode'));
       primary.append(changeSeries);
-    }
+    });
     if (normalProgram) {
       const copy = document.createElement('button');
       copy.className = 'button';
@@ -467,12 +514,23 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     }
     search.append(
       searchLink('Google検索', normalProgram ? programSearchUrl('google', model.title) : `https://www.google.com/search?q=${encodeURIComponent(model.title)}`),
-      searchLink(normalProgram ? 'Wikipedia検索' : 'Wikipedia', normalProgram ? programSearchUrl('wikipedia', model.title) : `https://ja.wikipedia.org/w/index.php?search=${encodeURIComponent(model.title)}`)
+      searchLink('Wikipedia検索', programSearchUrl('wikipedia', model.title))
     );
+    if (model.actions.stopRecording !== null) {
+      const stop = document.createElement('button');
+      stop.type = 'button';
+      stop.className = 'button is-danger';
+      stop.dataset.stopRecording = '';
+      stop.textContent = '録画中止';
+      stop.disabled = stopRequested || model.actions.stopRecording.requested;
+      stop.addEventListener('click', () => stopRecording(model));
+      danger.append(stop);
+    }
     if (model.actions.deleteRecording) {
       const remove = document.createElement('button');
       remove.className = 'button is-danger';
       remove.type = 'button';
+      remove.dataset.deleteRecording = '';
       remove.textContent = '削除';
       remove.addEventListener('click', async () => {
         if (busy || !window.confirm(`${model.title}\n\n録画ファイルを削除します。録画履歴・元の保存先・保存済みサムネイルは台帳整理まで保持されます。この操作は元に戻せません。`)) return;
@@ -493,6 +551,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     }
     article.append(header, body, footer);
     dialog.querySelector('article').replaceWith(article);
+    if (busy) setMutationControlsDisabled(true);
     scheduleBoundary(model);
   }
 
@@ -509,37 +568,49 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
         let seriesError = null;
         try {
           const snapshot = await loadSeriesProjection({ signal: requestController.signal, eventKeys: model.eventKey ? [model.eventKey] : [] });
-          seriesContext = model.eventKey ? buildSeriesEventIndex(snapshot).get(model.eventKey) || null : null;
+          seriesContext = programSeriesContext(model, detail.program, model.eventKey ? buildSeriesEventIndex(snapshot).get(model.eventKey) || null : null);
         } catch (cause) {
           if (requestController.signal.aborted || cause?.name === 'AbortError') return;
           seriesError = cause;
         }
+        if (disposed || requestController.signal.aborted) return;
         latestSeriesContext = seriesContext;
         latestSeriesError = seriesError;
         await render(model, seriesContext, seriesError);
         if (pendingInitialAction !== null) {
           const action = pendingInitialAction;
           pendingInitialAction = null;
-          if (action === 'rule') {
+          if (['reserve', 'reserve-now', 'unreserve', 'skip', 'unskip'].includes(action)) {
+            if (model.actions.reservation === action) {
+              if (action === 'reserve' || action === 'reserve-now') await mutate(model, action, true);
+              else if (window.confirm(`${model.title}\n\n「${reservationActionLabel(action)}」を実行しますか？`)) await mutate(model, action);
+            } else showFeedback('番組の状態が変わったため、この操作は実行できません。', true);
+          } else if (action === 'rule') {
             if (model.actions.rule.mode === 'unavailable') showFeedback(model.actions.rule.label || 'ルールを操作できません', true);
             else openRuleEditor(model);
           } else if (action === 'delete') {
             // 既存の確認ダイアログ・削除安全条件・更新処理をそのまま利用する。
-            const remove = dialog.querySelector('.program-modal-danger button');
+            const remove = dialog.querySelector('[data-delete-recording]');
             if (remove) remove.click();
             else showFeedback('削除できる録画ファイルがありません', true);
+          } else if (action === 'stop') {
+            const stop = dialog.querySelector('[data-stop-recording]');
+            if (stop) stop.click();
+            else showFeedback('この番組は現在録画中ではありません。', true);
           } else if (action === 'series-change' || action === 'series-episode' || action === 'series-remove') {
             if (seriesContext?.event?.key) openSeriesCorrection(seriesContext, action === 'series-episode');
             else showFeedback('このイベントのシリーズ情報を操作できません', true);
           }
         }
+        return true;
       }
     } catch (cause) {
       if (disposed || requestController.signal.aborted || cause?.name === 'AbortError') return;
       const error = document.createElement('div');
       error.className = 'program-modal-loading is-error';
-      error.textContent = errorText(cause);
+      error.textContent = `${stopRequested ? '録画中止要求済みです。状態を取得できませんでした: ' : ''}${errorText(cause)}`;
       dialog.querySelector('article').replaceChildren(error);
+      return false;
     }
   }
 

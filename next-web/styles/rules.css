@@ -35,6 +35,9 @@ html:has(.rules-page) { min-width: 0; }
 .rule-state.is-disabled { color: var(--muted); }
 :root[data-theme="dark"] .rule-state.is-enabled { color: var(--focus); }
 .rule-main { display: grid; min-width: 0; gap: 2px; }
+.rule-storage-warning { display: inline-flex; align-items: baseline; gap: 4px; width: max-content; max-width: 100%; color: var(--warning); font-size: 10px; }
+.rule-storage-warning[hidden] { display: none; }
+.rule-storage-warning.is-strong { color: var(--danger); }
 .rule-main strong { overflow: hidden; font-size: 13px; font-weight: var(--font-title-weight); text-overflow: ellipsis; white-space: nowrap; }
 .rule-main small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .rule-channels { display: flex; align-items: center; min-width: 0; gap: 5px; color: var(--muted); font-size: 11px; }
