@@ -1,5 +1,5 @@
 import { invalidateResources, loadResource } from './api-client.js';
-import { subscribeRecordedNotifications } from './realtime-client.js';
+import { subscribeRecordedNotifications, subscribeReservationNotifications } from './realtime-client.js';
 import { subscribeRecordingData } from './recording-store.js';
 import { buildStorageWarnings } from './storage-model.js';
 import { subscribeStorageData } from './storage-store.js';
@@ -17,10 +17,16 @@ let activitySequence = 0;
 let unsubscribeStorage = null;
 let unsubscribeRecording = null;
 let unsubscribeRecorded = null;
+let unsubscribeReserves = null;
 let unsubscribeBroadcastClockState = null;
 let recordedRefresh = null;
+let reserveRefreshSequence = 0;
+let reserveExpiryTimer = null;
+let reservePrograms = null;
+let reserveLoadFailed = false;
 let storageIssues = [];
 let broadcastClockIssues = [];
+let reservationIssues = [];
 const completionWaits = new Map();
 const THUMBNAIL_STATUS_INTERVAL_MS = 1000;
 const THUMBNAIL_STATUS_MAX_CHECKS = 95;
@@ -43,7 +49,7 @@ function replaceIssues(issues, { track = true } = {}) {
 
 function publishIssues(options) {
   replaceIssues(
-    [...storageIssues, ...broadcastClockIssues]
+    [...storageIssues, ...broadcastClockIssues, ...reservationIssues]
       .sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name, 'ja')),
     options
   );
@@ -98,6 +104,63 @@ function handleBroadcastClockState(clockState) {
     href: '#log'
   }];
   publishIssues({ track: clockState.status === 'ready' });
+}
+
+// Scheduler's isConflict is authoritative for this warning; do not recalculate tuner allocation.
+function updateReservationIssues() {
+  if (reserveExpiryTimer !== null) window.clearTimeout(reserveExpiryTimer);
+  reserveExpiryTimer = null;
+
+  const now = Date.now();
+  const conflicts = (reservePrograms || []).filter(program =>
+    program?.isConflict === true && program.isSkip !== true &&
+    Number.isFinite(Number(program.end)) && Number(program.end) > now
+  );
+  reservationIssues = conflicts.length ? [{
+    id: 'tuner-conflicts',
+    name: 'チューナー競合',
+    level: 'warning',
+    priority: 2,
+    message: `${conflicts.length}件`,
+    detail: 'チューナー不足が予測されています。録画を試みますが、録画できない場合があります。',
+    href: '#conflicts'
+  }] : [];
+  if (reserveLoadFailed) {
+    reservationIssues.push({
+      id: 'reserves-api',
+      name: '予約情報',
+      level: 'error',
+      priority: 1,
+      message: '予約情報を更新できませんでした',
+      detail: 'チューナー競合の状態を確認できません。予約一覧から再確認してください。',
+      href: '#reserves'
+    });
+  }
+  publishIssues();
+
+  // Remove ended conflicts even when no reservation-update notification arrives.
+  if (conflicts.length) {
+    const nextEnd = Math.min(...conflicts.map(program => Number(program.end)));
+    reserveExpiryTimer = window.setTimeout(updateReservationIssues,
+      Math.max(1, Math.min(nextEnd - now + 1, 0x7fffffff)));
+  }
+}
+
+async function refreshReservations() {
+  const requestSequence = ++reserveRefreshSequence;
+  invalidateResources(['reserves']);
+  try {
+    const programs = await loadResource('reserves');
+    if (requestSequence !== reserveRefreshSequence || unsubscribeReserves === null) return;
+    if (!Array.isArray(programs)) throw new Error('Reserves API response is invalid');
+    reservePrograms = programs;
+    reserveLoadFailed = false;
+  } catch (_) {
+    if (requestSequence !== reserveRefreshSequence || unsubscribeReserves === null) return;
+    // A failed read is not evidence that existing conflicts have disappeared.
+    reserveLoadFailed = true;
+  }
+  updateReservationIssues();
 }
 
 function programId(program) {
@@ -234,8 +297,10 @@ function start() {
   unsubscribeStorage = subscribeStorageData(handleStorageState);
   unsubscribeRecording = subscribeRecordingData(handleRecordingState);
   unsubscribeRecorded = subscribeRecordedNotifications(refreshRecorded);
+  unsubscribeReserves = subscribeReservationNotifications(refreshReservations);
   unsubscribeBroadcastClockState = subscribeBroadcastClock(handleBroadcastClockState);
   refreshRecorded();
+  refreshReservations();
 }
 
 function stopIfUnused() {
@@ -243,11 +308,20 @@ function stopIfUnused() {
   unsubscribeStorage();
   unsubscribeRecording();
   unsubscribeRecorded();
+  unsubscribeReserves();
   unsubscribeBroadcastClockState();
   unsubscribeStorage = null;
   unsubscribeRecording = null;
   unsubscribeRecorded = null;
+  unsubscribeReserves = null;
   unsubscribeBroadcastClockState = null;
+  ++reserveRefreshSequence;
+  if (reserveExpiryTimer !== null) window.clearTimeout(reserveExpiryTimer);
+  reserveExpiryTimer = null;
+  reservePrograms = null;
+  reserveLoadFailed = false;
+  reservationIssues = [];
+  publishIssues({ track: false });
   completionWaits.forEach(({ controller }) => controller.abort());
   completionWaits.clear();
 }

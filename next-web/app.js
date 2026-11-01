@@ -4,6 +4,7 @@ import { renderHomePage } from './pages/home-page.js';
 import { renderRecordingPage } from './pages/recording-page.js';
 import { renderRecordedPage } from './pages/recorded-page.js';
 import { renderReservesPage } from './pages/reserves-page.js';
+import { renderConflictsPage } from './pages/conflicts-page.js';
 import { renderStoragePage } from './pages/storage-page.js';
 import { renderLogPage } from './pages/log-page.js';
 import { renderProgramDetailPage } from './pages/program-detail-page.js';
@@ -128,6 +129,7 @@ const routeTitles = {
   recording: '録画中',
   recorded: '録画結果',
   reserves: '予約一覧',
+  conflicts: '予約タイムライン',
   rules: 'ルール',
   series: 'シリーズ',
   status: 'ステータス',
@@ -244,6 +246,10 @@ async function route() {
     disposeCurrentPage = renderReservesPage(page, new URLSearchParams(queryString), {
       setHeaderActions: shell.setPageActions
     });
+    return;
+  }
+  if (name === 'conflicts') {
+    disposeCurrentPage = renderConflictsPage(page);
     return;
   }
   if (name === 'rules') {

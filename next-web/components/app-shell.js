@@ -31,6 +31,7 @@ const primaryItems = [
   ['recording', 'record', '録画中'],
   ['rules', 'rule', 'ルール'],
   ['reserves', 'calendar', '予約一覧'],
+  ['conflicts', 'status', 'タイムライン'],
   ['recorded', 'film', '録画結果'],
   ['series', 'film', 'シリーズ']
 ];
@@ -51,7 +52,10 @@ function navItem([route, iconName, label]) {
   const reservationIndicators = route === 'reserves'
     ? '<span class="badge nav-count-badge" id="reservation-count-badge" hidden></span><span class="nav-status-dot" id="reservation-status-dot" aria-hidden="true" hidden></span>'
     : '';
-  return `<a class="nav-item" href="${href}" data-route="${route}">${icon(iconName)}<span class="nav-label">${label}</span>${recordingIndicators}${recordedIndicators}${reservationIndicators}</a>`;
+  const timelineIndicator = route === 'conflicts'
+    ? '<span class="timeline-conflict-dot" id="timeline-conflict-dot" aria-hidden="true" hidden></span>'
+    : '';
+  return `<a class="nav-item" href="${href}" data-route="${route}">${icon(iconName)}<span class="nav-label">${label}</span>${recordingIndicators}${recordedIndicators}${reservationIndicators}${timelineIndicator}</a>`;
 }
 
 export function createAppShell(root) {
@@ -797,6 +801,12 @@ export function createAppShell(root) {
       const issues = Array.isArray(notificationState?.issues) ? notificationState.issues : [];
       const activities = Array.isArray(notificationState?.activities) ? notificationState.activities : [];
       currentNotificationIssues = issues;
+      const conflict = issues.find(issue => issue.id === 'tuner-conflicts');
+      root.querySelector('#timeline-conflict-dot').hidden = !conflict;
+      const timelineLink = root.querySelector('[data-route="conflicts"]');
+      const conflictLabel = conflict ? `チューナー競合あり：${conflict.message}` : null;
+      timelineLink.title = conflictLabel || 'タイムライン';
+      timelineLink.setAttribute('aria-label', conflictLabel ? `タイムライン、${conflictLabel}` : 'タイムライン');
       renderNotificationIndicator();
       renderNotificationItems(root.querySelector('.notification-issues'), issues, '未解決の警告はありません');
       renderNotificationItems(root.querySelector('.notification-activities'), activities, '最近の動作はありません', true);
