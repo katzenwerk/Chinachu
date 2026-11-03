@@ -398,7 +398,7 @@ export function openRuleEditorDialog({ row = null, initialRule = null, title = n
 
     scroll.append(basic, advanced, matches); form.append(tabs, scroll);
     const feedback = document.createElement('p'); feedback.className = 'rule-form-feedback'; feedback.hidden = true;
-    const actions = document.createElement('footer'); actions.innerHTML = `${row ? '<button class="button is-danger rule-delete" type="button">削除</button><span class="rule-action-spacer"></span>' : ''}<button class="button rule-cancel" type="button">キャンセル</button><button class="button rule-submit-only" type="submit">${row ? '保存' : '作成'}</button><button class="button is-primary rule-submit-schedule" type="submit">${row ? '保存して予約更新' : '作成して予約更新'}</button>`;
+    const actions = document.createElement('footer'); actions.innerHTML = `${row ? '<button class="button is-danger rule-delete" type="button">削除</button><span class="rule-action-spacer"></span>' : ''}<button class="button rule-cancel" type="button">キャンセル</button><button class="button rule-submit-only" type="submit"${row ? '' : ' hidden'}>${row ? '保存' : '作成'}</button><button class="button is-primary rule-submit-schedule" type="submit">${row ? '保存して予約更新' : '作成して予約更新'}</button>`;
     form.append(feedback, actions); body.append(form);
 
     const panelScroll = new Map();
@@ -569,11 +569,13 @@ export function openRuleEditorDialog({ row = null, initialRule = null, title = n
       if (saveWasCommitted && button !== scheduleButton) return;
       setBusy(button, saveWasCommitted ? '予約情報を更新しています…' : 'ルールを保存しています…');
       let schedulerResult = null;
+      let savedThisTime = false;
       if (!saveWasCommitted) {
         try {
           const payload = buildPayload(form, original);
           const saved = row ? await updateRule(row.index, payload, row.uid) : await createRule(payload);
           savedResult = saved || payload;
+          savedThisTime = true;
           saveWasCommitted = true;
           dirtyCheck = () => false;
         } catch (error) {
@@ -582,10 +584,17 @@ export function openRuleEditorDialog({ row = null, initialRule = null, title = n
           return;
         }
       }
-      if (button === scheduleButton) {
-        setProgress('スケジューラーを実行しています…');
+      if (button === scheduleButton || !row) {
+        setProgress(row ? 'スケジューラーを実行しています…' : '予約情報を更新しています…');
         try {
-          schedulerResult = await runScheduler();
+          if (!row && savedThisTime) {
+            if (!savedResult.reservationUpdate?.success) {
+              throw new Error(savedResult.reservationUpdate?.error || '予約更新の結果を確認できませんでした');
+            }
+            schedulerResult = { ...savedResult.reservationUpdate, quick: true };
+          } else {
+            schedulerResult = await runScheduler(row ? null : savedResult);
+          }
         } catch (error) {
           setProgress('ルール一覧を更新しています…');
           let refreshError = null;
@@ -601,7 +610,7 @@ export function openRuleEditorDialog({ row = null, initialRule = null, title = n
       }
       setProgress('ルール・予約情報を更新しています…');
       try {
-        await notifySaved({ schedulerRan: button === scheduleButton, schedulerResult });
+        await notifySaved({ schedulerRan: button === scheduleButton || !row, schedulerResult });
         dialog.close();
       } catch (error) {
         stopBusy(button);

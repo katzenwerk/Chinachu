@@ -33,7 +33,22 @@ function writeFixture(mode, options = {}) {
 	fs.mkdirSync(binDirectory);
 	fs.mkdirSync(nodeModules);
 	fs.mkdirSync(mirakurunModule);
-	fs.symlinkSync(path.join(repositoryRoot, 'lib'), path.join(directory, 'lib'), 'dir');
+	const fixtureLib = path.join(directory, 'lib');
+	fs.mkdirSync(fixtureLib);
+	fs.readdirSync(path.join(repositoryRoot, 'lib')).forEach(name => {
+		const source = path.join(repositoryRoot, 'lib', name);
+		const target = path.join(fixtureLib, name);
+		if (name === 'reservation-store.js') {
+			const storeSource = fs.readFileSync(source, 'utf8').replace(
+				'function writeArrayAtomic(filePath, value) {',
+				'function writeArrayAtomic(filePath, value) {\n' +
+				"\tif (filePath === process.env.CHINACHU_FIXTURE_FAIL_FILE) throw new Error('fixture atomic save failure');"
+			);
+			fs.writeFileSync(target, storeSource);
+		} else {
+			fs.symlinkSync(source, target);
+		}
+	});
 	[ 'opts', 'dateformat', 'chinachu-common', 'easy-table' ].forEach(name => {
 		fs.symlinkSync(path.join(repositoryRoot, 'node_modules', name), path.join(nodeModules, name), 'dir');
 	});
@@ -95,9 +110,10 @@ function runUpdate(directory) {
 	});
 }
 
-function runCli(directory, mode, id) {
+function runCli(directory, mode, id, failFile) {
 	return childProcess.spawnSync(process.execPath, [ 'app-cli.js', '-mode', mode, '-id', id ], {
 		cwd: directory,
+		env: Object.assign({}, process.env, { CHINACHU_FIXTURE_FAIL_FILE: failFile ? path.join(directory, 'data', failFile + '.json') : '' }),
 		encoding: 'utf8'
 	});
 }
@@ -173,13 +189,16 @@ function runUpdateWithCliAtMarker(directory, marker, mode, id, options) {
 	const markerFile = path.join(directory, 'data', marker + '.ready');
 	const releaseFile = path.join(directory, 'data', marker + '.release');
 	if (options.releaseWhenCliAttemptsLock) {
-		const cliFile = path.join(directory, 'app-cli.js');
-		const cliSource = fs.readFileSync(cliFile, 'utf8');
-		const lockCall = 'return reservationStore.withLock(RESERVES_DATA_FILE, function () {';
-		assert.match(cliSource, new RegExp(lockCall.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-		fs.writeFileSync(cliFile, cliSource.replace(
-			lockCall,
-			'fs.writeFileSync(' + JSON.stringify(releaseFile) + ", 'attempt');\n\t\t" + lockCall
+		const storeFile = path.join(directory, 'lib/reservation-store.js');
+		const storeSource = fs.readFileSync(storeFile, 'utf8');
+		const waitGuard = "if (error.code !== 'RESERVATION_LOCK_TIMEOUT' || Date.now() >= deadline) throw error;";
+		assert.ok(storeSource.includes(waitGuard));
+		const waitedFile = path.join(directory, 'data', marker + '.waited');
+		fs.writeFileSync(storeFile, storeSource.replace(waitGuard,
+			waitGuard + '\n' +
+			'if (!fs.existsSync(' + JSON.stringify(waitedFile) + ')) {' +
+			' fs.writeFileSync(' + JSON.stringify(waitedFile) + ', filePath);' +
+			' fs.writeFileSync(' + JSON.stringify(releaseFile) + ", 'lock contention observed'); }"
 		));
 	}
 	return new Promise((resolve, reject) => {
@@ -462,7 +481,11 @@ describe('Scheduler Skip and duplicate reservation boundaries', function() {
 
 		const representative = runInitialSelection(true);
 		try {
-			let result = runCli(representative.directory, 'skip', representative.fixture.lowId);
+			const beforeSkip = ['reserves', 'reserves2'].map(name => readData(representative.directory, name));
+			let result = runCli(representative.directory, 'skip', representative.fixture.lowId, 'reserves2');
+			assert.notStrictEqual(result.status, 0);
+			assert.deepStrictEqual(['reserves', 'reserves2'].map(name => readData(representative.directory, name)), beforeSkip);
+			result = runCli(representative.directory, 'skip', representative.fixture.lowId);
 			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
 			for (let i = 0; i < 2; i++) {
 				result = runUpdate(representative.directory);
@@ -477,6 +500,10 @@ describe('Scheduler Skip and duplicate reservation boundaries', function() {
 				assert.strictEqual(skipped[0].recordedFormat, '<title>/<id>.m2ts');
 			}
 
+			const beforeUnskip = ['reserves', 'reserves2'].map(name => readData(representative.directory, name));
+			result = runCli(representative.directory, 'unskip', representative.fixture.lowId, 'reserves');
+			assert.notStrictEqual(result.status, 0);
+			assert.deepStrictEqual(['reserves', 'reserves2'].map(name => readData(representative.directory, name)), beforeUnskip);
 			result = runCli(representative.directory, 'unskip', representative.fixture.lowId);
 			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
 			for (let i = 0; i < 2; i++) {
@@ -525,6 +552,12 @@ describe('Scheduler Skip and duplicate reservation boundaries', function() {
 			assert.strictEqual(current.find(program => program.id === fixture.lowId).isSkip, true);
 			assert.strictEqual(current.find(program => program.id === fixture.highId).isManualReserved, true);
 
+			const beforeCancel = ['reserves', 'reserves2'].map(name => readData(directory, name));
+			for (const failFile of ['reserves2', 'reserves']) {
+				result = runCli(directory, 'unreserve', fixture.highId, failFile);
+				assert.notStrictEqual(result.status, 0);
+				assert.deepStrictEqual(['reserves', 'reserves2'].map(name => readData(directory, name)), beforeCancel);
+			}
 			result = runCli(directory, 'unreserve', fixture.highId);
 			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
 			history = readData(directory, 'reserves2');
@@ -535,6 +568,34 @@ describe('Scheduler Skip and duplicate reservation boundaries', function() {
 			assert.strictEqual(current.length, 1);
 			assert.strictEqual(current[0].id, fixture.lowId);
 			assert.strictEqual(current[0].isSkip, true);
+
+			// A manual duplicate suppresses the rule reserve; moving both EPG entries
+			// must not make cancellation lose that suppressed candidate.
+			result = runCli(directory, 'unskip', fixture.lowId);
+			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+			result = runCli(directory, 'reserve', fixture.highId);
+			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+			assert.deepStrictEqual(readData(directory, 'reserves').map(program => program.id), [fixture.highId]);
+			const schedule = readData(directory, 'schedule');
+			schedule.forEach(channel => channel.programs.forEach(program => {
+				program.start += 60000;
+				program.end += 60000;
+			}));
+			const lowChannel = schedule.find(channel => channel.sid === 1);
+			const lowProgram = lowChannel.programs[0];
+			lowChannel.programs.push({ ...lowProgram, id: 'unrelated', title: 'Other show', fullTitle: 'Other show' });
+			fs.writeFileSync(path.join(directory, 'data/schedule.json'), JSON.stringify(schedule));
+			result = runCli(directory, 'unreserve', fixture.highId);
+			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+			current = readData(directory, 'reserves');
+			assert.deepStrictEqual(current.map(program => program.id), [fixture.lowId]);
+			assert.strictEqual(current[0].start, lowProgram.start);
+			const matched = require('../app-matching').buildMatchLedger({
+				reserves2List: readData(directory, 'reserves2'), nowMs: lowProgram.end + 1, keepDays: 0
+			}).results;
+			assert.deepStrictEqual(readData(directory, 'reserves2').map(program => program.id), [fixture.lowId]);
+			assert.strictEqual(matched.length, 1);
+			assert.strictEqual(matched[0].status, 'MISSED');
 		} finally {
 			fs.rmSync(directory, { recursive: true, force: true });
 		}
@@ -587,6 +648,7 @@ describe('Scheduler Skip and duplicate reservation boundaries', function() {
 			});
 			assert.strictEqual(raced.status, 0, raced.output);
 			assert.strictEqual(raced.cliStatus, 0, raced.cliOutput);
+			assert.strictEqual(fs.readFileSync(path.join(directory, 'data/AFTER_RESERVATION_LOCK.waited'), 'utf8'), path.join(directory, 'rules.json'));
 			assert.strictEqual(readData(directory, 'reserves').find(program => program.id === fixture.lowId).isSkip, true);
 			assert.strictEqual(fs.existsSync(path.join(directory, 'data', 'reserves.json.lock')), false);
 		} finally {

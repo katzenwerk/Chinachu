@@ -7,6 +7,21 @@
 			return;
 
 		case 'PUT':
+			if (request.query.ruleUid) {
+				if (!request.query.ruleSnapshot || request.query.ruleSnapshot.ruleUid !== request.query.ruleUid) {
+					return response.error(400);
+				}
+				ruleStore.scheduleReservations(define.REPOSITORY_ROOT, request.query.ruleSnapshot).then(function(result) {
+					if (!result.historyUpdated) return response.error(503);
+					response.head(200);
+					response.end(JSON.stringify({ time: Date.now(), quick: true,
+						conflicts: result.reserves.filter(function(program) { return program.isConflict; }),
+						reserves: result.reserves.filter(function(program) { return !program.isConflict && !program.isSkip; }) }));
+				}, function(error) {
+					response.error(ruleStore.httpStatus(error));
+				});
+				return;
+			}
 			child_process.exec('./chinachu update', function(err, stdout, stderr) {
 				if (err) {
 					if (err.code === SCHEDULER_ALREADY_RUNNING_EXIT_CODE) return response.error(409);

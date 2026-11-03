@@ -172,13 +172,15 @@ export async function deleteRulesByUid(ruleUids, options = {}) {
   return { deletedRuleUids, rules: latestRules || [] };
 }
 
-export async function runScheduler() {
+export async function runScheduler(createdRule = null) {
+  const { reservationUpdate, ...ruleSnapshot } = createdRule || {};
   const response = await fetch('/api/scheduler.json', {
     method: 'PUT',
-    headers: { Accept: 'application/json' }
+    headers: { Accept: 'application/json', ...(createdRule ? { 'Content-Type': 'application/json' } : {}) },
+    body: createdRule ? JSON.stringify({ ruleUid: ruleSnapshot.ruleUid, ruleSnapshot }) : undefined
   });
   if (response.status === 409) {
-    const error = new Error('スケジューラーは現在実行中です');
+    const error = new Error(createdRule ? '保存後にルールが変更されました。通常Schedulerで再評価してください' : 'スケジューラーは現在実行中です');
     error.status = response.status;
     throw error;
   }

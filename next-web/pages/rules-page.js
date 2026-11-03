@@ -268,7 +268,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
         const result = await refresh(true);
         if (!result.ok) throw result.error;
         if (schedulerRan) {
-          const conflicts = Array.isArray(schedulerResult?.conflicts) ? schedulerResult.conflicts.length : 0;
+          const conflicts = Array.isArray(schedulerResult?.conflicts) ? schedulerResult.conflicts.length : Number(schedulerResult?.conflictCount) || 0;
           showToast(conflicts ? `保存と予約更新が完了しました（競合 ${conflicts}件）` : '保存と予約更新が完了しました', 5000, conflicts ? 'warning' : 'activity');
         } else if (!schedulerError) {
           showToast(row ? 'ルールを保存しました' : 'ルールを保存しました。すぐに反映する場合はスケジューラーを実行してください。', row ? 3500 : 5000, 'activity');

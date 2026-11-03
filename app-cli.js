@@ -111,6 +111,11 @@ opts.parse([
 		required   : false
 	},
 	{
+		long       : 'rule-snapshot',
+		value      : true,
+		required   : false
+	},
+	{
 		short      : 'now',
 		long       : 'now',
 		description: '現在',
@@ -296,7 +301,17 @@ function exitReservationError(error) {
 	process.exit(exitCode);
 }
 
-function updateReserves(callback, updateHistory) {
+function updateReserves(callback, updateHistory, targetId) {
+	if (targetId) {
+		return reservationStore.scheduleReservations(__dirname, {
+			targetId: targetId, mutate: callback, updateHistory: updateHistory,
+			historyFirst: opts.get('mode') !== 'reserve'
+		}).then(function (result) {
+			if (result.warning) exitReservationError(new Error(result.warning));
+			reserves = result.reserves;
+			return result.operationResult;
+		}).catch(exitReservationError);
+	}
 	try {
 		return reservationStore.withLock(RESERVES_DATA_FILE, function () {
 			reserves = reservationStore.readArray(RESERVES_DATA_FILE);
@@ -428,6 +443,9 @@ switch (opts.get('mode')) {
 		chinachuStop();
 		break;
 	// Rule
+	case 'rule-reserves':
+		chinachuRuleReserves();
+		break;
 	case 'rule':
 		chinachuRule();
 		break;
@@ -514,7 +532,7 @@ function chinachuSearch() {
 }
 
 // 予約
-function chinachuReserve() {
+async function chinachuReserve() {
 	var target = chinachu.getProgramById(opts.get('id'), schedule);
 
 	if (target === null) {
@@ -536,7 +554,12 @@ function chinachuReserve() {
 		console.log('[simulation] reserve:');
 		console.log(JSON.stringify(target, null, '  '));
 	} else {
-		updateReserves(function (currentReserves) {
+		await updateReserves(function (currentReserves, latestSchedule) {
+			target = chinachu.getProgramById(opts.get('id'), latestSchedule);
+			if (target === null) throw reservationOperationError('見つかりません');
+			target = Object.assign({}, target);
+			target.isManualReserved = true;
+			if (opts.get('1seg')) target['1seg'] = true;
 			if (chinachu.getProgramById(opts.get('id'), currentReserves) !== null) {
 				throw reservationOperationError('既に予約されています');
 			}
@@ -546,19 +569,19 @@ function chinachuReserve() {
 			});
 		}, function (_, currentHistory) {
 			updateManualReserveHistory(target, false, currentHistory);
-		});
+		}, opts.get('id'));
 
 		console.log('reserve:');
 		console.log(JSON.stringify(target, null, '  '));
 
-		console.log('予約しました。 スケジューラーを実行して競合を確認することをお勧めします');
+		console.log('予約と競合状態を更新しました。');
 	}
 
 	process.exit(0);
 }
 
 // 予約解除
-function chinachuUnreserve() {
+async function chinachuUnreserve() {
 	var target;
 
 	if (opts.get('simulation')) {
@@ -574,7 +597,7 @@ function chinachuUnreserve() {
 		console.log('[simulation] unreserve:');
 		console.log(JSON.stringify(target, null, '  '));
 	} else {
-		target = updateReserves(function (currentReserves) {
+		target = await updateReserves(function (currentReserves) {
 			var current = chinachu.getProgramById(opts.get('id'), currentReserves);
 			if (current === null) {
 				throw reservationOperationError('見つかりません');
@@ -591,7 +614,7 @@ function chinachuUnreserve() {
 			return current;
 		}, function (current, currentHistory) {
 			updateManualReserveHistory(current, true, currentHistory);
-		});
+		}, opts.get('id'));
 
 		console.log('unreserve:');
 		console.log(JSON.stringify(target, null, '  '));
@@ -603,7 +626,7 @@ function chinachuUnreserve() {
 }
 
 // スキップ
-function chinachuSkip() {
+async function chinachuSkip() {
 	var target;
 
 	if (opts.get('simulation')) {
@@ -623,7 +646,7 @@ function chinachuSkip() {
 		console.log('[simulation] skip:');
 		console.log(JSON.stringify(target, null, '  '));
 	} else {
-		target = updateReserves(function (currentReserves) {
+		target = await updateReserves(function (currentReserves) {
 			var current = chinachu.getProgramById(opts.get('id'), currentReserves);
 			if (current === null) {
 				throw reservationOperationError('見つかりません');
@@ -636,7 +659,7 @@ function chinachuSkip() {
 			}
 			current.isSkip = true;
 			return current;
-		});
+		}, null, opts.get('id'));
 
 		console.log('skip:');
 		console.log(JSON.stringify(target, null, '  '));
@@ -648,7 +671,7 @@ function chinachuSkip() {
 }
 
 // スキップ解除
-function chinachuUnskip() {
+async function chinachuUnskip() {
 	var target;
 
 	if (opts.get('simulation')) {
@@ -664,7 +687,7 @@ function chinachuUnskip() {
 		console.log('[simulation] skip:');
 		console.log(JSON.stringify(target, null, '  '));
 	} else {
-		target = updateReserves(function (currentReserves) {
+		target = await updateReserves(function (currentReserves) {
 			var current = chinachu.getProgramById(opts.get('id'), currentReserves);
 			if (current === null) {
 				throw reservationOperationError('見つかりません');
@@ -674,7 +697,7 @@ function chinachuUnskip() {
 			}
 			delete current.isSkip;
 			return current;
-		});
+		}, null, opts.get('id'));
 
 		console.log('skip:');
 		console.log(JSON.stringify(target, null, '  '));
@@ -720,8 +743,30 @@ function chinachuStop() {
 	process.exit(0);
 }
 
+// WUI uses a short-lived CLI process so synchronous WUI rule readers cannot
+// block this process from releasing its asynchronous reservation locks.
+async function chinachuRuleReserves() {
+	try {
+		var result = await reservationStore.scheduleReservations(__dirname, {
+			ruleUid: opts.get('rule-uid'), ruleSnapshot: JSON.parse(opts.get('rule-snapshot'))
+		});
+		// Flush the complete JSON response before terminating this CLI process.
+		fs.writeFileSync(1, JSON.stringify({ reserves: result.reserves, reservedCount: result.reservedCount,
+			conflictCount: result.conflictCount, historyUpdated: result.historyUpdated, warning: result.warning || null }) + '\n');
+		process.exit(0);
+	} catch (error) {
+		fs.writeSync(2, JSON.stringify({ code: error.code || null, message: error.message }) + '\n');
+		if (error.code === 'RESERVATION_LOCK_TIMEOUT') process.exit(ruleStore.CLI_EXIT_LOCK_TIMEOUT);
+		if (error.code === 'RULE_TARGET_NOT_FOUND' || error.code === 'RULE_TARGET_CONFLICT' ||
+			error.code === 'RULE_UID_DUPLICATE' || error.code === 'RULE_TARGET_INVALID') {
+			process.exit(ruleStore.CLI_EXIT_TARGET_CONFLICT);
+		}
+		process.exit(1);
+	}
+}
+
 // Rule
-function chinachuRule() {
+async function chinachuRule() {
 	var selectedRule = null;
 	var target = {
 		ruleUid: opts.get('rule-uid') || null,
@@ -784,6 +829,18 @@ function chinachuRule() {
 			process.exit(ruleStore.CLI_EXIT_TARGET_CONFLICT);
 		}
 		process.exit(1);
+	}
+
+	if (!hasTarget && !opts.get('simulation') && !opts.get('remove')) {
+		try {
+			var reservationResult = await reservationStore.scheduleReservations(__dirname, {
+				ruleUid: selectedRule.ruleUid, ruleSnapshot: selectedRule
+			});
+			if (reservationResult.warning) exitReservationError(new Error(reservationResult.warning));
+		} catch (error) {
+			console.error('ルールは保存済みですが予約更新に失敗しました: ' + error.message);
+			exitReservationError(error);
+		}
 	}
 
 	var prefix = opts.get('simulation') ? '[simulation] ' : '';

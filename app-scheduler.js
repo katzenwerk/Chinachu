@@ -91,11 +91,15 @@ opts.parse([
 const pkg = require("./package.json");
 const config = require(CONFIG_FILE);
 const rules = JSON.parse(fs.readFileSync(RULES_FILE, { encoding: 'utf8' }) || '[]');
-let reserves = null;//まだ読み込まない
+reservationStore.ensureArrayFile(RESERVES_DATA_FILE);
+let reserves = reservationStore.readArray(RESERVES_DATA_FILE);
 let tuners = null;
 const schedulerBaselines = schedulerState.emptyBaselines();
 let reservesOutputIdentity = null;
-let reservesReadFingerprint = null;
+const rulesReadFingerprint = schedulerPreflight.fingerprint(rules);
+const rulesReadIdentity = schedulerPreflight.fileIdentity(RULES_FILE);
+const reservesReadFingerprint = schedulerPreflight.fingerprint(reserves);
+const reservesReadIdentity = schedulerPreflight.fileIdentity(RESERVES_DATA_FILE);
 
 schedulerBaselines.config = schedulerPreflight.createFileBaseline(CONFIG_FILE, config);
 schedulerBaselines.rules = schedulerPreflight.createFileBaseline(RULES_FILE, rules);
@@ -252,216 +256,6 @@ function readJsonArray(file, options) {
 }
 
 
-// (function) get retention days from config
-function getRetentionDays(name, defaultDays) {
-	var value = Number(config[name]);
-
-	if (!Number.isFinite(value)) {
-		return defaultDays;
-	}
-
-	value = Math.floor(value);
-
-	if (value < 0) {
-		return defaultDays;
-	}
-
-	return value;
-}
-
-// (function) normalize allowEndLack
-function normalizeAllowEndLack(value) {
-	return value === true;
-}
-
-// (function) normalize recorded directory path
-function normalizeRecordedDir(dir) {
-	dir = String(dir || '').trim();
-
-	if (dir === '') {
-		return '';
-	}
-
-	return dir.replace(/\/+$/, '') + '/';
-}
-
-// (function) resolve recorded directory from config.recordedDirs
-function resolveRecordedDir(recordedDirId) {
-	var dirs = config.recordedDirs;
-	var i;
-	var dir;
-
-	recordedDirId = String(recordedDirId || '').trim();
-
-	if (recordedDirId === '') {
-		return '';
-	}
-
-	if (dirs instanceof Array === false) {
-		return '';
-	}
-
-	for (i = 0; i < dirs.length; i++) {
-		dir = dirs[i];
-
-		if (!dir || String(dir.id || '') !== recordedDirId) {
-			continue;
-		}
-
-		if (typeof dir.path === 'string' && dir.path.trim() !== '') {
-			return normalizeRecordedDir(dir.path);
-		}
-
-		return '';
-	}
-
-	return '';
-}
-
-// (function) apply reserve option from matched rule
-function applyRuleReserveOptions(reserve, rule, fallbackRuleId) {
-	var recordedDirId;
-	var recordedDir;
-
-	if (!reserve || !rule) {
-		return;
-	}
-
-	reserve.ruleId = rule.id !== undefined ? rule.id : fallbackRuleId;
-	reserve.ruleIdSource = rule.id !== undefined ? 'id' : 'index';
-	if (typeof rule.ruleUid !== 'undefined') {
-		reserve.ruleUid = rule.ruleUid;
-	}
-	reserve.allowEndLack = normalizeAllowEndLack(rule.allowEndLack);
-
-	if (typeof rule.recorded_format !== 'undefined') {
-		reserve.recordedFormat = rule.recorded_format;
-	}
-
-	if (typeof rule.recordedDirId === 'string' && rule.recordedDirId.trim() !== '') {
-		recordedDirId = rule.recordedDirId.trim();
-		recordedDir = resolveRecordedDir(recordedDirId);
-
-		reserve.recordedDirId = recordedDirId;
-
-		if (recordedDir !== '') {
-			reserve.recordedDir = recordedDir;
-		} else {
-			schedulerLog('WARNING: recordedDirId `' + recordedDirId + '` was not found or invalid. fallback to default recordedDir.');
-		}
-	}
-}
-
-// (function) make reserves2 key
-function makeReserves2Key(program) {
-	if (!program) {
-		return '';
-	}
-
-	var key = program.key;
-
-	if (typeof key === 'string' && key !== '') {
-		return key;
-	}
-
-	var channel = program.channel || {};
-	var channelId = channel.id || program.channelId || '';
-	var start = parseInt(program.start, 10);
-	var seconds = parseInt(program.seconds, 10);
-
-	if (!channelId || !start || !seconds) {
-		return '';
-	}
-
-	return [channelId, start, seconds].join('|');
-}
-
-// (function) decorate reserves2 entry
-function decorateReserves2Entry(reserve, now) {
-	var entry = Object.assign({}, reserve);
-	var key = makeReserves2Key(entry);
-
-	entry.source = entry.source || 'scheduler';
-	entry.origId = entry.origId || entry.programId || entry.id || '';
-	entry.key = key;
-	entry.snapshotAt = now;
-	entry.updatedAt = now;
-
-	return entry;
-}
-
-// (function) remake reserves2
-function remakeReserves2(currentReserves2, activeReserves, now) {
-	var keepDays = getRetentionDays('reserves2RetentionDays', 365);
-	var keepMillis = keepDays > 0 ? keepDays * 24 * 60 * 60 * 1000 : 0;
-	var threshold = keepMillis > 0 ? now - keepMillis : 0;
-	var map = {};
-
-	schedulerLog('RESERVES2 RETENTION DAYS: ' + (keepDays > 0 ? keepDays : 'disabled'));
-
-	/*
-	 * reserves2 の扱い:
-	 *   - reserves2 は reserves.json に準拠する
-	 *   - ただし、reserves.json から落ちた過去分(end < now)だけは履歴として保持する
-	 *   - 過去分(end < now)は reserves2RetentionDays 以内なら保持する
-	 *   - reserves2RetentionDays より前に終了したものは削除する
-	 *   - reserves2RetentionDays が 0 の場合は整理しない
-	 *   - 現在/未来分(end >= now)は activeReserves、つまり reserves.json と同じ内容を正とする
-	 *
-	 * 最終的な reserves2 は「過去履歴 + 現在の reserves.json」という形になる。
-	 * これにより、予約ルール変更・解除で reserves.json から消えた未終了分は
-	 * reserves2 側にも残り続けない。
-	 */
-	currentReserves2.forEach(function (reserve) {
-		if (!reserve) {
-			return;
-		}
-
-		var end = parseInt(reserve.end, 10);
-
-		if (!end) {
-			return;
-		}
-
-		if (keepMillis > 0 && end < threshold) {
-			return;
-		}
-
-		if (end >= now) {
-			return;
-		}
-
-		var key = makeReserves2Key(reserve);
-
-		if (!key) {
-			return;
-		}
-
-		reserve.key = key;
-		map[key] = reserve;
-	});
-
-	activeReserves.forEach(function (reserve) {
-		if (!reserve) {
-			return;
-		}
-
-		var key = makeReserves2Key(reserve);
-
-		if (!key) {
-			return;
-		}
-
-		map[key] = decorateReserves2Entry(reserve, now);
-	});
-
-	return Object.keys(map).map(function (key) {
-		return map[key];
-	}).sort(function (a, b) {
-		return parseInt(a.start || 0, 10) - parseInt(b.start || 0, 10);
-	});
-}
-
 // (function) remake reserves
 function outputReserves() {
 	schedulerLog('WRITE: ' + RESERVES_DATA_FILE);
@@ -475,35 +269,52 @@ function outputReserves() {
 		array.push(reserve);
 	});
 
-	reservationStore.withLock(RESERVES_DATA_FILE, function () {
-		// reservation output lock acquired
-		var latestReserves = reservationStore.readArray(RESERVES_DATA_FILE);
-		if (schedulerPreflight.fingerprint(
-			schedulerPreflight.projectReserves(latestReserves)
-		) !== reservesReadFingerprint) {
-			var changedError = new Error('reserves.json changed while scheduler was running');
-			changedError.code = 'RESERVES_CHANGED_DURING_RUN';
-			throw changedError;
-		}
+	// Every writer acquires rules before reserves; retain both locks through save.
+	reservationStore.withLock(RULES_FILE, function () {
+		reservationStore.withLock(RESERVES_DATA_FILE, function () {
+			// reservation output lock acquired
+			var latestReserves = reservationStore.readArray(RESERVES_DATA_FILE);
+			if (!schedulerPreflight.sameFileIdentity(rulesReadIdentity, schedulerPreflight.fileIdentity(RULES_FILE)) ||
+				schedulerPreflight.fingerprint(reservationStore.readArray(RULES_FILE)) !== rulesReadFingerprint ||
+				!schedulerPreflight.sameFileIdentity(reservesReadIdentity, schedulerPreflight.fileIdentity(RESERVES_DATA_FILE)) ||
+				schedulerPreflight.fingerprint(latestReserves) !== reservesReadFingerprint) {
+				var changedError = new Error('rules.json or reserves.json changed while scheduler was running');
+				changedError.code = 'RESERVES_CHANGED_DURING_RUN';
+				// A reservation-only change may be invisible to the periodic projection.
+				// Invalidate the existing baseline so the next periodic preflight retries.
+				try {
+					const stateStore = new schedulerState.SchedulerStateStore(SCHEDULER_STATE_FILE, {
+						legacyFilePath: LEGACY_SCHEDULER_STATE_FILE
+					});
+					stateStore.update(state => {
+						state.baselines.reserves = null;
+						return state;
+					});
+				} catch (error) {
+					schedulerLog('WARNING: scheduler baseline invalidation failed: ' + error.message);
+				}
+				throw changedError;
+			}
 
-		// 完全な一時fileを同一filesystem上でrenameし、途中書き込みを公開しない。
-		reservationStore.writeArrayAtomic(RESERVES_DATA_FILE, array);
-		reservesOutputIdentity = schedulerPreflight.fileIdentity(RESERVES_DATA_FILE);
-		schedulerBaselines.reserves = schedulerPreflight.createFileBaseline(
-			RESERVES_DATA_FILE,
-			schedulerPreflight.projectReserves(array)
-		);
+			// 完全な一時fileを同一filesystem上でrenameし、途中書き込みを公開しない。
+			reservationStore.writeArrayAtomic(RESERVES_DATA_FILE, array);
+			reservesOutputIdentity = schedulerPreflight.fileIdentity(RESERVES_DATA_FILE);
+			schedulerBaselines.reserves = schedulerPreflight.createFileBaseline(
+				RESERVES_DATA_FILE,
+				schedulerPreflight.projectReserves(array)
+			);
 
-		// reserves2 は副次出力。失敗しても本体の reserves.json 更新と後続フックを止めない
-		try {
-			schedulerLog('WRITE: ' + RESERVES2_DATA_FILE);
+			// reserves2 は副次出力。失敗しても本体の reserves.json 更新と後続フックを止めない
+			try {
+				schedulerLog('WRITE: ' + RESERVES2_DATA_FILE);
 
-			reservationStore.updateArrayAtomic(RESERVES2_DATA_FILE, function (currentReserves2) {
-				return remakeReserves2(currentReserves2, array, now);
-			}, { createIfMissing: true });
-		} catch (e) {
-			schedulerLog('WARNING: `' + RESERVES2_DATA_FILE + '`の保存に失敗しました: ' + (e && e.stack ? e.stack : e));
-		}
+				reservationStore.updateArrayAtomic(RESERVES2_DATA_FILE, function (currentReserves2) {
+					return reservationStore.remakeReserves2(currentReserves2, array, now, config, schedulerLog);
+				}, { createIfMissing: true });
+			} catch (e) {
+				schedulerLog('WARNING: `' + RESERVES2_DATA_FILE + '`の保存に失敗しました: ' + (e && e.stack ? e.stack : e));
+			}
+		});
 	});
 }
 
@@ -625,8 +436,6 @@ function runEpgEndCommand() {
 
 // scheduler
 function scheduler() {
-
-	var i, j, k, l, a;
 	var commandProcess;
 
 	schedulerLog('RUNNING SCHEDULER.');
@@ -651,10 +460,6 @@ function scheduler() {
 			}
 		});
 	});
-
-	reservationStore.ensureArrayFile(RESERVES_DATA_FILE);
-	reserves = readJsonArray(RESERVES_DATA_FILE);//読み込む
-	reservesReadFingerprint = schedulerPreflight.fingerprint(schedulerPreflight.projectReserves(reserves));
 
 	var typeNum = {};
 
@@ -713,127 +518,19 @@ function scheduler() {
 		}
 	});
 
-	// sort
-	matches.sort(function (a, b) {
-		return a.start - b.start;
+	var result = reservationStore.evaluateReservations(matches, tuners, rules, config, {
+		log: schedulerLog,
+		onConflict: function (program) {
+			if (!config.conflictCommand) return;
+			commandProcess = child_process.spawn(config.conflictCommand, [process.pid, program.id, dateFormat(new Date(program.start), 'isoDateTime'), program.channel.name, program.title, JSON.stringify(program)]);
+			schedulerLog('SPAWN: ' + config.conflictCommand + ' (pid=' + commandProcess.pid + ')');
+		}
 	});
-
-	// duplicates
-	var duplicateCount = 0;
-	for (i = 0; i < matches.length; i++) {
-		a = matches[i];
-		if (a.isManualReserved || a.isSkip) { continue; }
-
-		for (j = 0; j < matches.length; j++) {
-			var b = matches[j];
-
-			if (b.isDuplicate) { continue; }
-
-			if (a.id === b.id) { continue; }
-			if (a.channel.type !== b.channel.type) { continue; }
-			if (a.channel.channel !== b.channel.channel) { continue; }
-			if (a.start !== b.start) { continue; }
-			if (a.end !== b.end) { continue; }
-			if (a.title !== b.title) { continue; }
-
-			// 明示的な手動予約を自動予約より優先する。
-			if (b.isManualReserved) {
-				// 下の共通処理で自動予約側だけを重複扱いにする。
-			} else if (b.isSkip) {
-				// 下の共通処理で非Skip側だけを重複扱いにする。
-			} else {
-				// 従来どおりsidの若い方を選択させる
-				if (parseInt(a.channel.sid, 10) < parseInt(b.channel.sid, 10)) { continue; }
-			}
-
-			schedulerLog('DUPLICATE: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
-			a.isDuplicate = true;
-
-			++duplicateCount;
-			break;
-		}
-	}
-
-	// check conflict
-	var conflictCount = 0;
-	var tunerThreads  = [];
-	for (i = 0; i < tuners.length; i++) {
-		tunerThreads.push([]);
-	}
-	for (i = 0; i < matches.length; i++) {
-		a = matches[i];
-
-		if (a.isDuplicate || a.isSkip) { continue; }
-
-		a.isConflict = true;
-
-		for (k = 0; k < tuners.length; k++) {
-			if (tuners[k].types.indexOf(a.channel.type) !== -1) {
-				var aIsConflictInTuner = false;
-				for (l = 0; l < tunerThreads[k].length; l++) {
-					if (!((tunerThreads[k][l].end <= a.start) || (tunerThreads[k][l].start >= a.end))) {
-						aIsConflictInTuner = true;
-						break;
-					}
-				}
-
-				if (aIsConflictInTuner) {
-					continue;
-				} else {
-					tunerThreads[k].push(a);
-					a.isConflict = false;
-					break;
-				}
-			}
-		}
-
-		if (!a.isConflict) {
-			continue;
-		} else {
-			schedulerLog('!CONFLICT: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
-
-			++conflictCount;
-			// conflict フック
-			if (config.conflictCommand) {
-				commandProcess = child_process.spawn(config.conflictCommand, [process.pid, a.id, dateFormat(new Date(a.start), 'isoDateTime'), a.channel.name, a.title, JSON.stringify(a)]);
-				schedulerLog('SPAWN: ' + config.conflictCommand + ' (pid=' + commandProcess.pid + ')');
-			}
-		}
-	}
-
-	// reserve
-	reserves = [];
-	var reservedCount = 0;
-	var skipCount     = 0;
-	for (i = 0; i < matches.length; i++) {
-		a = matches[i];
-
-		if (!a.isDuplicate) {
-			// 予約へルール由来の情報を継承する
-			a.allowEndLack = false;
-			for (let j = rules.length - 1; j >= 0; j--) {
-				const rule = rules[j];
-				if (chinachu.programMatchesRule(rule, a, config.normalizationForm)) {
-					applyRuleReserveOptions(a, rule, j);
-					break;
-				}
-			}
-
-			a.programId = a.id;
-			reserves.push(a);
-
-			if (a.isSkip) {
-				schedulerLog('!!!SKIP: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
-				++skipCount;
-			} else if (!a.isConflict) {
-				schedulerLog('RESERVE: ' + a.id + ' ' + dateFormat(new Date(a.start), 'isoDateTime') + ' [' + a.channel.name + '] ' + a.title);
-				++reservedCount;
-			} else {
-				// 競合したときのログは既に出力済み
-			}
-		}
-	}
-
+	reserves = result.reserves;
+	var duplicateCount = result.duplicateCount;
+	var conflictCount = result.conflictCount;
+	var skipCount = result.skipCount;
+	var reservedCount = result.reservedCount;
 
 	// results
 	schedulerLog('MATCHES: ' + matches.length.toString(10));
@@ -1640,7 +1337,7 @@ function writeOut(s, callback) {
 	});
 
 	if (!opts.get('s')) {
-		fs.writeFileSync(SCHEDULE_DATA_FILE, JSON.stringify(schedule));
+		writeJsonAtomic(SCHEDULE_DATA_FILE, schedule);
 		schedulerLog('WRITE: ' + SCHEDULE_DATA_FILE);
 	}
 
@@ -1735,7 +1432,7 @@ function getEpgFromMirakurun(path) {
 		})
 		.catch(e => {
 			if (e && e.code === 'RESERVES_CHANGED_DURING_RUN') {
-				schedulerLog('RESERVATION UPDATE CONFLICT: retry with the latest reserves.json');
+				schedulerLog('RESERVATION UPDATE CONFLICT: retry with the latest rules.json and reserves.json');
 				console.error(e.message);
 				process.exit(RESERVES_CHANGED_EXIT_CODE);
 				return;

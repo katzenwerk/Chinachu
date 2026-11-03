@@ -18,12 +18,14 @@ function readRules(directory) {
 }
 
 function runApi(file, method, rules, query, num, headers = {}) {
+	let finish;
+	const completed = new Promise(resolve => { finish = resolve; });
 	const response = {
 		statusCode: null,
 		body: '',
 		head(code) { this.statusCode = code; },
-		end(body) { this.body = body || ''; },
-		error(code) { this.statusCode = code; }
+		end(body) { this.body = body || ''; finish(this); },
+		error(code) { this.statusCode = code; finish(this); }
 	};
 	const request = {
 		method,
@@ -33,7 +35,7 @@ function runApi(file, method, rules, query, num, headers = {}) {
 	};
 	const sandbox = {
 		request, response, data: { rules },
-		define: { RULES_FILE: file, REPOSITORY_ROOT: repositoryRoot, NODE_EXECUTABLE: process.execPath },
+		define: { RULES_FILE: file, REPOSITORY_ROOT: path.dirname(file), NODE_EXECUTABLE: process.execPath },
 		fs,
 		path,
 		ruleUid,
@@ -51,7 +53,7 @@ function runApi(file, method, rules, query, num, headers = {}) {
 	};
 	const route = num === undefined ? 'script-rules.vm.js' : 'script-rules-rule.vm.js';
 	vm.runInNewContext(fs.readFileSync(path.join(repositoryRoot, 'api', route), 'utf8'), sandbox, route);
-	return response;
+	return completed;
 }
 
 function runActionApi(file, rules, action, expectedRuleUid) {
@@ -95,7 +97,15 @@ function createCliFixture(rules) {
 	fs.mkdirSync(path.join(directory, 'data'));
 	fs.mkdirSync(path.join(directory, 'log'));
 	fs.symlinkSync(path.join(repositoryRoot, 'lib'), path.join(directory, 'lib'), 'dir');
-	fs.symlinkSync(path.join(repositoryRoot, 'node_modules'), path.join(directory, 'node_modules'), 'dir');
+	const nodeModules = path.join(directory, 'node_modules');
+	fs.mkdirSync(nodeModules);
+	['opts', 'dateformat', 'chinachu-common', 'easy-table'].forEach(name => {
+		fs.symlinkSync(path.join(repositoryRoot, 'node_modules', name), path.join(nodeModules, name), 'dir');
+	});
+	const mirakurunModule = path.join(nodeModules, 'mirakurun');
+	fs.mkdirSync(mirakurunModule);
+	fs.writeFileSync(path.join(mirakurunModule, 'index.js'),
+		"exports.default = class { constructor() { this.basePath = '/api'; } getTuners() { return Promise.resolve([]); } };\n");
 	fs.copyFileSync(path.join(repositoryRoot, 'app-cli.js'), path.join(directory, 'app-cli.js'));
 	fs.writeFileSync(path.join(directory, 'config.json'), '{}');
 	fs.writeFileSync(path.join(directory, 'rules.json'), JSON.stringify(rules));
@@ -125,30 +135,32 @@ function runCliAsync(directory, args) {
 }
 
 describe('Stable rule UID lifecycle', function() {
-	it('generates a UID for API-created rules and rejects a duplicate UID', function() {
-		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-rule-uid-api-'));
+	it('generates a UID for API-created rules and rejects a duplicate UID', async function() {
+		const existing = [{ ruleUid: 'stable-a', title: 'A' }];
+		const directory = createCliFixture(existing);
 		const file = path.join(directory, 'rules.json');
+		const originalSchedule = reservationStore.scheduleReservations;
 		try {
-			const existing = [{ ruleUid: 'stable-a', title: 'A' }];
-			fs.writeFileSync(file, JSON.stringify(existing));
-
-			const created = runApi(file, 'POST', existing, { title: 'new rule' });
+			reservationStore.scheduleReservations = function() { throw new Error('WUI must calculate reservations in a child process'); };
+			const created = await runApi(file, 'POST', existing, { title: 'new rule' });
 			assert.strictEqual(created.statusCode, 201);
+			assert.strictEqual(JSON.parse(created.body).reservationUpdate.success, true, created.body);
 			let saved = readRules(directory);
 			assert.strictEqual(saved.length, 2);
 			assert.strictEqual(saved[0].ruleUid, 'stable-a');
 			assert.match(saved[1].ruleUid, /^[0-9a-f-]{36}$/);
 
 			const beforeDuplicate = fs.readFileSync(file, 'utf8');
-			const duplicate = runApi(file, 'POST', saved, { ruleUid: 'stable-a', title: 'duplicate' });
+			const duplicate = await runApi(file, 'POST', saved, { ruleUid: 'stable-a', title: 'duplicate' });
 			assert.strictEqual(duplicate.statusCode, 409);
 			assert.strictEqual(fs.readFileSync(file, 'utf8'), beforeDuplicate);
 		} finally {
+			reservationStore.scheduleReservations = originalSchedule;
 			fs.rmSync(directory, { recursive: true, force: true });
 		}
 	});
 
-	it('edits the expected UID after an index shift while preserving its UID and title mode', function() {
+	it('edits the expected UID after an index shift while preserving its UID and title mode', async function() {
 		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-rule-uid-api-'));
 		const file = path.join(directory, 'rules.json');
 		try {
@@ -157,7 +169,7 @@ describe('Stable rule UID lifecycle', function() {
 				{ ruleUid: 'stable-b', title: 'B', reserve_titles_mode: 'and' }
 			];
 			fs.writeFileSync(file, JSON.stringify([{ ruleUid: 'inserted', title: 'X' }, ...staleMemory]));
-			const response = runApi(file, 'PUT', staleMemory, { ruleUid: 'caller-change', title: 'edited' }, 0,
+			const response = await runApi(file, 'PUT', staleMemory, { ruleUid: 'caller-change', title: 'edited' }, 0,
 				{ 'x-chinachu-rule-uid': 'stable-b' });
 
 			assert.strictEqual(response.statusCode, 200);
@@ -167,11 +179,11 @@ describe('Stable rule UID lifecycle', function() {
 			]);
 			assert.strictEqual(saved[2].reserve_titles_mode, 'and');
 
-			const explicitOr = runApi(file, 'PUT', saved, { title: 'edited again', reserve_titles_mode: 'or' }, 2,
+			const explicitOr = await runApi(file, 'PUT', saved, { title: 'edited again', reserve_titles_mode: 'or' }, 2,
 				{ 'x-chinachu-rule-uid': 'stable-b' });
 			assert.strictEqual(explicitOr.statusCode, 200);
 			assert.strictEqual(readRules(directory)[2].reserve_titles_mode, 'or');
-			const invalid = runApi(file, 'PUT', readRules(directory), { title: 'invalid', reserve_titles_mode: 'xor' }, 2,
+			const invalid = await runApi(file, 'PUT', readRules(directory), { title: 'invalid', reserve_titles_mode: 'xor' }, 2,
 				{ 'x-chinachu-rule-uid': 'stable-b' });
 			assert.strictEqual(invalid.statusCode, 400);
 		} finally {
@@ -179,20 +191,20 @@ describe('Stable rule UID lifecycle', function() {
 		}
 	});
 
-	it('resolves DELETE by UID after an index shift and rejects unsafe requests', function() {
+	it('resolves DELETE by UID after an index shift and rejects unsafe requests', async function() {
 		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-rule-uid-delete-'));
 		const file = path.join(directory, 'rules.json');
 		try {
 			const staleMemory = [{ ruleUid: 'stable-a', title: 'A' }, { ruleUid: 'stable-b', title: 'B' }];
 			fs.writeFileSync(file, JSON.stringify([{ ruleUid: 'inserted', title: 'X' }, ...staleMemory]));
-			const shifted = runApi(file, 'DELETE', staleMemory, undefined, 0, { 'x-chinachu-rule-uid': 'stable-b' });
+			const shifted = await runApi(file, 'DELETE', staleMemory, undefined, 0, { 'x-chinachu-rule-uid': 'stable-b' });
 			assert.strictEqual(shifted.statusCode, 200);
 			assert.deepStrictEqual(readRules(directory).map(rule => rule.ruleUid), ['inserted', 'stable-a']);
 			assert.deepStrictEqual(staleMemory.map(rule => rule.ruleUid), ['inserted', 'stable-a']);
 
-			const missing = runApi(file, 'DELETE', staleMemory, undefined, 0, { 'x-chinachu-rule-uid': 'missing' });
+			const missing = await runApi(file, 'DELETE', staleMemory, undefined, 0, { 'x-chinachu-rule-uid': 'missing' });
 			assert.strictEqual(missing.statusCode, 404);
-			const noUid = runApi(file, 'DELETE', staleMemory, undefined, 0);
+			const noUid = await runApi(file, 'DELETE', staleMemory, undefined, 0);
 			assert.strictEqual(noUid.statusCode, 428);
 		} finally {
 			fs.rmSync(directory, { recursive: true, force: true });

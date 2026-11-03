@@ -43,8 +43,18 @@
 					return response.error(ruleStore.httpStatus(error));
 				}
 				
-				response.head(201);
-				response.end(JSON.stringify(newRule));
+				// Saving the rule succeeded. Report reservation failure separately so callers
+				// retry the calculation, never POST the rule a second time.
+				ruleStore.scheduleReservations(define.REPOSITORY_ROOT, newRule).then(function(result) {
+					finish({ success: result.historyUpdated, reservedCount: result.reservedCount,
+						conflictCount: result.conflictCount, error: result.warning || null });
+				}, function(error) {
+					finish({ success: false, error: error.message });
+				});
+				function finish(reservationUpdate) {
+					response.head(201);
+					response.end(JSON.stringify(Object.assign({}, newRule, { reservationUpdate: reservationUpdate })));
+				}
 			}
 			return;
 	}
