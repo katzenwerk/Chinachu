@@ -1,5 +1,7 @@
 import { invalidateResources, loadResources } from '../services/api-client.js';
-import { buildStorageViewModels } from '../services/storage-model.js';
+import { buildStorageViewModels, resolveRecordedStorage } from '../services/storage-model.js';
+import { isReservationDisplayTarget } from '../services/reservation-model.js';
+import { loadRecordedResultsWithStoragePaths } from '../services/recorded-results-client.js';
 import { refreshStorageCapacity, retryStorageData, subscribeStorageData } from '../services/storage-store.js';
 import { createStorageCard } from '../components/storage-card.js';
 import { openCleanerDialog } from '../components/cleaner-dialog.js';
@@ -53,7 +55,10 @@ export function renderStoragePage(container) {
       if (error) renderError(error); else renderLoading();
       return;
     }
-    const models = buildStorageViewModels({ storage: storageState.data, ...related }, Date.now());
+    const now = Date.now();
+    const models = buildStorageViewModels({ storage: storageState.data, ...related,
+      reserves: related.reserves.filter(program => isReservationDisplayTarget(program, now)) }, now);
+    const unassignedRecorded = related.recordedResults.filter(item => !resolveRecordedStorage(storageState.data, item)).length;
     const panel = document.createElement('section');
     panel.className = 'panel storage-page-panel';
     panel.setAttribute('aria-label', 'ストレージ一覧');
@@ -62,6 +67,7 @@ export function renderStoragePage(container) {
       <div class="storage-grid" id="storage-grid"></div>
       <p class="storage-page-note">空き容量は録画中に自動更新されます。録画中以外は、休止中のHDDを起動させないため、概算値を表示しています。<BR>最新の空き容量を確認する場合は、各カード右上の更新ボタンを押してください。※手動更新により、休止中のHDDが起動する場合があります。</p>
       <div class="storage-management-row"><p>録画台帳と登録録画フォルダの所在を明示操作で照合します。</p><button class="button" data-open-cleaner type="button">台帳整理</button></div>
+      ${unassignedRecorded ? `<p class="storage-page-note">保存済み情報から登録録画先を特定できない録画済み ${unassignedRecorded}件は、録画先別の件数に含めていません。</p>` : ''}
       <p class="storage-refresh-feedback" role="status" ${feedback ? '' : 'hidden'}></p>`;
     const grid = panel.querySelector('#storage-grid');
     if (models.length === 0) {
@@ -78,10 +84,17 @@ export function renderStoragePage(container) {
     if (relatedRequest !== null) return relatedRequest;
     if (force) invalidateResources(['rules', 'reserves']);
     relatedError = null;
-    relatedRequest = loadResources(['rules', 'reserves']).then(result => {
+    relatedRequest = Promise.all([
+      loadResources(['rules', 'reserves']),
+      loadRecordedResultsWithStoragePaths({ results: ['recorded'], limit: 200 })
+    ]).then(([result, recordedResults]) => {
+      if (!Array.isArray(result.rules) || !Array.isArray(result.reserves)) {
+        throw new Error('Storage related API response is invalid');
+      }
       related = {
-        rules: Array.isArray(result.rules) ? result.rules : [],
-        reserves: Array.isArray(result.reserves) ? result.reserves : []
+        rules: result.rules,
+        reserves: result.reserves,
+        recordedResults
       };
     }).catch(error => {
       relatedError = error;

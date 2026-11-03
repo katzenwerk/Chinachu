@@ -142,4 +142,14 @@ export async function loadMatchRecordingPaths(options = {}) {
   return paths;
 }
 
+export async function loadRecordedResultsWithStoragePaths(options = {}) {
+  const [items, paths] = await Promise.all([
+    loadAllRecordedResults(options),
+    loadMatchRecordingPaths(options)
+  ]);
+  return items.map(item => ({ ...item,
+    storageRecordingPath: item.recordingPath || paths.get(item.key) || null
+  }));
+}
+
 export { PAGE_SIZE as RECORDED_RESULTS_PAGE_SIZE };

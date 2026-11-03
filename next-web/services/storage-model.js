@@ -341,7 +341,8 @@ export function buildRecordingStorageDisplay(storageData, recording) {
   return { notice: reservationStorageNotice(storage, storageData.thresholds || {}, false) };
 }
 
-function itemMatchesStorage(item, storage, allowRecordedPath) {
+export function itemMatchesStorage(item, storage, allowRecordedPath) {
+  if (!storage) return false;
   const ids = storageIds(storage);
   const itemId = typeof item.recordedDirId === 'string' ? item.recordedDirId.trim() : '';
   const itemPath = allowRecordedPath ? normalizePath(item.recordedDir) : '';
@@ -359,8 +360,53 @@ function filterToken(storage) {
   return `path:${normalizePath(storage.path || storage.configuredPath)}`;
 }
 
+export function resolveStorageFilter(storageData, token) {
+  return (storageData?.storages || []).find(storage => {
+    if (token?.startsWith('id:')) return storageIds(storage).includes(token.slice(3));
+    if (token?.startsWith('path:')) return normalizePath(storage.path || storage.configuredPath) === normalizePath(token.slice(5));
+    return false;
+  }) || null;
+}
+
+export function resolveRecordedStorage(storageData, item) {
+  const storages = storageData?.storages || [];
+  const normalize = value => {
+    const path = normalizePath(value);
+    if (!path) return '';
+    const parts = [];
+    path.split('/').forEach(part => {
+      if (!part || part === '.') return;
+      if (part === '..' && parts.length && parts.at(-1) !== '..') parts.pop();
+      else if (part !== '..' || !path.startsWith('/')) parts.push(part);
+    });
+    return `${path.startsWith('/') ? '/' : ''}${parts.join('/')}` || '.';
+  };
+  let recordedPath = normalize(item?.storageRecordingPath || item?.recordingPath);
+  // A historical result without a saved destination must not inherit today's default.
+  if (!recordedPath) return null;
+  const contains = (root, path) => root && (path === root ||
+    (root === '.' ? !path.startsWith('/') && path !== '..' && !path.startsWith('../')
+      : path.startsWith(root === '/' ? '/' : `${root}/`)));
+  if (!recordedPath.startsWith('/')) {
+    // Storage API supplies the absolute form of each configured relative root.
+    const relativeRoot = storages.map(storage => ({ path: normalize(storage.configuredPath), absolute: normalize(storage.path) }))
+      .filter(root => root.path && !root.path.startsWith('/') && root.absolute.startsWith('/') && contains(root.path, recordedPath))
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    if (relativeRoot) recordedPath = normalize(`${relativeRoot.absolute}/${relativeRoot.path === '.' ? recordedPath : recordedPath.slice(relativeRoot.path.length)}`);
+  }
+  return storages.flatMap(storage => [...new Set([storage.path, storage.configuredPath].map(normalize))]
+    .map(path => ({ storage, path })))
+    .filter(candidate => contains(candidate.path, recordedPath))
+    .sort((a, b) => b.path.length - a.path.length)[0]?.storage || null;
+}
+
 export function buildStorageViewModels(resources, now = Date.now()) {
   const thresholds = resources.storage.thresholds || {};
+  const recordedCounts = new Map();
+  (resources.recordedResults || []).forEach(item => {
+    const storage = resolveRecordedStorage(resources.storage, item);
+    if (storage) recordedCounts.set(storage, (recordedCounts.get(storage) || 0) + 1);
+  });
   return resources.storage.storages.map(storage => {
     const state = classifyStorageState(storage, thresholds);
     const reliable = storage.capacityReliable === true && finite(storage.total) && storage.total > 0;
@@ -402,8 +448,10 @@ export function buildStorageViewModels(resources, now = Date.now()) {
       notes: noteFor(storage, state, thresholds, now),
       ruleCount: rules.length,
       reserveCount: reserves.length,
+      recordedCount: recordedCounts.get(storage) || 0,
       ruleHref: `#rules?storage=${encodeURIComponent(token)}`,
-      reserveHref: `#reserves?storage=${encodeURIComponent(token)}`
+      reserveHref: `#reserves?storage=${encodeURIComponent(token)}`,
+      recordedHref: `#recorded?storage=${encodeURIComponent(token)}&results=recorded`
     };
   });
 }

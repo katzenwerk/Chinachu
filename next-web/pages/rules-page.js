@@ -3,8 +3,8 @@ import { headerCompactMedia as createHeaderCompactMedia, appendMobileContextButt
 import { openRuleEditorDialog } from '../components/rule-editor-dialog.js';
 import { createRulesContextMenu } from '../components/rules-context-menu.js';
 import { applyStorageWarning } from '../components/storage-warning.js';
-import { buildReservationStorageDisplay } from '../services/storage-model.js';
-import { subscribeStorageData } from '../services/storage-store.js';
+import { buildReservationStorageDisplay, itemMatchesStorage, resolveStorageFilter } from '../services/storage-model.js';
+import { retryStorageData, subscribeStorageData } from '../services/storage-store.js';
 import {
   buildRuleChannelMap, buildRuleRows, categoryLabel, filterRuleRows
 } from '../services/rule-model.js';
@@ -40,6 +40,8 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
   let rows = [];
   let data = null;
   let storageData = null;
+  let storageError = null;
+  let storageToken = query.get('storage') || null;
   let listChannelMap = new Map();
   let search = query.get('search') || '';
   let status = ['enabled', 'disabled'].includes(query.get('status')) ? query.get('status') : 'all';
@@ -58,6 +60,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
   const page = document.createElement('div');
   page.className = 'rules-page';
   page.innerHTML = `
+    <div class="reserves-rule-filter" hidden><span></span><a href="#rules">絞り込みを解除</a></div>
     <section class="panel rules-list-panel"><div class="rules-list" aria-live="polite"><p class="rules-message">ルールを取得しています</p></div></section>
     <dialog class="rules-action-dialog rules-scheduler-dialog">
       <article><header><h2>スケジューラーの実行</h2></header><div class="rules-action-dialog-body"><p>全てのルールと手動予約から競合を検出し、スケジューリングを行います。</p><p class="rules-scheduler-progress" role="status" aria-live="polite" hidden>スケジューラーを実行しています…</p><p class="rules-action-feedback" role="status" hidden></p></div><footer><button class="button" data-cancel type="button">キャンセル</button><button class="button is-primary" data-confirm type="button">実行</button></footer></article>
@@ -92,6 +95,13 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
   const schedulerButton = headerControls.querySelector('.rules-scheduler');
   const deleteButton = headerControls.querySelector('.rules-delete');
   const listHost = page.querySelector('.rules-list');
+  const storageFilter = page.querySelector('.reserves-rule-filter');
+  storageFilter.querySelector('a').addEventListener('click', event => {
+    event.preventDefault();
+    storageToken = null;
+    clearSelection();
+    renderRows();
+  });
   const schedulerDialog = page.querySelector('.rules-scheduler-dialog');
   const deleteDialog = page.querySelector('.rules-delete-dialog');
   searchInput.value = search;
@@ -102,6 +112,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
     if (search) params.set('search', search);
     if (status !== 'all') params.set('status', status);
     if (openRuleUid) params.set('ruleUid', openRuleUid);
+    if (storageToken !== null) params.set('storage', storageToken);
     history.replaceState(null, '', `#rules${params.size ? `?${params}` : ''}`);
   }
 
@@ -142,11 +153,37 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
     deleteButton.disabled = selectedRuleUids.size === 0 || deleting;
   }
 
+  function currentFilteredRows() {
+    const filtered = filterRuleRows(rows, { search, status });
+    if (storageToken === null) return filtered;
+    const storage = resolveStorageFilter(storageData, storageToken);
+    return filtered.filter(row => itemMatchesStorage(row.rule, storage, false));
+  }
+
   function renderRows() {
     if (!active) return;
     disposeLogos();
     contextMenu.close();
-    const filtered = filterRuleRows(rows, { search, status });
+    const storage = resolveStorageFilter(storageData, storageToken);
+    storageFilter.hidden = storageToken === null;
+    storageFilter.querySelector('span').textContent = storageToken === null ? ''
+      : `録画先: ${storage ? `${storage.name || storage.id || 'Default'} (${storage.configuredPath || storage.path})` : storageToken} で絞り込み中`;
+    if (storageToken !== null && storageData === null) {
+      shown.textContent = '--件';
+      listHost.innerHTML = '<p class="rules-message"></p>';
+      listHost.firstElementChild.textContent = storageError
+        ? `録画先情報を取得できませんでした: ${storageError.message}` : '録画先情報を取得しています';
+      if (storageError) {
+        const retry = document.createElement('button');
+        retry.className = 'button';
+        retry.textContent = '再試行';
+        retry.addEventListener('click', () => retryStorageData());
+        listHost.append(retry);
+      }
+      updateHash();
+      return;
+    }
+    const filtered = currentFilteredRows();
     shown.textContent = `${filtered.length}件`;
     if (!filtered.length) {
       listHost.innerHTML = `<p class="rules-message">${rows.length ? '条件に一致するルールはありません' : 'ルールはありません'}</p>`;
@@ -176,7 +213,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
         <label class="rule-select-cell"><input class="rule-select" type="checkbox"></label>
         <span class="rule-order"></span><a class="rule-count rule-reserves"></a>
         <a class="rule-count rule-recorded"></a><span class="rule-state"></span>
-        <span class="rule-main"><strong></strong><small></small><span class="rule-storage-warning storage-warning" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></span></span>
+        <span class="rule-main"><strong></strong><span class="rule-main-meta"><small></small><span class="rule-storage-warning storage-warning" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></span></span></span>
         <span class="rule-channels"></span>`;
       appendMobileContextButton(item);
       const checkbox = item.querySelector('.rule-select');
@@ -393,7 +430,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
     confirmButton.classList.add('is-running');
     confirmButton.disabled = true;
     cancelButton.disabled = true;
-    updateSelectionControls(listHost.querySelector('.rule-table'), filterRuleRows(rows, { search, status }));
+    updateSelectionControls(listHost.querySelector('.rule-table'), currentFilteredRows());
     try {
       const result = await deleteRulesByUid(pendingDeleteTargets.map(row => row.uid), {
         onProgress({ deleted, total }) {
@@ -425,7 +462,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
       deleting = false;
       feedback.classList.remove('is-progress');
       confirmButton.classList.remove('is-running');
-      updateSelectionControls(listHost.querySelector('.rule-table'), filterRuleRows(rows, { search, status }));
+      updateSelectionControls(listHost.querySelector('.rule-table'), currentFilteredRows());
     }
   });
 
@@ -515,8 +552,14 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
   schedulerButton.addEventListener('click', openSchedulerDialog);
   deleteButton.addEventListener('click', () => openDeleteDialog());
   const unsubscribeStorage = subscribeStorageData(state => {
-    if (!active || state.data === null) return;
+    if (!active) return;
+    storageError = state.error;
     storageData = state.data;
+    if (storageToken !== null) {
+      if (data !== null) renderRows();
+      return;
+    }
+    if (storageData === null) return;
     listHost.querySelectorAll('.rule-row').forEach(item => {
       const row = rowByElement.get(item);
       applyStorageWarning(item.querySelector('.rule-storage-warning'), row.enabled

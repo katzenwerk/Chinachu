@@ -8,7 +8,8 @@ import { openProgramDetailDialog } from '../components/program-detail-dialog.js'
 import { invalidateResources, loadResource } from '../services/api-client.js';
 import { buildReservationListModels, filterReservationListModels, findReservationDateJumpTarget, nextReservationDisplayBoundaryDelay } from '../services/reservation-model.js';
 import { subscribeReservationNotifications, subscribeSeriesNotifications } from '../services/realtime-client.js';
-import { subscribeStorageData } from '../services/storage-store.js';
+import { retryStorageData, subscribeStorageData } from '../services/storage-store.js';
+import { itemMatchesStorage, resolveStorageFilter } from '../services/storage-model.js';
 import { ruleAction } from '../services/program-detail-model.js';
 import { loadSeriesProjection } from '../services/series-client.js';
 import { buildSeriesTitleIndex, canonicalProgramKey } from '../services/program-title.js';
@@ -22,6 +23,8 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
   let models = [];
   let latestPrograms = [];
   let storageData = null;
+  let storageError = null;
+  let storageToken = query.get('storage') || null;
   let seriesTitleIndex = new Map();
   let status = normalizeStatus(query.get('status'));
   let search = query.get('search') || '';
@@ -104,6 +107,10 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     if (ruleUid !== null) labels.push(`ruleUid: ${ruleUid}`);
     else if (ruleId !== null) labels.push(`ルール番号: ${ruleId}`);
     if (channelId !== null) labels.push(`放送局ID: ${channelId}`);
+    if (storageToken !== null) {
+      const storage = resolveStorageFilter(storageData, storageToken);
+      labels.push(`録画先: ${storage ? `${storage.name || storage.id || 'Default'} (${storage.configuredPath || storage.path})` : storageToken}`);
+    }
     ruleFilter.querySelector('span').textContent = `${labels.join(' / ')} で絞り込み中`;
     ruleFilter.hidden = labels.length === 0;
     updateControlsVisibility();
@@ -124,6 +131,7 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     setOrDelete('ruleUid', ruleUid, null);
     setOrDelete('rule', ruleId, null);
     setOrDelete('channelId', channelId, null);
+    setOrDelete('storage', storageToken, null);
     params.delete('limit');
     params.delete('page');
     const suffix = params.toString();
@@ -131,7 +139,10 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
   }
 
   function currentFilteredModels() {
-    const scoped = filterReservationListModels(models, { search, ruleUid, ruleId, channelId });
+    const storage = resolveStorageFilter(storageData, storageToken);
+    const storageScoped = storageToken === null ? models
+      : models.filter(model => itemMatchesStorage(model, storage, true));
+    const scoped = filterReservationListModels(storageScoped, { search, ruleUid, ruleId, channelId });
     return {
       scoped,
       filtered: filterReservationListModels(scoped, { status })
@@ -166,6 +177,23 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
 
   function renderList({ preserveScroll = false } = {}) {
     if (!isActive()) return;
+    updateScopedFilter();
+    if (storageToken !== null && storageData === null) {
+      listRenderer.clear();
+      count.textContent = '--件';
+      content.innerHTML = '<p class="reserves-message"></p>';
+      content.firstElementChild.textContent = storageError
+        ? `録画先情報を取得できませんでした: ${storageError.message}` : '録画先情報を取得しています';
+      if (storageError) {
+        const retry = document.createElement('button');
+        retry.className = 'button';
+        retry.textContent = '再試行';
+        retry.addEventListener('click', () => retryStorageData());
+        content.append(retry);
+      }
+      updateHash();
+      return;
+    }
     const { filtered } = currentFilteredModels();
     count.textContent = `${filtered.length}件`;
     if (models.length === 0) {
@@ -386,6 +414,7 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
       channelId = null;
       ruleUid = null;
       ruleId = null;
+      storageToken = null;
     } else return;
     updateScopedFilter();
     renderList();
@@ -454,9 +483,10 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     if (update?.generation) requestRefresh();
   });
   const unsubscribeStorage = subscribeStorageData(state => {
-    if (!isActive() || state.data === null) return;
+    if (!isActive()) return;
+    storageError = state.error;
     storageData = state.data;
-    if (latestPrograms.length === 0) return;
+    if (latestPrograms.length === 0 && storageToken === null) return;
     models = buildReservationListModels(latestPrograms, { storageData, seriesTitleIndex });
     renderList({ preserveScroll: true });
     scheduleDisplayBoundary();

@@ -4,6 +4,7 @@ import { headerCompactMedia } from '../components/mobile-layout.js';
 import { createHoverPopupController } from '../components/hover-popup-controller.js';
 import {
   loadAllRecordedResults,
+  loadRecordedResultsWithStoragePaths,
   loadMatchRecordingPaths,
   loadRecordedResultsPage
 } from '../services/recorded-results-client.js';
@@ -20,6 +21,8 @@ import { openCleanerDialog } from '../components/cleaner-dialog.js';
 import { loadSeriesProjection } from '../services/series-client.js';
 import { buildSeriesTitleIndex } from '../services/program-title.js';
 import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
+import { loadResource } from '../services/api-client.js';
+import { resolveRecordedStorage, resolveStorageFilter } from '../services/storage-model.js';
 
 const SEARCH_DELAY_MS = 280;
 const AUTO_LOAD_DISTANCE_PX = 200;
@@ -90,6 +93,8 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   let search = query.get('search') || '';
   let ruleUid = query.get('ruleUid') || null;
   let channelId = query.get('channelId') || null;
+  let storageToken = query.get('storage') || null;
+  let storageData = null;
   let selectedResults = readSelectedResults(query);
   let viewMode = readStoredView();
   let warningsOnly = false;
@@ -221,6 +226,10 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     const labels = [];
     if (ruleUid !== null) labels.push(`ruleUid: ${ruleUid}`);
     if (channelId !== null) labels.push(`放送局ID: ${channelId}`);
+    if (storageToken !== null) {
+      const storage = resolveStorageFilter(storageData, storageToken);
+      labels.push(`録画先: ${storage ? `${storage.name || storage.id || 'Default'} (${storage.configuredPath || storage.path})` : storageToken}`);
+    }
     ruleFilter.hidden = labels.length === 0;
     ruleFilter.querySelector('span').textContent = labels.length ? `${labels.join(' / ')} で絞り込み中` : '';
   }
@@ -244,19 +253,32 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     filteredCache = null;
   }
 
+  function matchesScopedResult(item) {
+    const storage = resolveStorageFilter(storageData, storageToken);
+    return (!channelId || String(item?.channel?.id ?? '') === channelId) &&
+      (!warningsOnly || hasRecordedResultWarnings(item)) &&
+      (storageToken === null || storage !== null && resolveRecordedStorage(storageData, item) === storage);
+  }
+
   async function loadResults(options) {
-    if (!warningsOnly && !channelId) return loadRecordedResultsPage(options);
+    if (!warningsOnly && !channelId && storageToken === null) return loadRecordedResultsPage(options);
+    if (storageToken !== null && storageData === null) {
+      const data = await loadResource('storage');
+      if (!Array.isArray(data?.storages)) throw new Error('Storage API response is invalid');
+      storageData = data;
+      if (isActive()) updateScopedFilters();
+    }
     const key = JSON.stringify({ search: options.search || '', ruleUid: options.ruleUid || '',
-      results: options.results || [], channelId, warningsOnly });
+      results: options.results || [], channelId, warningsOnly, storageToken });
     if (filteredCache === null || filteredCache.key !== key) {
-      const promise = loadAllRecordedResults({
+      const loadAll = storageToken === null ? loadAllRecordedResults : loadRecordedResultsWithStoragePaths;
+      const promise = loadAll({
         search: options.search,
         ruleUid: options.ruleUid,
         results: options.results,
         limit: 200,
         signal: options.signal
-      }).then(allItems => allItems.filter(item =>
-        (!channelId || String(item?.channel?.id ?? '') === channelId) && (!warningsOnly || hasRecordedResultWarnings(item))));
+      }).then(allItems => allItems.filter(matchesScopedResult));
       filteredCache = { key, promise };
       promise.catch(() => {
         if (filteredCache?.promise === promise) filteredCache = null;
@@ -352,6 +374,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     if (search !== '') params.set('search', search);
     if (ruleUid !== null) params.set('ruleUid', ruleUid);
     if (channelId !== null) params.set('channelId', channelId);
+    if (storageToken !== null) params.set('storage', storageToken);
     // Preserve the user's manual selection in the URL while attention mode is temporary.
     const values = selectedResultValues();
     if (values.join(',') !== DEFAULT_RESULTS.join(',')) params.set('results', values.join(','));
@@ -581,6 +604,11 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     const controller = new AbortController();
     exportController = controller;
     try {
+      if (storageToken !== null && storageData === null) {
+        const data = await loadResource('storage');
+        if (!Array.isArray(data?.storages)) throw new Error('Storage API response is invalid');
+        storageData = data;
+      }
       const [allItems, recordingPaths] = await Promise.all([
         loadAllRecordedResults({
           search,
@@ -591,8 +619,9 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
         loadMatchRecordingPaths({ signal: controller.signal })
       ]);
       if (!isActive()) return;
-      const exportItems = allItems.filter(item =>
-        (!channelId || String(item?.channel?.id ?? '') === channelId) && (!warningsOnly || hasRecordedResultWarnings(item)))
+      const exportItems = allItems.map(item => ({ ...item,
+        storageRecordingPath: item.recordingPath || recordingPaths.get(item.key) || null
+      })).filter(matchesScopedResult)
         .map(item => ({
           ...item,
           recordingPath: recordingPaths.get(item?.key) || item?.recordingPath || ''
@@ -635,6 +664,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     } else if (action === 'filter-clear') {
       ruleUid = null;
       channelId = null;
+      storageToken = null;
       search = '';
       searchInput.value = '';
       window.clearTimeout(searchTimer);
