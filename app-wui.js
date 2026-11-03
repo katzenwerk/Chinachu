@@ -93,6 +93,8 @@ const storageLow = require('./lib/storage-low');
 const storageRuntimeState = require('./lib/storage-runtime-state');
 const storageRefreshIpc = require('./lib/storage-refresh-ipc');
 const recordedThumbnail = require('./lib/recorded-thumbnail');
+const recordedMaintenanceFiles = require('./lib/recorded-maintenance-files');
+const savedTsAnalysis = require('./lib/saved-ts-analysis');
 const matchDetailResolver = require('./lib/match-detail-resolver');
 const seriesServiceModule = require('./lib/series-background-service');
 const dictionaryManagerModule = require('./lib/syobocal-dictionary-manager');
@@ -684,11 +686,28 @@ function httpServer(req, res) {
 	case 'PUT':
 	case 'DELETE':
 
+		// Only external analysis registration accepts this bounded JSON body.
+		var analysisBody = /^\/api\/recorded\/[^/?]+\/analysis\.json(?:\?|$)/.test(req.url);
+		var analysisChunks = [], analysisBytes = 0, analysisRejected = false;
 		req.on('data', function (chunk) {
+			if (analysisBody) {
+				if (analysisRejected) return;
+				analysisBytes += chunk.length;
+				if (analysisBytes > savedTsAnalysis.MAX_INPUT_BYTES) {
+					analysisRejected = true; analysisChunks = [];
+					res.writeHead(413, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: 'analysis_too_large', message: '解析結果は2 MiB以内で指定してください。' }));
+					return;
+				}
+				analysisChunks.push(chunk);
+				return;
+			}
 			q += chunk.toString();
 		});
 
 		req.once('end', function () {
+			if (analysisRejected) return;
+			if (analysisBody) q = Buffer.concat(analysisChunks).toString('utf8');
 			if (q.trim().match(/^\{(\n|.)*\}$/) === null) {
 				q = querystring.parse(q);
 			} else {
@@ -1128,6 +1147,7 @@ function httpServerMain(req, res, query) {
 				storageRuntimeState: storageRuntimeState,
 				storageRefreshIpc: storageRefreshIpc,
 				recordedThumbnail: recordedThumbnail,
+				recordedMaintenanceFiles: recordedMaintenanceFiles,
 					matchDetailResolver: matchDetailResolver,
 					seriesService: seriesService,
 					matchDeletionHistory: matchDeletionHistory,

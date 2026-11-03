@@ -78,6 +78,7 @@ const storageRuntimeState = require('./lib/storage-runtime-state');
 const storageRefreshIpc = require('./lib/storage-refresh-ipc');
 const storageManualRefresh = require('./lib/storage-manual-refresh');
 const recordedThumbnail = require('./lib/recorded-thumbnail');
+const recordedMaintenanceModule = require('./lib/recorded-maintenance');
 const matchOutput = require('./lib/match-output');
 const runtimePrivileges = require('./lib/runtime-privileges');
 const runtimePathsModule = require('./lib/runtime-paths');
@@ -426,6 +427,7 @@ let recordedLedgerWrites = Promise.resolve();
 let pendingRecordedLedgerWrites = 0;
 const failedRecordingSaves = new Set();
 let lastRecordingTransitionAt = 0;
+let recordedMaintenance = null;
 const recordedThumbnailGenerator = recordedThumbnail.createGenerator({
 	outputDir: RECORDED_THUMBNAIL_DIR,
 	log: operatorLog,
@@ -433,14 +435,38 @@ const recordedThumbnailGenerator = recordedThumbnail.createGenerator({
 	maxPending: 64,
 	maxQueueAgeMs: 10 * 60 * 1000,
 	getRunDelay: job => {
+		if (recordedMaintenance && recordedMaintenance.isBusy() && !recordedMaintenance.currentThumbnail(job)) return Infinity;
 		if (shutdownStarted || matchLedgerProcess || activeDurationProbes.size !== 0 ||
 			pendingRecordedLedgerWrites !== 0) return Infinity;
+		if (recordedMaintenance && recordedMaintenance.currentThumbnail(job)) return postProcessingDelay();
 		const nextProbeAt = durationProbeQueue.length ? durationProbeQueue[0].queuedAt : Infinity;
 		const nextMatchAt = matchLedgerUpdateReason && scheduler === null ? matchLedgerPendingAt : Infinity;
 		if (job.requestedAt >= Math.min(nextProbeAt, nextMatchAt)) return Infinity;
 		return postProcessingDelay();
 	},
-	onIdle: () => wakePostProcessing()
+	onIdle: () => wakePostProcessing(),
+	onStatus: (id, state) => { if (recordedMaintenance) recordedMaintenance.thumbnailStatus(id, state); }
+});
+recordedMaintenance = recordedMaintenanceModule.createMaintenance({
+	root: __dirname, config, thumbnail: recordedThumbnailGenerator,
+	canStart: () => !shutdownStarted && !matchLedgerProcess && activeDurationProbes.size === 0 &&
+		pendingRecordedLedgerWrites === 0 && !recordedThumbnailGenerator.getState().active,
+	wake: () => { wakePostProcessing(); completeOperatorShutdown(); },
+	delay: ts => {
+		if (shutdownStarted) return Infinity;
+		const guard = postProcessingDelay();
+		if (!ts) return guard;
+		if (recording.length || activeRecordingOutputs.size) return Math.max(1000, guard);
+		// End the analyzer before the existing 15-second transition guard begins.
+		const approaching = reserves.some(program => program && !program.isSkip && !program.isConflict &&
+			!isRecordedForReserve(program) && Number(program.start) > Date.now() && Number(program.start) - Date.now() <= 20000);
+		return approaching ? Math.max(1000, guard) : guard;
+	},
+	probe: filePath => new Promise(resolve => startDurationProbe({ filePath, queuedAt: Date.now(), maintenance: true,
+		callback: duration => resolve(duration) })),
+	onChanged: () => { try { recorded = reservationStore.readArray(RECORDED_DATA_FILE); } catch (error) {
+		operatorLog('WARNING: maintenance ledger reload failed: ' + error.message);
+	} }
 });
 
 // EPG由来のscheduler要求だけをsingle pendingへ集約する。
@@ -869,7 +895,7 @@ function startScheduler() {
 
 function completeOperatorShutdown() {
 	if (!shutdownStarted || scheduler !== null || activeRecordingOutputs.size !== 0 ||
-		matchLedgerProcess !== null || activeDurationProbes.size !== 0 || pendingRecordedLedgerWrites !== 0) {
+		matchLedgerProcess !== null || activeDurationProbes.size !== 0 || pendingRecordedLedgerWrites !== 0 || recordedMaintenance.isBusy()) {
 		return;
 	}
 
@@ -917,6 +943,7 @@ function shutdownOperator(signal) {
 	shadowPeriodicScheduler.stop();
 	schedulerPreflight.stop();
 	stopScheduler();
+	recordedMaintenance.stop();
 	recordedThumbnailGenerator.stop();
 	stopActiveDurationProbes();
 	recording.slice().forEach(program => {
@@ -991,7 +1018,7 @@ function startDurationProbe(job) {
 		completed = true;
 		if (probe) activeDurationProbes.delete(probe);
 		try {
-			if (!shutdownStarted) job.callback(duration, job.queuedAt);
+			if (!shutdownStarted || job.maintenance === true) job.callback(duration, job.queuedAt);
 		} finally {
 			wakePostProcessing();
 			recordedThumbnailGenerator.resume();
@@ -1321,6 +1348,7 @@ function wakePostProcessing(delay = 0) {
 }
 
 function runPostProcessing() {
+	if (recordedMaintenance.isBusy()) return;
 	if (shutdownStarted || matchLedgerProcess || activeDurationProbes.size !== 0 ||
 		recordedThumbnailGenerator.getState().active) return;
 	if (pendingRecordedLedgerWrites !== 0) return;
@@ -1342,10 +1370,16 @@ function runPostProcessing() {
 	const thumbnail = recordedThumbnailGenerator.getState();
 	const nextProbeAt = durationProbeQueue.length ? durationProbeQueue[0].queuedAt : Infinity;
 	const nextMatchAt = matchLedgerUpdateReason && scheduler === null ? matchLedgerPendingAt : Infinity;
+	const nextManualAt = recordedMaintenance.nextRequestedAt();
 	// An older recording's thumbnail must not fall behind every later batch.
-	if (thumbnail.pending && thumbnail.pendingSince < Math.min(nextProbeAt, nextMatchAt)) {
+	if (thumbnail.pending && thumbnail.pendingSince < Math.min(nextProbeAt, nextMatchAt, nextManualAt)) {
 		recordedThumbnailGenerator.resume();
 		return;
+	}
+	if (Number.isFinite(nextManualAt) && nextManualAt < Math.min(nextProbeAt, nextMatchAt)) {
+		recordedMaintenance.runNext();
+		// A TS request may be deferred by recording. Existing automatic work can still proceed.
+		if (recordedMaintenance.isBusy()) return;
 	}
 	const matchDue = matchLedgerUpdateReason && scheduler === null && now >= matchLedgerReadyAt;
 	// Drain up to the eight recordings in one handoff before rebuilding match.
@@ -1365,7 +1399,7 @@ function runPostProcessing() {
 		return;
 	}
 	if (matchLedgerUpdateReason && scheduler === null) wakePostProcessing(Math.max(0, matchLedgerReadyAt - now));
-	else recordedThumbnailGenerator.resume();
+	else { recordedThumbnailGenerator.resume(); recordedMaintenance.runNext(); }
 }
 
 function scheduleMatchLedgerUpdate(reason, sourceAt) {
@@ -3794,6 +3828,7 @@ function getRecordedThumbnailDuration(entry) {
 }
 
 function handleRecordedThumbnailRequest(request) {
+	if (request && request.maintenance === true) return recordedMaintenance.request(Object.assign({}, request, { action: request.maintenanceAction }));
 	const id = request && String(request.id || '');
 	const outputPath = recordedThumbnail.resolveOutputPath(RECORDED_THUMBNAIL_DIR, id);
 	if (!outputPath) {
@@ -3808,6 +3843,11 @@ function handleRecordedThumbnailRequest(request) {
 	if (request && request.action === 'cancel') {
 		return recordedThumbnailGenerator.cancel(id);
 	}
+	const fileResolver = require('./lib/match-detail-resolver');
+	const matchItems = reservationStore.readArray(MATCH_DATA_FILE);
+	const match = matchItems.filter(item => (fileResolver.normalizeMatchEntry(item).recording || fileResolver.normalizeMatchEntry(item).fileMissing || {}).recordedId === id);
+	if (match.some(fileResolver.isExplicitDeletion)) throw recordedThumbnailRequestError('recorded_deleted', 410, '削除済みの録画は生成できません。');
+	if (match.some(item => fileResolver.normalizeMatchEntry(item).fileMissing)) throw recordedThumbnailRequestError('recorded_file_missing', 410, '行方不明の録画です。状態確認から明示的に捜索してください。');
 	if (fs.existsSync(outputPath)) {
 		return recordedThumbnailGenerator.getStatus(id);
 	}

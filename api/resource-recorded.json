@@ -23,6 +23,18 @@
     "types"  : ["png", "jpg", "txt"]
   },
 
+  "/:id/maintenance": {
+    "script": "recorded-program-maintenance",
+    "methods": ["get", "post"],
+    "types": ["json"]
+  },
+
+  "/:id/analysis": {
+    "script": "recorded-program-analysis",
+    "methods": ["post"],
+    "types": ["json"]
+  },
+
   "/:id/thumbnail": {
     "script" : "recorded-program-thumbnail",
     "methods": ["get", "post"],
