@@ -47,6 +47,7 @@ export function openCleanerDialog() {
   let checkLocations = true;
   let pathRepair = true;
   let cleanupMissing = true;
+  let missingPolicy = 'remove-history';
   let cleanupMissed = false;
   let pollTimer = null;
 
@@ -67,8 +68,8 @@ export function openCleanerDialog() {
       <div class="cleaner-warning" role="note"><strong>HDD走査の注意</strong><span>突合を開始すると全録画フォルダとサブフォルダを1回列挙します。休止中のHDDが起動する場合があります。</span></div>
       <fieldset class="cleaner-dialog-options"><legend>オプション</legend>
         <label><input data-cleaner-location-check type="checkbox" ${checkLocations ? 'checked' : ''}><span><strong>録画ファイルの所在確認</strong><small>登録録画フォルダを走査し、recorded.json と実ファイルを照合</small></span></label>
-        <label><input data-cleaner-path-repair type="checkbox" ${pathRepair ? 'checked' : ''} ${checkLocations ? '' : 'disabled'}><span><strong>録画ファイルのパス修復</strong><small>別フォルダで一意に見つかった同名録画の台帳パスを修復</small></span></label>
-        <label><input data-cleaner-cleanup type="checkbox" ${cleanupMissing ? 'checked' : ''}><span><strong>不要な録画台帳の整理</strong><small>不在が確定した recorded.json、録画台帳不整合履歴、削除済みmatch、終了済みスキップ履歴を整理</small></span></label>
+        <label><input data-cleaner-path-repair type="checkbox" ${pathRepair ? 'checked' : ''} ${checkLocations && missingPolicy !== 'report' ? '' : 'disabled'}><span><strong>録画ファイルのパス修復</strong><small>別フォルダで一意に見つかった同名録画の台帳パスを修復</small></span></label>
+        <label><span><strong>不在時の履歴の扱い</strong><select data-cleaner-policy>${[['report','報告のみ'],['keep-history','履歴を保持して行方不明を記録'],['remove-history','従来の条件で履歴を整理']].map(([value,label]) => `<option value="${value}" ${missingPolicy === value ? 'selected' : ''}>${label}</option>`).join('')}</select></span></label>
         <label class="cleaner-dialog-suboption"><input data-cleaner-cleanup-missed type="checkbox" ${cleanupMissed ? 'checked' : ''} ${cleanupMissing ? '' : 'disabled'}><span><strong>録画実績のない過去予約も整理する</strong><small>停電・容量不足・録画処理の失敗などにより、録画実績が残っていない過去予約を整理します。原因が不明なものも含みます。</small></span></label>
       </fieldset>
       <details class="cleaner-dialog-roots"><summary>対象フォルダを確認</summary>${roots.map(root => `<code>${escapeHtml(root.path)}</code>`).join('') || '<p>登録録画フォルダがありません。</p>'}</details>
@@ -109,6 +110,7 @@ export function openCleanerDialog() {
     const actionable = result.results.filter(item => item.automatic).length;
     const canApply = result.applyAvailable && result.index.complete && !result.options.selectedIds && actionable > 0;
     const cleanupItems = [
+      { label: '存在状態の記録・復帰', count: Number(summary.fileStates || 0), classes: [], actions: ['mark-file-missing', 'restore-file'] },
       { label: 'パス修復候補', count: repair, classes: [], actions: ['normalize-location', 'sync-match-path'] },
       { label: 'recorded整理候補', count: recordedRemovals, classes: ['missing'] },
       { label: '録画台帳不整合履歴候補', count: Number(summary.recordedMissingHistory || 0), classes: ['recorded-missing-history'] },
@@ -142,7 +144,7 @@ export function openCleanerDialog() {
     return `<div class="cleaner-dialog-body">
       <h3>台帳整理が完了しました</h3>
       <section class="cleaner-dialog-summary">
-        ${[['パス修復成功', counts.pathRepaired], ['整理番組', counts.programsRemoved], ['recorded由来', counts.recordedHistoryRemoved], ['録画台帳不整合由来', counts.recordedMissingHistoryRemoved], ['削除済みmatch由来', counts.deletedMatchHistoryRemoved], ['過去スキップ由来', counts.skippedHistoryRemoved], ['未録画履歴由来', counts.missedHistoryRemoved], ['recorded削除', counts.recordedRemoved], ['reserves2削除', counts.reserves2Removed], ['match削除', counts.matchRemoved], ['サムネイル削除', counts.thumbnailDeleted], ['保留', counts.held], ['失敗', result.errors]].map(([label, value]) => `<div><span>${label}</span><strong>${Number(value || 0).toLocaleString('ja-JP')}件</strong></div>`).join('')}
+        ${[['行方不明を記録', counts.fileMissing], ['再発見による復帰', counts.fileRestored], ['パス修復成功', counts.pathRepaired], ['整理番組', counts.programsRemoved], ['recorded由来', counts.recordedHistoryRemoved], ['録画台帳不整合由来', counts.recordedMissingHistoryRemoved], ['削除済みmatch由来', counts.deletedMatchHistoryRemoved], ['過去スキップ由来', counts.skippedHistoryRemoved], ['未録画履歴由来', counts.missedHistoryRemoved], ['recorded削除', counts.recordedRemoved], ['reserves2削除', counts.reserves2Removed], ['match削除', counts.matchRemoved], ['サムネイル削除', counts.thumbnailDeleted], ['保留', counts.held], ['失敗', result.errors]].map(([label, value]) => `<div><span>${label}</span><strong>${Number(value || 0).toLocaleString('ja-JP')}件</strong></div>`).join('')}
       </section>
       <section class="cleaner-dialog-timing"><h3>処理時間</h3><dl><div><dt>再列挙</dt><dd>${milliseconds(result.timings?.enumerationMs)}</dd></div><div><dt>台帳突合</dt><dd>${milliseconds(result.timings?.reconciliationMs)}</dd></div><div><dt>台帳更新</dt><dd>${milliseconds(result.timings?.ledgerUpdateMs ?? result.durationMs)}</dd></div><div><dt>合計</dt><dd>${milliseconds(result.timings?.totalMs)}</dd></div></dl></section>
       ${result.thumbnailErrors?.length ? `<details><summary>サムネイル削除エラー ${result.thumbnailErrors.length}件</summary><ul class="cleaner-dialog-result-list">${result.thumbnailErrors.map(item => `<li><strong>${escapeHtml(item.id)}</strong><small>${escapeHtml(item.code)} / ${escapeHtml(item.message)}</small></li>`).join('')}</ul></details>` : ''}
@@ -170,15 +172,17 @@ export function openCleanerDialog() {
     dialog.querySelector('[data-cleaner-back]')?.addEventListener('click', () => { state.job = null; step = 'settings'; render(); });
     dialog.querySelector('[data-cleaner-location-check]')?.addEventListener('change', event => {
       pathRepair = dialog.querySelector('[data-cleaner-path-repair]')?.checked !== false;
-      cleanupMissing = dialog.querySelector('[data-cleaner-cleanup]')?.checked !== false;
+      missingPolicy = dialog.querySelector('[data-cleaner-policy]')?.value || missingPolicy;
+      cleanupMissing = missingPolicy === 'remove-history';
       cleanupMissed = dialog.querySelector('[data-cleaner-cleanup-missed]')?.checked === true;
       checkLocations = event.currentTarget.checked;
       if (!checkLocations) pathRepair = false;
       render();
     });
-    dialog.querySelector('[data-cleaner-cleanup]')?.addEventListener('change', event => {
+    dialog.querySelector('[data-cleaner-policy]')?.addEventListener('change', event => {
       cleanupMissed = dialog.querySelector('[data-cleaner-cleanup-missed]')?.checked === true;
-      cleanupMissing = event.currentTarget.checked;
+      missingPolicy = event.currentTarget.value; cleanupMissing = missingPolicy === 'remove-history';
+      if (missingPolicy === 'report') pathRepair = false;
       if (!cleanupMissing) cleanupMissed = false;
       render();
     });
@@ -186,7 +190,8 @@ export function openCleanerDialog() {
       checkLocations = dialog.querySelector('[data-cleaner-location-check]')?.checked !== false;
       pathRepair = dialog.querySelector('[data-cleaner-path-repair]')?.checked !== false;
       if (!checkLocations) pathRepair = false;
-      cleanupMissing = dialog.querySelector('[data-cleaner-cleanup]')?.checked !== false;
+      missingPolicy = dialog.querySelector('[data-cleaner-policy]')?.value || missingPolicy;
+      cleanupMissing = missingPolicy === 'remove-history';
       cleanupMissed = cleanupMissing && dialog.querySelector('[data-cleaner-cleanup-missed]')?.checked === true;
       starting = true;
       render();
@@ -194,7 +199,7 @@ export function openCleanerDialog() {
         const jobState = await startCleanerScan({
           checkLocations,
           normalizeLocations: pathRepair,
-          missingPolicy: cleanupMissing ? 'remove-history' : 'report',
+          missingPolicy,
           cleanupMissed,
           selectedIds: null
         });

@@ -82,12 +82,12 @@ function createFixture() {
 	};
 }
 
-function createPlan(fixture) {
+function createPlan(fixture, options = {}) {
 	return cleaner.buildPlan(Object.assign({}, cleaner.loadLedgers(fixture.root), {
 		normalizeLocations: true,
 		missingPolicy: 'remove-history',
 		selectedIds: null
-	}));
+	}, options));
 }
 
 function waitForJob(jobs, timeoutMs) {
@@ -139,7 +139,7 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		assert.strictEqual(plan.summary.recordedMissingHistory, 1);
 		const outcome = cleaner.applyPlan(fixture.root, plan);
 			assert.deepStrictEqual(outcome.counts, {
-				pathRepaired: 1, recordedRemoved: 1, matchRemoved: 2, reserves2Removed: 2,
+				fileMissing: 0, fileRestored: 0, pathRepaired: 1, recordedRemoved: 1, matchRemoved: 2, reserves2Removed: 2,
 				programsRemoved: 2, recordedHistoryRemoved: 1, deletedMatchHistoryRemoved: 0,
 				recordedMissingHistoryRemoved: 1,
 				skippedHistoryRemoved: 0, missedHistoryRemoved: 0,
@@ -156,6 +156,20 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		assert.strictEqual(matches.some(item => item.recording.recordedId === 'missing'), false);
 		assert.strictEqual(matches.some(item => item.recording.recordedId === 'recorded-missing-found'), true);
 		assert.strictEqual(matches.some(item => item.recording.recordedId === 'recorded-missing-absent'), false);
+		// A fresh missing recording is retained in both ledgers, then restored at the same path.
+		const retainedProgram = program('retained-file', path.join(fixture.recordings, 'retained-file.m2ts'));
+		const beforeRecorded = JSON.parse(fs.readFileSync(fixture.files.recorded, 'utf8'));
+		const beforeMatch = JSON.parse(fs.readFileSync(fixture.files.match, 'utf8'));
+		writeJson(fixture.files.recorded, beforeRecorded.concat([retainedProgram]));
+		const retainedMatch = match(retainedProgram); retainedMatch.recording = null;
+		writeJson(fixture.files.match, beforeMatch.concat([retainedMatch]));
+		cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
+		assert.ok(JSON.parse(fs.readFileSync(fixture.files.recorded, 'utf8')).some(row => row.id === 'retained-file'));
+		assert.ok(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).find(row => row.key === retainedMatch.key).fileMissing);
+		fs.writeFileSync(retainedProgram.recorded, 'restored fixture');
+		cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
+		assert.equal(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).find(row => row.key === retainedMatch.key).fileMissing, undefined);
+
 		assert.strictEqual(matches.find(item => item.recording.recordedId === 'relocated').recording.path, fixture.paths.relocatedNew);
 		assert.strictEqual(JSON.parse(fs.readFileSync(fixture.files.reserves, 'utf8')).length, 0);
 		assert.strictEqual(fs.readFileSync(path.join(fixture.data, 'csv', 'recording-history_2026-10.csv'), 'utf8'), 'sentinel');
