@@ -62,7 +62,7 @@ function samePath(left, right) {
 }
 
 function targetAlreadyDeleted(item) {
-	if (Number(item && item.schemaVersion) === 2) return Boolean(item.deletion);
+	if (Number(item && item.schemaVersion) === 2) return Boolean(item.deletion && item.deletion.reason !== 'recorded-missing');
 	var result = item && (item.recordingResult || item.recorded) || {};
 	var snapshot = result && result.snapshot || {};
 	var legacyProgram = item && item.program || {};
@@ -195,6 +195,7 @@ function deleteRecordedProgram(id) {
 	var program = found.program;
 	
 	if (program === null) return response.error(404);
+		if (program._recordedDeleted || program.fileMissing) return response.error(410);
 	
 	if (!data.status.feature.filer) return response.error(403);
 	

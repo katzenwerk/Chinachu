@@ -46,10 +46,6 @@ function findRecordedProgramWithMatchFallback(id) {
 	});
 }
 
-function hasRecordedFile(program) {
-	return !!(program && program.recorded && fs.existsSync(program.recorded));
-}
-
 function programHasId(value, id) {
 	return ['id', 'recordedId', 'origId', 'programId'].some(function(key) {
 		return value && value[key] !== undefined && value[key] !== null && String(value[key]) === String(id);
@@ -77,7 +73,7 @@ function findRecordedStorageDestination(program, recordedPath) {
 }
 
 function targetAlreadyDeleted(item) {
-	if (Number(item && item.schemaVersion) === 2) return Boolean(item.deletion);
+	if (Number(item && item.schemaVersion) === 2) return Boolean(item.deletion && item.deletion.reason !== 'recorded-missing');
 	var result = item && (item.recordingResult || item.recorded) || {};
 	var snapshot = result && result.snapshot || {};
 	var legacyProgram = item && item.program || {};
@@ -236,7 +232,7 @@ function deleteRecordedProgram(id) {
 
 	if (program === null) return response.error(404);
 
-	program.isRemoved = !hasRecordedFile(program);
+	program.isRemoved = program._recordedDeleted === true || Boolean(program.fileMissing);
 	program._recordedSource = found.source;
 
 	switch (request.method) {

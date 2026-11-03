@@ -320,6 +320,13 @@ describe('Match detail resolver', function() {
 			end: start + 9000000,
 			deletion: { deletedAt: null, reason: 'recorded-missing' }
 		});
+		const lost = { ...missing, fileMissing: { recordedId: missing.recording.recordedId, path: missing.recording.path, checkedAt: now } };
+		const lostPage = resolver.buildPage([lost], resolver.createDetailResolver({}), { now, results: 'missing' });
+		assert.equal(lostPage.counts.missing, 1);
+		assert.equal(lostPage.counts.deleted, 0);
+		assert.equal(lostPage.items[0].deletion.reason, 'recorded-missing');
+		assert.equal(lostPage.items[0].deletionKind, 'file-missing');
+		assert.deepStrictEqual(lostPage.items[0].fileMissing, lost.fileMissing);
 		const reserved = v2({ status: 'RESERVED', start: now + 1000, end: now + 1801000, recording: null });
 		const detailResolver = resolver.createDetailResolver({
 			recorded: [recorded],
@@ -340,11 +347,11 @@ describe('Match detail resolver', function() {
 		);
 
 		assert.strictEqual(result.total, 6);
-		assert.deepStrictEqual(result.counts, { recorded: 3, deleted: 1, missed: 1, skipped: 1 });
+		assert.deepStrictEqual(result.counts, { recorded: 3, deleted: 1, missing: 0, missed: 1, skipped: 1 });
 		assert.strictEqual(result.page, 1);
 		assert.strictEqual(result.pageSize, 50);
 		assert.strictEqual(result.totalPages, 1);
-		assert.strictEqual(result.filterVersion, 2);
+		assert.strictEqual(result.filterVersion, 3);
 		assert.ok(result.items.every(item => item.status !== 'RESERVED'));
 		const recordedItem = result.items.find(item => item.key === key && item.deletionKind === 'none');
 		assert.strictEqual(recordedItem.status, 'RECORDED');
@@ -435,7 +442,7 @@ describe('Match detail resolver', function() {
 			v2({ status: 'SKIPPED_ONLY', recording: null })
 		], detailResolver, { now, results: 'recorded,deleted' });
 		assert.strictEqual(classified.total, 3);
-		assert.deepStrictEqual(classified.counts, { recorded: 2, deleted: 1, missed: 0, skipped: 0 });
+		assert.deepStrictEqual(classified.counts, { recorded: 2, deleted: 1, missing: 0, missed: 0, skipped: 0 });
 		assert.strictEqual(classified.items.filter(item => item.deletionKind === 'explicit').length, 1);
 		assert.strictEqual(classified.items.filter(item => item.deletionKind === 'missing').length, 1);
 		assert.strictEqual(resolver.buildPage(entries, detailResolver, { now, results: '' }).total, 0);
@@ -529,7 +536,7 @@ describe('Match detail resolver', function() {
 		const page = invoke({ mode: 'page', page: '1', limit: '1', status: 'RECORDED' });
 		assert.strictEqual(page.code, 200);
 		assert.strictEqual(page.body.total, 1);
-		assert.deepStrictEqual(page.body.counts, { recorded: 1, deleted: 0, missed: 0, skipped: 0 });
+		assert.deepStrictEqual(page.body.counts, { recorded: 1, deleted: 0, missing: 0, missed: 0, skipped: 0 });
 		assert.strictEqual(page.body.items[0].status, 'RECORDED');
 		assert.strictEqual(invoke({ mode: 'page', results: 'missed,skipped' }).body.total, 1);
 		assert.strictEqual(invoke({ mode: 'page', ruleUid: 'unknown-rule' }).body.total, 0);
@@ -539,7 +546,7 @@ describe('Match detail resolver', function() {
 			counts: {}, counted: 0, withoutRuleUid: 1, total: 1
 		});
 		assert.deepStrictEqual(invoke({ mode: 'result-counts' }).body.counts, {
-			recorded: 1, deleted: 0, missed: 1, skipped: 0
+			recorded: 1, deleted: 0, missing: 0, missed: 1, skipped: 0
 		});
 		const item = invoke({ mode: 'item', id: 'recorded-a', resolve: '1', strict: '1' });
 		assert.strictEqual(item.code, 200);

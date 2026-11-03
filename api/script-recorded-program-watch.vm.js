@@ -98,6 +98,8 @@ var program = found.program;
 
 if (program === null) {
 	response.error(404);
+} else if (program._recordedDeleted || program.fileMissing) {
+	response.error(410);
 } else {
 	init();
 }

@@ -24,6 +24,7 @@
 	if (request.query.profile !== 'compat') return response.error(400);
 	var program = findRecorded();
 	if (program === null) return response.error(404);
+	if (program._recordedDeleted || program.fileMissing) return response.error(410);
 	if (program.tuner && program.tuner.isScrambling) return response.error(409);
 	if (!program.recorded || !fs.existsSync(program.recorded)) return response.error(410);
 

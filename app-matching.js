@@ -456,8 +456,8 @@ function isRecordedStatus(status) {
 function isClearlyDifferentRecording(oldEntry, newEntry) {
 	var oldValue = matchDetailResolver.normalizeMatchEntry(oldEntry);
 	var newValue = matchDetailResolver.normalizeMatchEntry(newEntry);
-	var oldId = oldValue.recording && oldValue.recording.recordedId;
-	var newId = newValue.recording && newValue.recording.recordedId;
+	var oldId = (oldValue.recording || oldValue.fileMissing || {}).recordedId;
+	var newId = (newValue.recording || newValue.fileMissing || {}).recordedId;
 
 	return !!(oldId && newId && oldId !== newId);
 }
@@ -465,8 +465,8 @@ function isClearlyDifferentRecording(oldEntry, newEntry) {
 function isSameRecordedEntry(oldEntry, newEntry) {
 	var oldValue = matchDetailResolver.normalizeMatchEntry(oldEntry);
 	var newValue = matchDetailResolver.normalizeMatchEntry(newEntry);
-	var oldId = oldValue.recording && oldValue.recording.recordedId;
-	var newId = newValue.recording && newValue.recording.recordedId;
+	var oldId = (oldValue.recording || oldValue.fileMissing || {}).recordedId;
+	var newId = (newValue.recording || newValue.fileMissing || {}).recordedId;
 
 	return !!(oldValue.key && newValue.key && oldValue.key === newValue.key && oldId && newId && oldId === newId);
 }
@@ -494,6 +494,13 @@ function preserveDeletion(oldEntry, newEntry, options) {
 }
 
 function mergeOldNew(oldEntry, newEntry, logger, config, options) {
+	var missingFact = matchDetailResolver.normalizeMatchEntry(oldEntry).fileMissing;
+	if ((missingFact || matchDetailResolver.isExplicitDeletion(oldEntry)) && isClearlyDifferentRecording(oldEntry, newEntry)) return newEntry;
+	if (missingFact && !isClearlyDifferentRecording(oldEntry, newEntry) && !matchDetailResolver.sameRecordingTarget(missingFact, matchDetailResolver.normalizeMatchEntry(newEntry).recording)) return oldEntry;
+	// Confirmed deletion is terminal for this recording, not for a later distinct recording.
+	if (matchDetailResolver.isExplicitDeletion(oldEntry) && !isClearlyDifferentRecording(oldEntry, newEntry)) {
+		var deletedEntry = Object.assign({}, oldEntry); delete deletedEntry.fileMissing; return deletedEntry;
+	}
 	// No reservation in this input does not invalidate a previously saved snapshot.
 	// Keep current-input flags/sources/status; never fill gaps in an actual new reserve.
 	if (oldEntry.reservationMeta && newEntry.reservationMeta && !newEntry.reservationMeta.hasReserve) {
@@ -541,6 +548,17 @@ function mergeOldNew(oldEntry, newEntry, logger, config, options) {
 
 		if (!isClearlyDifferentRecording(oldEntry, newEntry)) {
 			var continuedEntry = preserveDeletion(oldEntry, newEntry, options);
+			var oldMissing = matchDetailResolver.normalizeMatchEntry(oldEntry).fileMissing;
+			if (oldMissing && matchDetailResolver.sameRecordingTarget(oldMissing, matchDetailResolver.normalizeMatchEntry(continuedEntry).recording)) {
+				continuedEntry = Object.assign({}, continuedEntry, { fileMissing: cloneJson(oldMissing) });
+			} else { delete continuedEntry.fileMissing; }
+			if (oldPath && oldPath === newPath) {
+				['savedTsAnalysis', 'recordedDurationSeconds'].forEach(function(field) {
+					if (typeof continuedEntry[field] === 'undefined' && typeof oldEntry[field] !== 'undefined') {
+						continuedEntry[field] = cloneJson(oldEntry[field]);
+					}
+				});
+			}
 			if (Number(continuedEntry.schemaVersion) === matchV2.SCHEMA_VERSION &&
 				oldEntry.status === "RECORDED" && continuedEntry.status === "RECORDED_UNTRACKED") {
 				continuedEntry = Object.assign({}, continuedEntry, { status: "RECORDED" });
@@ -746,7 +764,8 @@ function copyOperatorRecordingMeta(source, output) {
 		"mirakurunProgramId",
 		"mirakurunStreamPath",
 		"mirakurunDrop",
-		"tsDrop"
+		"tsDrop",
+		"savedTsAnalysis"
 	];
 
 	if (!source || typeof source !== "object" || !output || typeof output !== "object") {
@@ -963,6 +982,8 @@ function buildMatchItem(status, key, recorded, reserve, channel, hasRecorded, ha
 				reserve && (reserve.fullTitle || reserve.title) || "",
 			ruleUid: reserve && reserve.ruleUid || recorded && recorded.ruleUid || null,
 			recording: recording,
+			savedTsAnalysis: recorded && recorded.savedTsAnalysis || undefined,
+			recordedDurationSeconds: recorded && recorded.recordedDurationSeconds || undefined,
 			deletion: null
 		};
 	}

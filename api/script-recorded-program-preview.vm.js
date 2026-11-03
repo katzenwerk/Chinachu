@@ -46,6 +46,7 @@ function hasRecordedFile(program) {
 	var program = found.program;
 	
 	if (program === null) return response.error(404);
+		if (program._recordedDeleted || program.fileMissing) return response.error(410);
 	
 	if (!data.status.feature.previewer) return response.error(403);
 	

@@ -108,6 +108,22 @@ describe('Match v2 writer and migration', function () {
 		assert.equal(matching.mergeOldNew(old, sameWithoutReservation).status, 'RECORDED');
 		assert.equal(matching.mergeOldNew(old, replaced).deletion, null);
 		assert.equal(matching.mergeOldNew(v2({ ruleUid: 'rule-old' }), v2({ ruleUid: null })).ruleUid, 'rule-old');
+		const fact = { recordedId: same.recording.recordedId, path: same.recording.path, checkedAt: nowMs };
+		const lost = v2({ fileMissing: fact, deletion: { deletedAt: null, reason: 'recorded-missing' } });
+		const retained = matching.mergeOldNew(lost, same, null, null, { recordedReadOk: true });
+		assert.deepStrictEqual(retained.fileMissing, fact); // Restored recorded.json is not a file discovery.
+		assert.equal(retained.deletion, null);
+		assert.deepStrictEqual(matchV2.toV2Entry(lost).fileMissing, fact);
+		assert.deepStrictEqual(matchV2.toV2Entry(v2({ recording: null, fileMissing: fact })).fileMissing, fact);
+		assert.equal(matching.mergeOldNew(lost, replaced, null, null, { recordedReadOk: true }).fileMissing, undefined);
+		for (const reason of ['manual', 'storage-low']) {
+			const terminal = v2({ deletion: { reason, deletedAt: nowMs }, fileMissing: fact });
+			const merged = matching.mergeOldNew(terminal, same, null, null, { recordedReadOk: true });
+			assert.equal(merged.deletion.reason, reason);
+			assert.equal(merged.fileMissing, undefined);
+			assert.equal(matching.mergeOldNew(terminal, replaced).deletion, null);
+		}
+
 	});
 
 	it('reads the latest match under the common lock and preserves concurrent deletion history', function () {
