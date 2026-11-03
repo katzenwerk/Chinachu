@@ -786,10 +786,65 @@ upgrade_file_requires_restart () {
   esac
 }
 
+upgrade_activity_snapshot () {
+  "$BOOTSTRAP_NODE_COMMAND" -e '
+    const fs = require("fs");
+    let recording, reserves;
+    try {
+      recording = JSON.parse(fs.readFileSync("data/recording.json", "utf8"));
+      reserves = JSON.parse(fs.readFileSync("data/reserves.json", "utf8"));
+      if (!Array.isArray(recording) || !Array.isArray(reserves)) throw new Error("expected JSON arrays");
+    } catch (error) {
+      console.error("Could not inspect recording/reservation status: " + error.message);
+      process.exit(1);
+    }
+
+    const now = Date.now();
+    let next = Infinity;
+    for (const reserve of reserves) {
+      if (!reserve) continue;
+      const start = Number(reserve.start);
+      if (Number.isFinite(start) && start > now && start < next) next = start;
+    }
+
+    let nextLabel = "なし";
+    if (next !== Infinity) {
+      const date = new Date(next);
+      const minutes = Math.ceil((next - now) / 60000);
+      const timeLeft = minutes < 60
+        ? `${minutes}分後`
+        : minutes < 1440
+          ? `${Math.floor(minutes / 60)}時間${minutes % 60 ? `${minutes % 60}分` : ""}後`
+          : `${Math.floor(minutes / 1440)}日${Math.floor((minutes % 1440) / 60) ? `${Math.floor((minutes % 1440) / 60)}時間` : ""}後`;
+      const pad = n => String(n).padStart(2, "0");
+      nextLabel = `約${timeLeft} (${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())})`;
+    }
+    process.stdout.write(`${recording.length}\t${nextLabel}\n`);
+  '
+}
+
+upgrade_show_activity () {
+  local count="$1" next="$2"
+  printf '\n録画中 : '
+  if [ "$count" -eq 0 ]; then
+    printf 'なし\n'
+  else
+    printf '%s件\n' "$count"
+  fi
+  printf '次の録画予約 : %s\n' "$next"
+  printf 'Running Chinachu services will stop during the update; nearby reservations may be affected.\n'
+}
+
 upgrade_confirm () {
-  local answer
+  local recording_count="${1:-0}" answer
   [ -t 0 ] || { upgrade_error "Upgrade application requires an interactive terminal."; return 1; }
-  read -r -p 'Apply this fast-forward update? [y/N] ' answer || return 1
+  if [ "$recording_count" -gt 0 ]; then
+    printf '\n%sWARNING:%s %s active recording(s) may be interrupted and left incomplete.\n' \
+      "$INSTALLER_YELLOW" "$INSTALLER_RESET" "$recording_count"
+    read -r -p 'Continue upgrade even though recording is active? [y/N] ' answer || return 1
+  else
+    read -r -p 'Apply this fast-forward update? [y/N] ' answer || return 1
+  fi
   case "$answer" in y | Y | yes | YES ) return 0 ;; esac
   printf 'Upgrade was not applied.\n'
   return 1
@@ -800,7 +855,7 @@ chinachu_upgrade () {
   local dependencies_needed=false node_needed=false restart_needed=false
   local manager_prefix='' manager_user='' manager_active='[]' manager_saved='[]'
   local manager_expected_uid='' manager_expected_gid='' online_names='' operator_status='' wui_status='' file
-  local inspect_status
+  local inspect_status activity recording_count=0 next_reservation='' latest_activity latest_recording_count latest_next_reservation
 
   . "$CHINACHU_DIR/lib/service-setup.sh" || return 1
   if [ "$(id -u)" -eq 0 ]; then
@@ -921,16 +976,31 @@ chinachu_upgrade () {
     printf 'PM2 manager: unregistered (Upgrade will not register services)\n'
   fi
 
-  upgrade_confirm || return $?
+  if [ "$restart_needed" = true ] && [ -n "$online_names" ]; then
+    activity=$(upgrade_activity_snapshot) || {
+      upgrade_error "Could not verify recording/reservation status before upgrade."
+      return 1
+    }
+    IFS=$'\t' read -r recording_count next_reservation <<< "$activity"
+    upgrade_show_activity "$recording_count" "$next_reservation"
+  fi
+
+  upgrade_confirm "$recording_count" || return $?
 
   if [ "$restart_needed" = true ]; then
     upgrade_revalidate_pm2_manager || return 1
   fi
   if [ "$restart_needed" = true ] && [ -n "$online_names" ]; then
-    service_setup_guard_activity || {
-      upgrade_error "Recording/finalization or a near-term reservation prevents service interruption."
+    latest_activity=$(upgrade_activity_snapshot) || {
+      upgrade_error "Could not recheck recording/reservation status before stopping services."
       return 1
     }
+    IFS=$'\t' read -r latest_recording_count latest_next_reservation <<< "$latest_activity"
+    if [ "$recording_count" -eq 0 ] && [ "$latest_recording_count" -gt 0 ]; then
+      printf '\nA recording started while awaiting confirmation.\n'
+      upgrade_show_activity "$latest_recording_count" "$latest_next_reservation"
+      upgrade_confirm "$latest_recording_count" || return $?
+    fi
     service_setup_pm2_as_user "$manager_user" stop $online_names || {
       upgrade_error "Could not stop the previously running Chinachu PM2 services."
       return 1
