@@ -27,13 +27,14 @@ const AUTO_LOAD_ROOT_MARGIN = `0px 0px ${AUTO_LOAD_DISTANCE_PX}px 0px`;
 const RESULT_OPTIONS = [
   ['recorded', '録画済み'],
   ['deleted', '削除済み'],
+  ['missing', '行方不明'],
   ['missed', '未録画・NG'],
   ['skipped', 'スキップ']
 ];
-const DEFAULT_RESULTS = ['recorded', 'deleted', 'missed'];
+const DEFAULT_RESULTS = ['recorded', 'deleted', 'missing', 'missed'];
 // Attention mode always checks all result categories except intentionally skipped ones.
 const ATTENTION_RESULTS = RESULT_OPTIONS.map(([value]) => value).filter(value => value !== 'skipped');
-const ATTENTION_DESCRIPTION = '録画済み・削除済み・未録画／NG（スキップを除く）の3種類から、注意が記録された結果だけを表示します。\n例：未録画、容量不足による中断、DROP検出、録画ファイル欠損。DROPは必ずしも映像破損を意味しません。';
+const ATTENTION_DESCRIPTION = '録画済み・削除済み・未録画／NG（スキップを除く）の分類から、注意が記録された結果だけを表示します。\n例：未録画、容量不足による中断、DROP検出、録画ファイル欠損。DROPは必ずしも映像破損を意味しません。';
 const RESULT_VALUES = new Set(RESULT_OPTIONS.map(([value]) => value));
 const LIST_PAGE_SIZE = 50;
 const CARD_PAGE_SIZE = 25;
@@ -337,7 +338,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     filterSummary.textContent = warningsOnly ? '' : `${selectedLabels.length}/${RESULT_OPTIONS.length}`;
     filterTrigger.title = warningsOnly ? ATTENTION_DESCRIPTION : '';
     filterTrigger.setAttribute('aria-label', warningsOnly
-      ? '対象フィルター: 注意ありのみ（スキップ以外の3種類から抽出）'
+      ? '対象フィルター: 注意ありのみ（スキップ以外の分類から抽出）'
       : `対象フィルター: ${selectedLabels.length === 0 ? '選択なし' : selectedLabels.join('、')}`);
   }
 

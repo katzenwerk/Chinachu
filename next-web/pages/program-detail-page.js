@@ -1,3 +1,4 @@
+import { applyResultWarningTooltip } from '../components/storage-warning.js';
 import { createChannelLogo } from '../components/channel-logo.js';
 import { deleteRecordedProgram, loadProgramDetail, ProgramDetailError } from '../services/program-detail-client.js';
 import { buildProgramDetailModel } from '../services/program-detail-model.js';
@@ -82,7 +83,8 @@ function createRecordingStatusTags(statuses) {
     const tag = document.createElement('span');
     tag.className = `program-recording-status-tag is-${status.kind || 'confirmed'} is-${status.tone || 'warning'}`;
     tag.textContent = status.label;
-    tag.title = status.description || status.label;
+    if (['drop', 'saved-ts'].includes(status.key)) applyResultWarningTooltip(tag, status.description || status.label);
+    else tag.title = status.description || status.label;
     tags.append(tag);
   });
   return tags;
@@ -145,7 +147,7 @@ function createFacts(model, recordingLayout = false) {
   if (model.deletion !== null) {
     const deletion = document.createElement('dl');
     deletion.className = 'program-detail-secondary-facts';
-    addDefinition(deletion, model.deletion.kind === 'unknown' ? '確認状態' : '削除理由', model.deletion.reason);
+    addDefinition(deletion, model.deletion.kind === 'unknown' ? '台帳情報' : '削除理由', model.deletion.reason);
     if (model.deletion.kind !== 'unknown') addDefinition(deletion, '削除日時', model.deletion.deletedAt || '日時情報なし');
     facts.append(deletion);
   }

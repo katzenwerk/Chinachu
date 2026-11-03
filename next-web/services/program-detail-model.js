@@ -2,6 +2,7 @@ import {
   formatRecordingSeconds,
   isRecordedResultPlayable,
   recordedResultWarnings,
+  recordedFileState,
   recordingDurationInfo,
   tsDropPidSummary
 } from './recorded-result-warnings.js';
@@ -50,7 +51,7 @@ function finitePositive(value) {
 function programState(detail) {
   const status = detail.match?.status || '';
   const deletionReason = validText(detail.match?.deletion?.reason);
-  if (deletionReason === 'recorded-missing') return { key: 'unknown', label: '不明' };
+  if (recordedFileState(detail.match) === 'missing') return { key: 'file-missing', label: '行方不明' };
   if (deletionReason !== null && deletionReason !== 'recorded-missing') {
     return {
       key: 'deleted',
@@ -79,18 +80,17 @@ function programState(detail) {
 
 function fileState(detail, state) {
   const deletion = detail.match?.deletion;
+  if (recordedFileState(detail.match) === 'missing') return { key: 'file-missing', label: '行方不明', description: '捜索完了後に不在が確認された録画です。' };
   if (deletion) {
     return deletion.reason === 'recorded-missing'
-      ? { key: 'recorded-unknown', label: 'ファイル不明', description: '録画履歴と現在の録画管理情報が一致しておらず、ファイルの存在は未確認です。' }
+      ? { key: 'recorded-unknown', label: null, description: null }
       : { key: 'deleted', label: '削除済み', description: '録画ファイルは削除済みとして記録されています。' };
   }
   if (['recorded', 'recording', 'aborted'].includes(state.key)) {
     return {
       key: 'unknown',
-      label: state.key === 'recording' ? '実ファイル未確認' : null,
-      description: state.key === 'recording'
-        ? '録画中プレビューとは別に、録画ファイルの状態確認は行っていません。'
-        : null
+      label: null,
+      description: null
     };
   }
   return { key: 'not-applicable', label: null, description: null };
@@ -102,7 +102,7 @@ function deletionInfo(deletion) {
   const reasons = {
     manual: '手動削除',
     'storage-low': '容量不足による自動削除',
-    'recorded-missing': '録画管理情報に対応する項目がありません（ファイル未確認）'
+    'recorded-missing': '録画管理情報に対応する項目がありません'
   };
   const deletedAt = finitePositive(deletion.deletedAt);
   return {
@@ -200,7 +200,7 @@ function channelLogoUrl(channel) {
 
 function recordingPathInfo(detail, state, file) {
   const historyStatus = validText(detail.match?.status);
-  const visible = state.key === 'recording' || ['recorded', 'aborted', 'deleted', 'unknown'].includes(state.key) ||
+  const visible = state.key === 'recording' || ['recorded', 'aborted', 'deleted', 'unknown', 'file-missing'].includes(state.key) ||
     ['MISSED', 'SKIPPED_ONLY'].includes(historyStatus);
   if (!visible) return null;
   const path = validText(detail.match?.recording?.path) || validText(detail.program?.recorded) ||
@@ -214,8 +214,11 @@ function recordingPathInfo(detail, state, file) {
 }
 
 export function buildProgramDetailModel(detail, now = Date.now()) {
-  const program = detail.program || {};
   const match = detail.match || {};
+  const program = { ...(detail.program || {}) };
+  for (const field of ['savedTsAnalysis', 'recordedDurationSeconds']) {
+    if (Object.prototype.hasOwnProperty.call(match, field)) program[field] = match[field];
+  }
   const parsedProgramAvailable = detail.currentSource != null || detail.resolution?.matchedBy !== 'minimal-match';
   const reservationMeta = match.reservationMeta || {};
   const reservationProgram = {
@@ -227,7 +230,7 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
     recordedDir: validText(program.recordedDir) || validText(reservationMeta.recordedDir)
   };
   const state = programState(detail);
-  const recording = match.recording || {};
+  const recording = match.recording || match.fileMissing || {};
   const recordedId = validText(recording.recordedId) || validText(program.recordedId) ||
     (detail.currentSource === 'recorded' ? validText(program.id) : null);
   const programId = validText(program.id);
@@ -239,19 +242,21 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
   const channel = program.channel && typeof program.channel === 'object' ? program.channel : {};
   const channelId = validText(channel.id);
   const file = fileState(detail, state);
-  const recordedState = ['recorded', 'aborted', 'deleted', 'unknown'].includes(state.key);
+  const recordedState = ['recorded', 'aborted', 'deleted', 'unknown', 'file-missing'].includes(state.key);
   const recordedResourceAvailable = detail.currentSource === 'recorded' || detail.resolution?.source === 'recorded';
   const recordingPath = recordingPathInfo(detail, state, file);
   const relatedRule = ruleLabel(reservationProgram, detail.rules);
   const recordingItem = {
     ...program,
+    fileMissing: match.fileMissing || null,
+    deletion: match.deletion || null,
     status: validText(match.status) || (['recorded', 'aborted', 'deleted'].includes(state.key) ? 'RECORDED' : null),
     start,
     end,
     seconds,
     recordingPath: recordingPath?.copyValue,
     recordingPathMissing: recordingPath?.copyValue === null,
-    deletionKind: file.key === 'deleted' ? 'explicit' : file.key === 'recorded-unknown' ? 'missing' : 'none'
+    deletionKind: file.key === 'file-missing' ? 'file-missing' : file.key === 'deleted' ? 'explicit' : file.key === 'recorded-unknown' ? 'missing' : 'none'
   };
   const actualDuration = recordingDurationInfo(recordingItem);
   const recordingInfo = recordedState ? {
@@ -266,6 +271,7 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
     deletionKind: recordingItem.deletionKind,
     recordingPathMissing: recordingItem.recordingPathMissing,
     recordedId,
+    recordingPath: recordingPath?.copyValue,
     detailSource: recordedResourceAvailable ? 'recorded' : null
   });
   const attributes = [
@@ -289,6 +295,7 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
       dateTime: formatDateTime(Number(item.start), programEndTime(item))
     })) : null;
   const liveAvailable = channelId !== null && start !== null && end !== null && start <= now && now < end;
+  const livePreviewAvailable = liveAvailable && state.key !== 'recording' && !recordedState && programId !== null;
   const manualReservation = reservationProgram.isManualReserved === true;
   const reservationAction = state.key === 'reserved'
     ? (manualReservation ? 'unreserve' : 'skip')
@@ -323,11 +330,19 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
     reservation: reservationInfo(reservationProgram, state, detail.rules),
     relatedRule,
     recordingInfo,
+    savedTsAnalysis: program.savedTsAnalysis || null,
+    mirakurunDrop: program.mirakurunDrop || null,
     recordingWarnings,
     tsDropInfo,
     recordingPath,
     deletion: deletionInfo(match.deletion),
     actions: {
+      recordedMaintenance: recordedState && file.key !== 'deleted' && recordedId !== null &&
+        (finitePositive(program.operatorRecordingEnd) || end) !== null &&
+        (finitePositive(program.operatorRecordingEnd) || end) <= now &&
+        (recordedResourceAvailable || ['RECORDED', 'RECORDED_UNTRACKED'].includes(match.status)) &&
+        program.operatorResumePending !== true && detail.resolution?.idConflict !== true
+        ? { recordedId } : null,
       reservation: reservationAction,
       stopRecording: state.key === 'recording' && programId !== null ? { requested: program.abort === true } : null,
       rule: ruleAction(reservationProgram, detail.rules, detail.preferredRuleUid),
@@ -349,9 +364,16 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
     media: {
       visible: liveAvailable || state.key === 'recording' || recordedState,
       kind: state.key === 'recording' ? 'recording' : 'recorded',
+      livePreviewUrl: livePreviewAvailable
+        ? `/api/channel/${encodeURIComponent(channelId)}/preview.jpg?id=${encodeURIComponent(programId)}&start=${start}&end=${end}`
+        : null,
       recordedId,
       playable,
-      thumbnailUrl: recordedState && recordedId !== null && file.key !== 'recorded-unknown'
+      canCreateThumbnail: recordedResourceAvailable && ['recorded', 'aborted'].includes(state.key) &&
+        recordedId !== null && file.key !== 'deleted' && file.key !== 'file-missing' &&
+        program.fileExists !== false && program.cleanupState !== 'deleted' && program.operatorResumePending !== true &&
+        validText(program.recorded) !== null,
+      thumbnailUrl: recordedState && recordedId !== null
         ? `/api/recorded/${encodeURIComponent(recordedId)}/thumbnail.jpg`
         : null,
       previewUrl: state.key === 'recording' && programId !== null && Boolean(program.pid) &&

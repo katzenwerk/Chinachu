@@ -1,4 +1,14 @@
 const TERMINAL_FAILURES = new Set(['source-missing', 'failed']);
+const readyListeners = new Set();
+
+export function subscribeRecordedThumbnailReady(listener) {
+  readyListeners.add(listener);
+  return () => readyListeners.delete(listener);
+}
+
+export function notifyRecordedThumbnailReady(recordedId, updatedAt) {
+  readyListeners.forEach(listener => listener({ recordedId, updatedAt }));
+}
 
 function thumbnailBaseUrl(recordedId) {
   return `/api/recorded/${encodeURIComponent(recordedId)}/thumbnail`;

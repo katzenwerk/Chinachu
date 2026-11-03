@@ -1,9 +1,12 @@
+import { applyResultWarningTooltip } from './storage-warning.js';
 import { createChannelLogo } from './channel-logo.js';
 import { appendMobileContextButton } from './mobile-layout.js';
 import { programDetailUrl } from '../services/program-detail-client.js';
 import { channelDetailText } from '../services/recording-model.js';
-import { isRecordedResultPlayable, recordedResultWarnings } from '../services/recorded-result-warnings.js';
+import { isRecordedResultPlayable, recordedResultWarnings, recordedFileState, savedTsResultInfo } from '../services/recorded-result-warnings.js';
 import { buildProgramDisplayTitle } from '../services/program-title.js';
+import { createProgramHover, programHoverInfo, setProgramHover } from './program-hover.js';
+import { recordedThumbnailImageUrl, subscribeRecordedThumbnailReady } from '../services/recorded-thumbnail-client.js';
 
 const dateFormatter = new Intl.DateTimeFormat('ja-JP', {
   month: '2-digit',
@@ -55,11 +58,24 @@ function detailUrl(item, recordedId) {
 }
 
 function cardState(item) {
-  if (item?.deletionKind === 'explicit') return { key: 'deleted', label: '削除済み' };
-  if (item?.deletionKind === 'missing') return { key: 'missing', label: '不明' };
+  if (recordedFileState(item) === 'deleted') return { key: 'deleted', label: '削除済み' };
+  if (recordedFileState(item) === 'missing') return { key: 'file-missing', label: '行方不明' };
   if (item?.status === 'MISSED') return { key: 'missed', label: '未録画' };
   if (item?.status === 'SKIPPED_ONLY') return { key: 'skipped', label: 'スキップ' };
   return { key: 'recorded', label: null };
+}
+
+function savedTsCardSummary(saved) {
+  const result = saved?.result;
+  if (result?.completed !== true || !['NO_FINDINGS', 'SUSPECT'].includes(result.status)) return null;
+  const info = savedTsResultInfo(saved);
+  const parts = [];
+  for (const [key, label] of [['ccErrorEvents', 'CC異常'], ['pcrGapEvents', '時間飛び'],
+    ['teiPackets', 'TEI'], ['syncErrorEvents', '同期異常'], ['invalidHeaderPackets', 'ヘッダー異常'], ['pcrBackwards', 'PCR逆行']]) {
+    if (Number.isFinite(result[key]) && result[key] > 0) parts.push(`${label} ${result[key].toLocaleString('ja-JP')}件`);
+  }
+  return { label: `TS解析：${parts.length ? parts.join(' / ') : info.label}`, findings: info.findings,
+    description: info.description || '保存済みのTS解析結果です。' };
 }
 
 function toRecordedCardModel(item, index, options = {}) {
@@ -82,13 +98,15 @@ function toRecordedCardModel(item, index, options = {}) {
     channelLogoUrl: channelLogoUrl(item?.channel),
     channelTooltip: channelDetailText(item?.channel),
     title: displayTitle.text,
+    hover: programHoverInfo(item, { channelLogoUrl: channelLogoUrl(item?.channel), statuses: [state.label, ...recordedResultWarnings(item)] }),
     titleSource: displayTitle.source,
     episodeSource: displayTitle.episodeSource || null,
     channelName,
     channelLabel: [channelName, text(item?.channel?.type)].filter(Boolean).join(' / '),
     broadcastText: formatDateTime(item?.start, item?.end),
     durationText: formatDuration(recordedDuration || operatorDuration),
-    recordingWarnings: recordedResultWarnings(item)
+    recordingWarnings: recordedResultWarnings(item),
+    savedTsSummary: savedTsCardSummary(item?.savedTsAnalysis)
   };
 }
 
@@ -128,7 +146,7 @@ export function createRecordedCard(initialModel, { onWatch, onOpenDetail } = {})
     <div class="recorded-card-meta">
       <strong class="mobile-card-title"></strong>
       <span class="recorded-card-broadcast"></span>
-      <span class="recorded-card-actions"><span class="recorded-result-warning storage-warning is-align-right" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-tip" role="tooltip"></span></span><a class="recorded-card-detail" href=""><span aria-hidden="true">ⓘ</span> 詳細</a></span>
+      <span class="recorded-card-observations"></span><span class="recorded-card-actions"><span class="recorded-result-warning storage-warning is-align-right" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-tip" role="tooltip"></span></span><a class="recorded-card-detail" href=""><span aria-hidden="true">ⓘ</span> 詳細</a></span>
     </div>`;
 
   appendMobileContextButton(article, article.querySelector('.recorded-card-actions'));
@@ -143,8 +161,15 @@ export function createRecordedCard(initialModel, { onWatch, onOpenDetail } = {})
   const detailLink = article.querySelector('.recorded-card-detail');
   const warning = article.querySelector('.recorded-result-warning');
   let currentModel = initialModel;
+  const programHover = createProgramHover(article);
+  article.querySelectorAll('.recorded-card-title-overlay,.mobile-card-title,.recorded-card-detail').forEach(target => setProgramHover(target, () => currentModel.hover));
   let currentThumbnailUrl = null;
   let signature = null;
+  const unsubscribeThumbnail = subscribeRecordedThumbnailReady(({ recordedId, updatedAt }) => {
+    if (String(currentModel.recordedId) !== String(recordedId) || !currentModel.thumbnailUrl) return;
+    currentThumbnailUrl = recordedThumbnailImageUrl(recordedId, updatedAt || Date.now());
+    preview.src = currentThumbnailUrl;
+  });
 
   preview.addEventListener('load', () => {
     if (preview.getAttribute('src') !== currentThumbnailUrl) return;
@@ -173,8 +198,16 @@ export function createRecordedCard(initialModel, { onWatch, onOpenDetail } = {})
     article.querySelector('.mobile-card-title').textContent = model.title;
     detailLink.href = model.detailUrl;
     detailLink.setAttribute('aria-label', `${model.title}の詳細`);
-    const warningLabels = (model.recordingWarnings || []).map(item => item.label);
-    const warningDescriptions = (model.recordingWarnings || []).map(item => item.description || item.label);
+    const observations = (model.recordingWarnings || []).filter(item => item.key === 'drop');
+    if (model.savedTsSummary) observations.push({ ...model.savedTsSummary, key: 'saved-ts' });
+    article.querySelector('.recorded-card-observations').replaceChildren(...observations.map(item => {
+      const tag = document.createElement('span'); tag.textContent = item.label;
+      if (item.key === 'saved-ts') tag.className = `recorded-card-analysis${item.findings ? ' is-warning' : ''}`;
+      applyResultWarningTooltip(tag, item.description || item.label); return tag;
+    }));
+    const otherWarnings = (model.recordingWarnings || []).filter(item => !['drop', 'saved-ts'].includes(item.key));
+    const warningLabels = otherWarnings.map(item => item.label);
+    const warningDescriptions = otherWarnings.map(item => item.description || item.label);
     warning.hidden = warningLabels.length === 0;
     warning.setAttribute('aria-label', warningLabels.length === 0 ? '' : `録画異常。${warningLabels.join('。')}`);
     warning.querySelector('.storage-warning-tip').textContent = warningDescriptions.join('\n');
@@ -229,6 +262,8 @@ export function createRecordedCard(initialModel, { onWatch, onOpenDetail } = {})
     element: article,
     update,
     dispose() {
+      programHover.dispose();
+      unsubscribeThumbnail();
       preview.removeAttribute('src');
       channelLogo.dispose();
     }

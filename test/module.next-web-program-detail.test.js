@@ -111,6 +111,20 @@ test('common programme detail maps reservation, rule and recorded actions withou
 	assert.strictEqual(deleted.media.playable, false);
 	assert.strictEqual(deleted.media.thumbnailUrl, '/api/recorded/recorded-a/thumbnail.jpg');
 	assert.strictEqual(deleted.actions.deleteRecording, null);
+	assert.strictEqual(deleted.actions.recordedMaintenance, null);
+	const lostDetail = detail({ program: { id: 'recorded-a', recorded: '/recordings/a.m2ts' },
+		match: { status: 'RECORDED', recording: { recordedId: 'recorded-a', path: '/recordings/a.m2ts' },
+			deletion: { reason: 'recorded-missing' }, fileMissing: { recordedId: 'recorded-a', path: '/recordings/a.m2ts', checkedAt: Date.now() } },
+		currentSource: 'recorded' });
+	const lost = buildProgramDetailModel(lostDetail);
+	assert.strictEqual(lost.phase.key, 'file-missing');
+	assert.strictEqual(lost.media.playable, false);
+	assert.strictEqual(lost.media.downloadUrl, null);
+	assert.strictEqual(lost.media.canCreateThumbnail, false);
+	assert.strictEqual(lost.fileState.key, 'file-missing');
+	assert.ok(lost.recordingWarnings.some(warning => warning.key === 'file-missing'));
+	assert.ok(lost.recordingWarnings.some(warning => warning.key === 'recorded-unknown'));
+
 
 	const start = Date.now() + 60000;
 	const liveDetail = detail({ program: { start, end: start + 60000 } });

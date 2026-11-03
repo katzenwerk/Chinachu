@@ -1,3 +1,4 @@
+import { applyResultWarningTooltip } from './storage-warning.js';
 import { createChannelLogo } from './channel-logo.js';
 import { openRuleEditorDialog, programRuleSeed } from './rule-editor-dialog.js';
 import { deleteRecordedProgram, loadProgramDetail, ProgramDetailError, stopRecordingProgram } from '../services/program-detail-client.js';
@@ -7,9 +8,12 @@ import { openRecordedPlaybackOverlay, openRecordingLiveOverlay } from '../servic
 import { copyProgramTitle, programSearchUrl } from '../services/program-actions.js';
 import { invalidateResources } from '../services/api-client.js';
 import { subscribeSeriesNotifications, subscribeMatchNotifications, subscribeRecordedNotifications, subscribeRecordingNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
-import { loadSeriesProjection } from '../services/series-client.js';
+import { applySeriesThumbnail, loadSeriesProjection } from '../services/series-client.js';
 import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
 import { openSeriesCorrectionDialog } from './series-correction-dialog.js';
+import { openRecordedMaintenanceDialog, createSavedTsSummary } from './recorded-maintenance-dialog.js';
+import { loadRecordedThumbnailStatus, requestRecordedThumbnail, recordedThumbnailImageUrl,
+  notifyRecordedThumbnailReady } from '../services/recorded-thumbnail-client.js';
 
 let activeDialog = null;
 
@@ -108,7 +112,8 @@ function createRecordingStatusTags(statuses) {
     const tag = document.createElement('span');
     tag.className = `program-recording-status-tag is-${status.kind || 'confirmed'} is-${status.tone || 'warning'}`;
     tag.textContent = status.label;
-    tag.title = status.description || status.label;
+    if (['drop', 'saved-ts'].includes(status.key)) applyResultWarningTooltip(tag, status.description || status.label);
+    else tag.title = status.description || status.label;
     tags.append(tag);
   });
   return tags;
@@ -120,7 +125,7 @@ function createTsDropSummary(summary) {
   section.className = 'program-ts-drop-summary';
   const heading = document.createElement('h4');
   const facts = document.createElement('dl');
-  heading.textContent = 'TS DROP解析';
+  heading.textContent = 'Operator TS監視';
   addFact(facts, 'CC異常合計', summary.ccErrorTotal === null ? '不明' : `${summary.ccErrorTotal.toLocaleString('ja-JP')}件`);
   if (summary.pids.length === 0) {
     addFact(facts, 'PID別CC異常', 'なし');
@@ -180,7 +185,7 @@ function createManagement(model, seriesContext, seriesError) {
     addFact(facts, '保存先', model.reservation?.destination);
   }
   if (model.deletion) {
-    addFact(facts, model.deletion.kind === 'unknown' ? '確認状態' : '削除理由', model.deletion.reason);
+    addFact(facts, model.deletion.kind === 'unknown' ? '台帳情報' : '削除理由', model.deletion.reason);
     if (model.deletion.kind !== 'unknown') addFact(facts, '削除日時', model.deletion.deletedAt || '日時情報なし');
   }
   addFact(facts, '所属作品', seriesContext?.seriesTitle || '未確定');
@@ -211,6 +216,8 @@ function createManagement(model, seriesContext, seriesError) {
   aside.append(heading, facts);
   aside.append(analysis);
   if (tsDropSummary) aside.append(tsDropSummary);
+  const savedTsSummary = createSavedTsSummary(model.savedTsAnalysis);
+  if (savedTsSummary) aside.append(savedTsSummary);
   if (seriesError) {
     const notice = document.createElement('p');
     notice.textContent = 'シリーズ情報を取得できませんでした。通常の番組情報は引き続き利用できます。';
@@ -220,19 +227,28 @@ function createManagement(model, seriesContext, seriesError) {
   return aside;
 }
 
-function createThumbnail(model, onPlay) {
-  const url = model.media.kind === 'recording' ? model.media.previewUrl : model.media.thumbnailUrl;
-  if (!url) return null;
-  const interactive = model.media.kind === 'recording' || model.media.playable;
+function createThumbnail(model, onPlay, { onError = null, cacheKey = null, liveUrl = null } = {}) {
+  const live = Boolean(model.media.livePreviewUrl);
+  const url = live ? liveUrl : model.media.kind === 'recording' ? model.media.previewUrl
+    : model.media.thumbnailUrl && recordedThumbnailImageUrl(model.media.recordedId, cacheKey);
+  if (!url && !live) return null;
+  const interactive = live || model.media.kind === 'recording' || model.media.playable;
   const frame = document.createElement(interactive ? 'button' : 'div');
   if (interactive) frame.type = 'button';
   frame.className = 'program-modal-thumbnail';
-  if (interactive) frame.setAttribute('aria-label', `${model.title}を${model.media.kind === 'recording' ? 'ライブ視聴' : '再生'}`);
-  const image = document.createElement('img');
-  image.src = url;
-  image.alt = `${model.title}のサムネイル`;
-  image.addEventListener('error', () => frame.remove(), { once: true });
-  frame.append(image);
+  if (interactive) frame.setAttribute('aria-label', `${model.title}を${live || model.media.kind === 'recording' ? 'ライブ視聴' : '再生'}`);
+  if (url) {
+    const image = document.createElement('img');
+    image.src = url;
+    image.alt = `${model.title}のサムネイル`;
+    image.addEventListener('error', () => onError ? onError() : frame.remove(), { once: true });
+    frame.append(image);
+  } else {
+    frame.classList.add('is-empty');
+    const label = document.createElement('p');
+    label.textContent = 'サムネイルなし';
+    frame.append(label);
+  }
   if (interactive) {
     const play = document.createElement('span');
     play.textContent = '▶';
@@ -262,7 +278,23 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   let latestSeriesError = null;
   let preferredRuleUid = null;
   let boundaryTimer = null;
+  const thumbnailController = new AbortController();
+  let thumbnailTimer = null;
+  let thumbnailView = null;
+  let thumbnailId = null;
+  let thumbnailState = null;
+  let thumbnailMissing = false;
+  let thumbnailChecked = false;
+  let thumbnailChecking = false;
+  let thumbnailRequestPending = false;
+  let thumbnailError = '';
+  let thumbnailAnnounced = false;
+  let livePreviewController = null;
+  let livePreviewUrl = null;
+  let livePreviewAttempted = false;
+  let livePreviewNotice = '';
   let ruleDialog = null;
+  let maintenanceDialog = null;
   let pendingInitialAction = ['reserve', 'reserve-now', 'unreserve', 'skip', 'unskip', 'rule', 'delete', 'stop', 'series-change', 'series-episode', 'series-remove'].includes(initialAction)
     ? initialAction : null;
   const reloadFromNotification = resources => {
@@ -283,6 +315,179 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     if (!feedback) return;
     feedback.textContent = message || '';
     feedback.classList.toggle('is-error', error);
+  }
+
+  function thumbnailFailure(state) {
+    return state?.message || ({
+      'output-unavailable': '画像の保存先を利用できません。',
+      'ffmpeg-failed': 'FFmpegで画像を作成できませんでした。',
+      timeout: '画像作成が時間内に完了しませんでした。',
+      'publish-failed': '画像を保存できませんでした。',
+      'queue-expired': '作成待ちが期限切れになりました。',
+      'queue-full': '生成キューが混雑しています。',
+      'operator-stopping': 'Operator停止中です。',
+      'recorded-file-missing': '録画ファイルが見つかりません。',
+      'recorded-file-deleted': '録画ファイルは削除されています。'
+    })[state?.reason] || state?.reason || '画像を作成できませんでした。';
+  }
+
+  function renderThumbnail() {
+    if (!thumbnailView || disposed) return;
+    const { model, host } = thumbnailView;
+    host.replaceChildren();
+    if (model.media.livePreviewUrl) {
+      host.append(createThumbnail(model, () => play(model).catch(() => {}), {
+        liveUrl: livePreviewUrl,
+        onError: () => {
+          if (disposed || thumbnailView?.host !== host) return;
+          clearLivePreview();
+          renderThumbnail();
+        }
+      }));
+      if (livePreviewNotice) {
+        const notice = document.createElement('p');
+        notice.className = 'program-detail-action-feedback';
+        notice.setAttribute('role', 'status');
+        notice.textContent = livePreviewNotice;
+        host.append(notice);
+      }
+      if (!livePreviewAttempted) {
+        livePreviewAttempted = true;
+        const captureController = new AbortController();
+        livePreviewController = captureController;
+        fetch(model.media.livePreviewUrl, {
+          cache: 'no-store', credentials: 'same-origin', signal: captureController.signal
+        }).then(async response => {
+          if (disposed || captureController.signal.aborted || !thumbnailView?.model.media.livePreviewUrl) return;
+          if (response.status === 204 && response.headers.get('X-Chinachu-Preview-Skipped') === 'recording-start-soon') {
+            livePreviewNotice = '録画開始が近いためプレビューを省略しました。';
+            renderThumbnail();
+            return;
+          }
+          if (!response.ok) return;
+          const blob = await response.blob();
+          if (disposed || captureController.signal.aborted || !thumbnailView?.model.media.livePreviewUrl) return;
+          livePreviewUrl = URL.createObjectURL(blob);
+          renderThumbnail();
+        }).catch(() => {});
+      }
+      return;
+    }
+    if (model.media.kind === 'recording' || model.media.thumbnailUrl && !thumbnailMissing) {
+      const image = createThumbnail(model, () => play(model).catch(() => {}), {
+        cacheKey: thumbnailState?.status === 'complete' ? thumbnailState.updatedAt || Date.now() : null,
+        onError: model.media.kind === 'recorded' ? () => {
+          if (thumbnailView?.host !== host || disposed) return;
+          thumbnailMissing = true;
+          renderThumbnail();
+          if (model.media.canCreateThumbnail && !thumbnailChecked && !thumbnailChecking) checkThumbnail();
+        } : null
+      });
+      if (image) host.append(image);
+      return;
+    }
+    if (!model.media.visible || model.media.kind !== 'recorded') return;
+    const placeholder = document.createElement('div');
+    placeholder.className = 'program-modal-thumbnail is-empty';
+    const label = document.createElement('p');
+    label.textContent = 'サムネイルなし';
+    placeholder.append(label);
+    if (model.media.canCreateThumbnail) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'button';
+      const status = thumbnailState?.status;
+      const queued = status === 'queued' || status === 'processing';
+      button.disabled = thumbnailRequestPending || thumbnailChecking || queued;
+      button.textContent = thumbnailRequestPending ? '受付中…' : status === 'queued' ? '作成待ち'
+        : status === 'processing' ? '作成中' : status === 'complete' ? '画像を再読込'
+          : status === 'failed' || status === 'source-missing' ? '再試行' : '作成';
+      button.addEventListener('click', () => {
+        if (status === 'complete') {
+          thumbnailMissing = false;
+          thumbnailState.updatedAt = Date.now();
+          renderThumbnail();
+        } else createMissingThumbnail();
+      });
+      const feedback = document.createElement('small');
+      feedback.setAttribute('role', 'status');
+      feedback.textContent = thumbnailError || (status === 'failed' || status === 'source-missing'
+        ? thumbnailFailure(thumbnailState) : status === 'complete' ? '画像を読み込めませんでした。'
+          : thumbnailChecking && !queued ? '生成状態を確認しています…' : '');
+      placeholder.append(button, feedback);
+    }
+    host.append(placeholder);
+  }
+
+  function clearLivePreview() {
+    livePreviewController?.abort();
+    livePreviewController = null;
+    if (livePreviewUrl) URL.revokeObjectURL(livePreviewUrl);
+    livePreviewUrl = null;
+    livePreviewNotice = '';
+  }
+
+  function applyThumbnailState(state) {
+    thumbnailState = state;
+    thumbnailError = '';
+    if (state.status === 'complete' && state.available === true) {
+      thumbnailMissing = false;
+      if (!thumbnailAnnounced) {
+        thumbnailAnnounced = true;
+        applySeriesThumbnail(thumbnailId, recordedThumbnailImageUrl(thumbnailId, state.updatedAt || Date.now()));
+        notifyRecordedThumbnailReady(thumbnailId, state.updatedAt);
+        Promise.resolve().then(() => onChanged?.()).catch(cause => {
+          if (!disposed) showFeedback(`画像は作成されましたが、一覧を更新できませんでした: ${errorText(cause)}`, true);
+        });
+      }
+    }
+    renderThumbnail();
+    window.clearTimeout(thumbnailTimer);
+    if (state.status === 'queued' || state.status === 'processing') {
+      thumbnailTimer = window.setTimeout(checkThumbnail, 1000);
+    }
+  }
+
+  async function checkThumbnail() {
+    if (disposed || thumbnailChecking || !thumbnailId) return;
+    const id = thumbnailId;
+    thumbnailChecking = true;
+    renderThumbnail();
+    try {
+      const state = await loadRecordedThumbnailStatus(id, { signal: thumbnailController.signal });
+      if (disposed || thumbnailId !== id) return;
+      thumbnailChecked = true;
+      thumbnailChecking = false;
+      applyThumbnailState(state);
+    } catch (cause) {
+      if (disposed || thumbnailId !== id || cause?.name === 'AbortError') return;
+      thumbnailChecked = true;
+      thumbnailChecking = false;
+      thumbnailError = errorText(cause);
+      renderThumbnail();
+      if (['queued', 'processing'].includes(thumbnailState?.status)) {
+        thumbnailTimer = window.setTimeout(checkThumbnail, 1000);
+      }
+    }
+  }
+
+  async function createMissingThumbnail() {
+    if (disposed || thumbnailRequestPending || thumbnailChecking ||
+      !thumbnailView?.model.media.canCreateThumbnail || ['queued', 'processing'].includes(thumbnailState?.status)) return;
+    const id = thumbnailId;
+    thumbnailRequestPending = true;
+    thumbnailError = '';
+    renderThumbnail();
+    try {
+      const state = await requestRecordedThumbnail(id, { signal: thumbnailController.signal });
+      if (disposed || thumbnailId !== id) return;
+      thumbnailRequestPending = false;
+      applyThumbnailState(state);
+    } catch (cause) {
+      if (disposed || thumbnailId !== id || cause?.name === 'AbortError') return;
+      thumbnailRequestPending = false;
+      applyThumbnailState({ status: cause.thumbnailStatus || 'failed', reason: cause.code, message: errorText(cause) });
+    }
   }
 
   async function refreshAfterMutation() {
@@ -426,8 +631,22 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     body.className = 'program-modal-body';
     const right = document.createElement('div');
     right.className = 'program-modal-right';
-    const thumbnail = createThumbnail(model, () => play(model).catch(() => {}));
-    if (thumbnail) right.append(thumbnail);
+    if (thumbnailId !== model.media.recordedId) {
+      window.clearTimeout(thumbnailTimer);
+      thumbnailId = model.media.recordedId;
+      thumbnailState = null;
+      thumbnailMissing = false;
+      thumbnailChecked = false;
+      thumbnailChecking = false;
+      thumbnailRequestPending = false;
+      thumbnailError = '';
+      thumbnailAnnounced = false;
+    }
+    const thumbnailHost = document.createElement('div');
+    if (!model.media.livePreviewUrl) clearLivePreview();
+    thumbnailView = { model, host: thumbnailHost };
+    right.append(thumbnailHost);
+    renderThumbnail();
     right.append(createManagement(model, seriesContext, seriesError));
     body.append(createDescription(model), right);
 
@@ -451,7 +670,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       button.addEventListener('click', () => mutate(model, model.actions.reservation));
       primary.append(button);
     }
-    if (model.media.liveModel) {
+    if (model.media.liveModel && !model.media.livePreviewUrl) {
       const button = document.createElement('button');
       button.className = 'button primary';
       button.type = 'button';
@@ -496,14 +715,30 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       });
       primary.append(viewSeries);
     }
-    seriesCorrectionActions(seriesContext).forEach(action => {
+    let maintenanceAdded = false;
+    const appendMaintenance = () => {
+      if (!model.actions.recordedMaintenance || maintenanceAdded) return;
+      maintenanceAdded = true;
+      const check = document.createElement('button');
+      check.className = 'button'; check.type = 'button'; check.textContent = 'メンテナンス';
+      check.addEventListener('click', () => {
+        if (maintenanceDialog?.open) return;
+        maintenanceDialog = openRecordedMaintenanceDialog({ id: model.actions.recordedMaintenance.recordedId,
+          title: model.title, onUpdated: refreshAfterMutation,
+          getRecordingWarnings: () => latestDetail ? buildProgramDetailModel(latestDetail).recordingWarnings : model.recordingWarnings });
+      });
+      primary.append(check);
+    };
+    const seriesChange = seriesCorrectionActions(seriesContext).find(action => action.action === 'series-change');
+    if (seriesChange) {
       const changeSeries = document.createElement('button');
       changeSeries.className = 'button';
       changeSeries.type = 'button';
-      changeSeries.textContent = action.label;
-      changeSeries.addEventListener('click', () => openSeriesCorrection(seriesContext, action.action === 'series-episode'));
+      changeSeries.textContent = seriesChange.label;
+      changeSeries.addEventListener('click', () => openSeriesCorrection(seriesContext, false));
       primary.append(changeSeries);
-    });
+    }
+    appendMaintenance();
     if (normalProgram) {
       const copy = document.createElement('button');
       copy.className = 'button';
@@ -628,7 +863,12 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   });
   dialog.addEventListener('close', () => {
     disposed = true;
+    maintenanceDialog?.close();
     controller?.abort();
+    thumbnailController.abort();
+    clearLivePreview();
+    window.clearTimeout(thumbnailTimer);
+    thumbnailView = null;
     window.clearTimeout(boundaryTimer);
     ruleDialog?.close();
     unsubscribeReservation();

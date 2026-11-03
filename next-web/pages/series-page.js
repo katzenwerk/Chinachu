@@ -1,4 +1,5 @@
 import { createChannelLogo } from '../components/channel-logo.js';
+import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
 import { appendMobileContextButton } from '../components/mobile-layout.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { openSeriesBulkCorrectionDialog, openSeriesCorrectionDialog } from '../components/series-correction-dialog.js';
@@ -6,6 +7,7 @@ import { createSeriesContextMenu } from '../components/series-context-menu.js';
 import { recordedResultWarnings } from '../services/recorded-result-warnings.js';
 import { loadSeriesProjection, loadSeriesStatus, removeSeriesOverride, setSeriesHidden } from '../services/series-client.js';
 import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
+import { subscribeRecordedThumbnailReady } from '../services/recorded-thumbnail-client.js';
 import {
   subscribeMatchNotifications, subscribeRecordedNotifications, subscribeReservationNotifications, subscribeSeriesNotifications
 } from '../services/realtime-client.js';
@@ -387,7 +389,7 @@ function renderSeriesList(host, data, tab, search, viewMode = 'list', context = 
       tid.setAttribute('aria-label', item.tid === null ? 'ローカルシリーズ' : `TID ${item.tid}`);
       const summary = document.createElement('div');
       summary.className = 'series-list-card-summary';
-      summary.textContent = `${seriesEpisodeSummary(item)} · 録画 ${item.counts.currentRecordings}件 · 予約 ${item.counts.reservations}件`;
+      summary.textContent = `${seriesEpisodeSummary(item)} · 録画 ${item.counts.currentRecordings}件${item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : ''} · 予約 ${item.counts.reservations}件`;
       primary.append(title, tid);
       body.append(primary, summary);
       card.append(media, body);
@@ -408,11 +410,11 @@ function renderSeriesList(host, data, tab, search, viewMode = 'list', context = 
     title.textContent = text(item.title, '作品名未取得');
     const meta = document.createElement('span');
     if (tab === 'reservations') {
-      meta.textContent = `${seriesEpisodeSummary(item)} · ${item.counts.reservations}件予約 · 録画 ${item.counts.currentRecordings}件 · 次回 ${dateTime(item.nextReservationAt)}${item.nextReservationChannel ? ` · ${item.nextReservationChannel}` : ''}`;
+      meta.textContent = `${seriesEpisodeSummary(item)} · ${item.counts.reservations}件予約 · 録画 ${item.counts.currentRecordings}件${item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : ''} · 次回 ${dateTime(item.nextReservationAt)}${item.nextReservationChannel ? ` · ${item.nextReservationChannel}` : ''}`;
     } else if (tab === 'recordings') {
       meta.textContent = `${seriesEpisodeSummary(item)} · ${item.counts.currentRecordings}件録画 · 予約 ${item.counts.reservations}件 · 最終録画 ${dateTime(item.latestRecordingAt)}`;
     } else if (tab === 'all') {
-      meta.textContent = `${seriesEpisodeSummary(item)} · 録画 ${item.counts.currentRecordings}件 · 予約 ${item.counts.reservations}件`;
+      meta.textContent = `${seriesEpisodeSummary(item)} · 録画 ${item.counts.currentRecordings}件${item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : ''} · 予約 ${item.counts.reservations}件`;
     } else {
       meta.textContent = `${item.label} · ${item.eventCount ?? item.events.length}件${item.progLookupLabel ? ` · ${item.progLookupLabel}` : ''}${item.candidateTids?.length ? ` · TID候補 ${item.candidateTids.join(', ')}` : ''}`;
     }
@@ -473,7 +475,6 @@ function appendEventLogo(host, event, context, options = {}) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'series-recording-logo';
-  button.title = tooltip;
   button.setAttribute('aria-label', `${tooltip.replaceAll('\n', '、')}。詳細を表示`);
   const logo = createChannelLogo({
     name: event.channel?.name,
@@ -481,6 +482,11 @@ function appendEventLogo(host, event, context, options = {}) {
     tooltip,
     url: event.channel?.logoUrl
   }, { variant: 'thumbnail' });
+  logo.element.removeAttribute('title');
+  setProgramHover(button, programHoverInfo(event, {
+    channelLogoUrl: event.channel?.logoUrl,
+    statuses: [...eventStates(event, seriesContext), ...warnings]
+  }));
   button.append(logo.element);
   if (warnings.length) {
     const warning = document.createElement('span');
@@ -489,11 +495,6 @@ function appendEventLogo(host, event, context, options = {}) {
     warning.setAttribute('aria-hidden', 'true');
     button.append(warning);
   }
-  const tooltipElement = document.createElement('span');
-  tooltipElement.className = 'series-recording-tooltip';
-  tooltipElement.setAttribute('role', 'tooltip');
-  tooltipElement.textContent = tooltip;
-  button.append(tooltipElement);
   if ((options.kind === 'recording' || !options.kind && !event.reservation) &&
       event.recordings?.length && event.recordings.every(recording => recording.deleted)) {
     button.classList.add('is-deleted');
@@ -643,7 +644,7 @@ function renderSeriesDetail(host, series, tab, context) {
   const counts = document.createElement('div');
   counts.className = 'series-detail-counts';
   for (const label of [
-    `録画 ${series.counts.currentRecordings}件`, `予約 ${series.counts.reservations}件`,
+    `録画 ${series.counts.currentRecordings}件`, ...(series.counts.missingRecordings ? [`行方不明 ${series.counts.missingRecordings}件`] : []), `予約 ${series.counts.reservations}件`,
     `取得済みEP ${series.counts.currentEpisodes ?? series.counts.episodes}件`,
     `辞書登録EP ${series.counts.dictionaryEpisodes ?? 0}件`, `イベント確定EP ${series.counts.episodes}件`,
     `EP未確定 ${series.counts.episodeUnresolved}件`
@@ -679,6 +680,7 @@ function renderSeriesDetail(host, series, tab, context) {
   const grid = document.createElement('section');
   grid.className = 'series-episode-grid';
   function renderGrid() {
+    context.closeHover();
     grid.dataset.size = cardSize;
     grid.dataset.columns = columns;
     grid.replaceChildren(...series.episodes.map(episode => createEpisodeCard(episode, cardSize, {
@@ -776,6 +778,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   }
   container.className = 'series-page';
   container.innerHTML = '<section class="panel series-loading"><p>シリーズ情報を生成しています…</p></section>';
+  const programHover = createProgramHover(container);
 
   function afterCorrection(key) {
     const nextHash = `#series?tab=${tab}&event=${encodeURIComponent(key)}`;
@@ -962,10 +965,12 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
         data = { ...data, series: [...listData.series, ...data.series], attention: [...listData.attention, ...data.attention] };
       }
       renderedGeneration = data.generation;
+      programHover.close();
       renderedQuery = requestedQuery;
       if (isList) listData = data;
       const eventIndex = buildSeriesEventIndex(data);
       const eventContext = {
+        closeHover: programHover.close,
         eventIndex,
         selectedEventKey: eventKey,
         openDetail,
@@ -1037,6 +1042,10 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   }
 
   const unsubscribers = [
+    subscribeRecordedThumbnailReady(() => {
+      renderedGeneration = null;
+      scheduleRefresh(0);
+    }),
     subscribeSeriesNotifications(update => update?.statusOnly ? checkStatus() : scheduleRefresh()),
     subscribeReservationNotifications(() => scheduleRefresh()),
     subscribeRecordedNotifications(() => scheduleRefresh()),
@@ -1046,6 +1055,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   load();
 
   return () => {
+    programHover.dispose();
     controller.abort();
     window.clearTimeout(refreshTimer);
     window.clearTimeout(searchTimer);

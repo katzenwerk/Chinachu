@@ -1,5 +1,6 @@
 import { programDetailUrl } from './program-detail-client.js';
-import { recordedResultWarnings } from './recorded-result-warnings.js';
+import { programHoverInfo } from '../components/program-hover.js';
+import { recordedResultWarnings, recordedFileState } from './recorded-result-warnings.js';
 import { buildProgramDisplayTitle } from './program-title.js';
 
 const dateFormatter = new Intl.DateTimeFormat('ja-JP', {
@@ -50,8 +51,8 @@ function formatDuration(seconds) {
 }
 
 function primaryStatus(item) {
-  if (item?.deletionKind === 'explicit') return { key: 'deleted', label: '削除済み' };
-  if (item?.deletionKind === 'missing') return { key: 'unknown', label: '不明' };
+  if (recordedFileState(item) === 'deleted') return { key: 'deleted', label: '削除済み' };
+  if (recordedFileState(item) === 'missing') return { key: 'file-missing', label: '行方不明' };
   if (item?.status === 'RECORDED' || item?.status === 'RECORDED_UNTRACKED') {
     return { key: 'recorded', label: '録画済' };
   }
@@ -98,6 +99,7 @@ export function buildRecordedResultModels(items, options = {}) {
       key: validText(item?.key) || `recorded-result-${index}`,
       detailUrl: programDetailUrl({ key: validText(item?.key), id: validText(item?.recordedId) }),
       displayTitle: displayTitle.text,
+      hover: programHoverInfo(item, { channelLogoUrl: channelLogoUrl(channel), statuses: [primaryStatus(item), ...recordedResultWarnings(item)] }),
       displayTitleSource: displayTitle.source,
       displayEpisodeSource: displayTitle.episodeSource || null,
       detail: normalizeDisplayText(item?.detail, true),

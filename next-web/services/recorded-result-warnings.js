@@ -16,9 +16,16 @@ function recordedStatus(item) {
   return item?.status === 'RECORDED' || item?.status === 'RECORDED_UNTRACKED';
 }
 
+export function recordedFileState(item) {
+  if (item?.deletionKind === 'explicit' || item?.deletion && item.deletion.reason !== 'recorded-missing') return 'deleted';
+  if (item?.fileMissing || item?.deletionKind === 'file-missing') return 'missing';
+  if (item?.deletionKind === 'missing' || item?.deletion?.reason === 'recorded-missing') return 'ledger';
+  return 'normal';
+}
+
 export function isRecordedResultPlayable(item) {
-  return recordedStatus(item) && item?.deletionKind !== 'explicit' && item?.deletionKind !== 'missing' &&
-    item?.recordingPathMissing !== true && text(item?.recordedId) !== null && item?.detailSource === 'recorded';
+  return recordedStatus(item) && !['deleted', 'missing'].includes(recordedFileState(item)) &&
+    item?.recordingPathMissing !== true && text(item?.recordedId) !== null;
 }
 
 export function formatRecordingSeconds(value, precise = false) {
@@ -89,15 +96,41 @@ function warning(key, label, description, kind = 'confirmed', tone = 'warning') 
   return { key, label, description: description || label, kind, tone };
 }
 
+export function savedTsResultInfo(saved) {
+  const result = saved?.result;
+  if (!result) return { label: '未解析', findings: false, description: '' };
+  const parts = [], notes = [];
+  if (Number.isFinite(result.ccErrorEvents) && result.ccErrorEvents > 0) {
+    parts.push(`CC ${result.ccErrorEvents.toLocaleString('ja-JP')}`);
+    notes.push('保存TSのパケット連続性異常です。件数は欠落パケット数そのものではありません。');
+  }
+  if (Number.isFinite(result.pcrGapEvents) && result.pcrGapEvents > 0) {
+    parts.push('GAPあり'); notes.push('保存TSで検出した時間飛び候補です。発生箇所は解析詳細で確認できます。');
+  }
+  for (const [key, name] of [['teiPackets', 'TEI'], ['syncErrorEvents', '同期'], ['invalidHeaderPackets', 'ヘッダー'], ['pcrBackwards', 'PCR逆行']]) {
+    if (Number.isFinite(result[key]) && result[key] > 0) { parts.push(`${name} ${result[key].toLocaleString('ja-JP')}`); notes.push(`${name}を検出しました。`); }
+  }
+  if (parts.length) return { label: parts.join(' / '), findings: true, description: notes.join('\n') };
+  if (result.status === 'SUSPECT') return { label: '異常検出', findings: true, description: '保存TS解析で異常を検出しました。解析詳細で内容を確認できます。' };
+  if (result.status === 'ERROR') return { label: '解析失敗', findings: false, description: result.error || '' };
+  if (result.completed !== true) return { label: '解析未完了', findings: false, description: result.stopReason || '' };
+  return { label: result.status === 'NO_FINDINGS' ? '異常未検出' : '解析結果なし', findings: false, description: '' };
+}
+
 export function recordedResultWarnings(item) {
   const warnings = [];
+  const analysis = savedTsResultInfo(item?.savedTsAnalysis);
+  if (analysis.findings) warnings.push(warning('saved-ts', `Analyze: ${analysis.label}`, analysis.description));
   if (item?.status === 'MISSED') {
     warnings.push(warning('missed', '未録画', '録画されませんでした', 'confirmed', 'danger'));
   }
-  if (item?.deletionKind === 'explicit') {
+  if (recordedFileState(item) === 'deleted') {
     warnings.push(warning('deleted', '削除済み', '録画ファイルは削除済みとして記録されています', 'confirmed', 'muted'));
-  } else if (item?.deletionKind === 'missing') {
-    warnings.push(warning('recorded-unknown', '不明', '録画履歴と現在の録画管理情報が一致していません（ファイルは未確認です）', 'confirmed', 'muted'));
+  } else if (recordedFileState(item) === 'missing') {
+    warnings.push(warning('file-missing', '行方不明', '正常に捜索を完了しましたが、録画ファイルが見つかりませんでした。明示的に再捜索できます。', 'confirmed', 'muted'));
+  }
+  if (item?.deletionKind === 'missing' || item?.deletion?.reason === 'recorded-missing') {
+    warnings.push(warning('recorded-unknown', '台帳不整合', item?.fileMissing ? '録画ファイルの行方不明に加え、録画管理情報にも対応する項目がありません。' : '録画管理台帳に対応する項目がありません。', 'confirmed', 'muted'));
   } else if (recordedStatus(item) && item?.recordingPathMissing === true) {
     warnings.push(warning('path-unknown', 'パス不明', '録画ファイルの保存パスが台帳にありません', 'confirmed', 'muted'));
   }
@@ -156,8 +189,8 @@ export function recordedResultWarnings(item) {
 
   const dropTotal = Number(item?.mirakurunDrop?.dropTotal);
   if (Number.isFinite(dropTotal) && dropTotal > 0) {
-    warnings.push(warning('drop', `DROP ${dropTotal.toLocaleString('ja-JP')}`,
-      `MirakurunでDROPを${dropTotal.toLocaleString('ja-JP')}件記録（映像への影響は未確認）`, 'confirmed'));
+    warnings.push(warning('drop', `Mirakurun: ${dropTotal.toLocaleString('ja-JP')}`,
+      '録画中にMirakurunが観測したDROP数です。保存TSの詳細解析とは検出方法が異なります。', 'confirmed'));
   }
   const tsDrop = item?.tsDrop && typeof item.tsDrop === 'object' ? item.tsDrop : null;
   if (tsDrop) {
@@ -166,23 +199,23 @@ export function recordedResultWarnings(item) {
     const scrambledPackets = Number(tsDrop.scrambledPackets);
     const syncEvents = Number(tsDrop.syncErrorEvents);
     if (tsDrop.completed !== true) {
-      warnings.push(warning('ts-drop-incomplete', 'TS DROP解析未完了',
+      warnings.push(warning('ts-drop-incomplete', 'Operator: 監視未完了',
         `OperatorのTS解析は完了していません${tsDrop.stopReason ? `（${tsDrop.stopReason}）` : ''}`, 'confirmed'));
     }
     if (Number.isFinite(ccEvents) && ccEvents > 0) {
-      warnings.push(warning('ts-cc', `CC不連続 ${ccEvents.toLocaleString('ja-JP')}`,
+      warnings.push(warning('ts-cc', `Operator: CC ${ccEvents.toLocaleString('ja-JP')}`,
         `録画TSでCC不連続イベントを${ccEvents.toLocaleString('ja-JP')}件検出（欠落パケット数ではありません）`, 'confirmed'));
     }
     if (Number.isFinite(teiPackets) && teiPackets > 0) {
-      warnings.push(warning('ts-tei', `TEI ${teiPackets.toLocaleString('ja-JP')}`,
+      warnings.push(warning('ts-tei', `Operator: TEI ${teiPackets.toLocaleString('ja-JP')}`,
         `録画TSでTransport Error Indicatorを${teiPackets.toLocaleString('ja-JP')}パケット検出`, 'confirmed'));
     }
     if (Number.isFinite(scrambledPackets) && scrambledPackets > 0) {
-      warnings.push(warning('ts-scrambled', `未復号 ${scrambledPackets.toLocaleString('ja-JP')}`,
+      warnings.push(warning('ts-scrambled', `Operator: 未復号 ${scrambledPackets.toLocaleString('ja-JP')}`,
         `録画TSでscrambling制御付きパケットを${scrambledPackets.toLocaleString('ja-JP')}件検出`, 'confirmed'));
     }
     if (Number.isFinite(syncEvents) && syncEvents > 0) {
-      warnings.push(warning('ts-sync', `同期異常 ${syncEvents.toLocaleString('ja-JP')}`,
+      warnings.push(warning('ts-sync', `Operator: 同期 ${syncEvents.toLocaleString('ja-JP')}`,
         `録画TS解析で同期喪失イベントを${syncEvents.toLocaleString('ja-JP')}件検出`, 'confirmed'));
     }
   }

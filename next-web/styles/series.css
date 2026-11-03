@@ -85,8 +85,6 @@
 .series-recording-logo.is-deleted { opacity: .48; filter: grayscale(.75); }
 .series-recording-logo:focus-visible { border-radius: 5px; outline: 2px solid var(--focus); outline-offset: 2px; }
 .series-recording-warning { position: absolute; top: -7px; right: -3px; z-index: 2; color: #d28700; font-size: 13px; font-weight: 700; text-shadow: 0 1px 1px var(--panel); pointer-events: none; }
-.series-recording-tooltip { position: absolute; bottom: calc(100% + 7px); left: 0; z-index: 20; width: max-content; max-width: min(330px,calc(100vw - 28px)); padding: 8px 10px; border: 1px solid color-mix(in srgb,var(--border) 68%,transparent); border-radius: 7px; background: #17261d; color: #fff; box-shadow: var(--shadow); font-size: 11px; line-height: 1.5; opacity: 0; pointer-events: none; transform: translateY(3px); transition: opacity .12s ease,transform .12s ease; white-space: pre-line; }
-.series-recording-logo:hover .series-recording-tooltip,.series-recording-logo:focus-visible .series-recording-tooltip { opacity: 1; transform: translateY(0); }
 .series-event-overflow { position: relative; flex: 0 0 auto; }
 .series-recording-more { display: grid; min-width: 31px; height: 27px; padding: 0 5px; place-items: center; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-subtle); color: var(--muted); cursor: pointer; font-size: 11px; list-style: none; }
 .series-recording-more::-webkit-details-marker { display: none; }

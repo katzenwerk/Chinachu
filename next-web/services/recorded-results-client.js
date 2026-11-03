@@ -31,7 +31,7 @@ function resultKind(item) {
   if (item?.status === 'MISSED') return 'missed';
   if (item?.status === 'SKIPPED_ONLY') return 'skipped';
   if (item?.status === 'RECORDED' || item?.status === 'RECORDED_UNTRACKED') {
-    return item?.deletionKind === 'explicit' ? 'deleted' : 'recorded';
+    return item?.deletionKind === 'explicit' ? 'deleted' : item?.fileMissing ? 'missing' : 'recorded';
   }
   return null;
 }
@@ -47,7 +47,7 @@ export async function loadRecordedResultsPage(options = {}) {
   const pageSize = Number.isInteger(Number(options.limit)) && Number(options.limit) > 0 ? Number(options.limit) : PAGE_SIZE;
   const items = (await loadAllRecordedResults({ ...options, ruleUid: null }))
     .filter(item => typeof item?.ruleUid === 'string' && item.ruleUid === options.ruleUid);
-  const counts = { recorded: 0, deleted: 0, missed: 0, skipped: 0 };
+  const counts = { recorded: 0, deleted: 0, missing: 0, missed: 0, skipped: 0 };
   items.forEach(item => {
     const kind = resultKind(item);
     if (kind) counts[kind] += 1;
@@ -79,14 +79,14 @@ export async function loadRecordedResultsCounts(options = {}) {
       ...options,
       page: 1,
       limit: 1,
-      results: Array.isArray(options.results) ? options.results : ['recorded', 'deleted', 'missed']
+      results: Array.isArray(options.results) ? options.results : ['recorded', 'deleted', 'missing', 'missed']
     });
     counts = result.counts;
   }
   if (!counts || !Number.isInteger(counts.recorded) || !Number.isInteger(counts.deleted) ||
       !Number.isInteger(counts.missed)) throw new Error('Match count API response is invalid');
   return {
-    recorded: counts.recorded + counts.deleted,
+    recorded: counts.recorded + counts.deleted + (counts.missing || 0),
     missed: counts.missed
   };
 }

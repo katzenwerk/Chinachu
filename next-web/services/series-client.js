@@ -1,5 +1,37 @@
 const pendingReads = new Map();
 const projections = new Map();
+// Update only presentation data already cached by this browser, without rebuilding series membership.
+export function applySeriesThumbnail(recordedId, thumbnailUrl) {
+  const affectedSeries = new Set();
+  const updateRecordings = recordings => {
+    let changed = false;
+    for (const recording of recordings || []) {
+      if (String(recording.recordedId) !== String(recordedId) || recording.deleted) continue;
+      recording.thumbnailUrl = thumbnailUrl;
+      changed = true;
+    }
+    return changed;
+  };
+  for (const data of projections.values()) {
+    for (const series of data.series) {
+      for (const episode of series.episodes || []) {
+        const changed = updateRecordings(episode.recordings);
+        for (const event of episode.events || []) updateRecordings(event.recordings);
+        if (!changed) continue;
+        if (!episode.thumbnailUrl) episode.thumbnailUrl = thumbnailUrl;
+        affectedSeries.add(series.id);
+      }
+    }
+    for (const group of data.attention) {
+      for (const event of group.events || []) updateRecordings(event.recordings);
+    }
+  }
+  for (const data of projections.values()) {
+    for (const series of data.series) {
+      if (affectedSeries.has(series.id) && !series.representativeThumbnailUrl) series.representativeThumbnailUrl = thumbnailUrl;
+    }
+  }
+}
 let pendingManualGeneration = 0;
 
 // Shared reads are independent of a page's lifetime. Aborting one consumer
