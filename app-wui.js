@@ -284,6 +284,8 @@ const mirakurunPath = mirakurunConnection.configureClient(mirakurun, config);
 mirakurun.userAgent = `Chinachu/${pkg.version} (wui)`;
 mirakurun.priority = 0;
 
+const channelPreview = require('./lib/channel-preview').createChannelPreview(mirakurun);
+
 console.info(mirakurun);
 
 const healthDiagnostics = healthDiagnosticsModule.createHealthDiagnostics({
@@ -1114,6 +1116,7 @@ function httpServerMain(req, res, query) {
 				ruleUid      : ruleUid,
 				ruleStore    : ruleStore,
 				mirakurun    : mirakurun,
+				channelPreview: channelPreview,
 				config       : config,
 				matchCache   : matchCache,
 				healthDiagnostics: healthDiagnostics,
@@ -1163,6 +1166,7 @@ function httpServerMain(req, res, query) {
 					schedule : schedule,
 					reserves : reserves,
 					recording: recording,
+					reservationTimingReady: seriesTimingReady === 3,
 					recorded : recorded,
 					status   : status
 				},

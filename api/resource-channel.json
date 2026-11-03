@@ -1,4 +1,10 @@
 {
+  "/:chid/preview": {
+    "script": "channel-preview",
+    "methods": ["get"],
+    "types": ["jpg"]
+  },
+
   "/:chid/watch": {
     "script" : "channel-watch",
     "methods": ["get"],
