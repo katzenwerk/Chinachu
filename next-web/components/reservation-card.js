@@ -1,5 +1,6 @@
 import { applyStorageWarning } from './storage-warning.js';
 import { createChannelLogo } from './channel-logo.js';
+import { setProgramHover } from './program-hover.js';
 
 export function createReservationCard(model, { onOpenDetail } = {}) {
   const article = document.createElement('article');
@@ -25,7 +26,7 @@ export function createReservationCard(model, { onOpenDetail } = {}) {
   article.querySelector('time').textContent = model.timeText;
   const title = article.querySelector('.reservation-card-title');
   title.textContent = model.title;
-  title.title = model.title;
+  setProgramHover(title, model.hover);
   title.disabled = model.detailUrl === null || typeof onOpenDetail !== 'function';
   title.addEventListener('click', () => onOpenDetail?.(model));
   applyStorageWarning(article.querySelector('.reservation-storage-warning'), model.storageNotice);

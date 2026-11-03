@@ -1,67 +1,9 @@
-import { applyStorageWarning } from './storage-warning.js';
+import { createProgramHover, setProgramHover } from './program-hover.js';
+import { applyStorageWarning, applyResultWarningTooltip } from './storage-warning.js';
 import { createChannelLogo } from './channel-logo.js';
 import { appendMobileContextButton } from './mobile-layout.js';
 
-let previewTimer = null;
-let previewSource = null;
-let preview = null;
 const rowStates = new WeakMap();
-
-function ensurePreview() {
-  if (preview !== null) return preview;
-  preview = document.createElement('div');
-  preview.className = 'reservation-program-preview';
-  preview.setAttribute('role', 'tooltip');
-  preview.hidden = true;
-  preview.innerHTML = '<strong></strong><p></p>';
-  document.body.append(preview);
-  return preview;
-}
-
-function hideProgramPreview(source = null) {
-  if (source !== null && previewSource !== source) return;
-  window.clearTimeout(previewTimer);
-  previewTimer = null;
-  previewSource = null;
-  if (preview !== null) preview.hidden = true;
-}
-
-function positionProgramPreview(source, element) {
-  const gap = 8;
-  const margin = 10;
-  const sourceRect = source.getBoundingClientRect();
-  const previewRect = element.getBoundingClientRect();
-  let left = sourceRect.left;
-  let top = sourceRect.bottom + gap;
-  if (left + previewRect.width > window.innerWidth - margin) left = window.innerWidth - previewRect.width - margin;
-  if (top + previewRect.height > window.innerHeight - margin) top = sourceRect.top - previewRect.height - gap;
-  element.style.left = `${Math.max(margin, left)}px`;
-  element.style.top = `${Math.max(margin, top)}px`;
-}
-
-function bindProgramPreview(source, state) {
-  source.addEventListener('mouseenter', () => {
-    hideProgramPreview();
-    previewSource = source;
-    previewTimer = window.setTimeout(() => {
-      if (previewSource !== source || !source.isConnected) return;
-      const model = state.model;
-      const element = ensurePreview();
-      element.querySelector('strong').textContent = model.displayTitle;
-      const detail = element.querySelector('p');
-      detail.textContent = model.detail || '';
-      detail.hidden = model.detail === null;
-      element.hidden = false;
-      positionProgramPreview(source, element);
-    }, 500);
-  });
-  source.addEventListener('mouseleave', () => hideProgramPreview(source));
-  source.addEventListener('click', () => hideProgramPreview(source));
-}
-
-export function dismissReservationProgramPreview() {
-  hideProgramPreview();
-}
 
 function setText(element, value) {
   if (element.textContent === value) return false;
@@ -77,6 +19,7 @@ function tagsForModel(model) {
       .filter(status => status.key !== 'missed' || model.primaryStatus?.key !== 'missed')
       .map(status => ({
         key: 'recording-status',
+        resultTooltip: ['drop', 'saved-ts'].includes(status.key),
         label: status.label,
         description: status.description,
         kind: status.kind,
@@ -132,7 +75,8 @@ export function updateReservationListRow(row, model) {
       const element = document.createElement('span');
       element.className = `reservation-list-tag is-${tag.key}${tag.kind ? ` is-${tag.kind}` : ''}${tag.tone ? ` is-${tag.tone}` : ''}`;
       element.textContent = tag.label;
-      if (tag.description) element.title = tag.description;
+      if (tag.resultTooltip) applyResultWarningTooltip(element, tag.description || tag.label);
+      else if (tag.description) element.title = tag.description;
       return element;
     }));
   }
@@ -163,7 +107,7 @@ export function createReservationListRow(model) {
   appendMobileContextButton(row);
   const state = { model, signature: null, channelLogo, tagsSignature: null };
   rowStates.set(row, state);
-  bindProgramPreview(row.querySelector('h2'), state);
+  setProgramHover(row.querySelector('h2'), () => state.model.hover);
   updateReservationListRow(row, model);
   return row;
 }
@@ -179,10 +123,13 @@ export function createReservationListRenderer(content) {
   const list = document.createElement('div');
   list.className = 'reservation-list';
   const rows = new Map();
+  const programHover = createProgramHover(list);
 
   return {
     element: list,
+    dispose() { programHover.dispose(); rows.clear(); list.replaceChildren(); },
     clear() {
+      programHover.close();
       rows.clear();
       list.replaceChildren();
     },
@@ -194,6 +141,7 @@ export function createReservationListRenderer(content) {
 
       rows.forEach((row, key) => {
         if (activeKeys.has(key)) return;
+        programHover.close();
         row.remove();
         rows.delete(key);
         changed = true;

@@ -1,4 +1,4 @@
-export const TIMETABLE_DEFAULTS = Object.freeze({ channelWidth: 150, hourHeight: 180 });
+export const TIMETABLE_DEFAULTS = Object.freeze({ channelWidth: 170, hourHeight: 180 });
 export const TIMETABLE_LIMITS = Object.freeze({ channelWidth: [100, 260, 10], hourHeight: [80, 300, 10] });
 
 const PROGRAM_FLAG_LABELS = new Map([
@@ -89,6 +89,20 @@ export function programFlagPresentation(value) {
 
 export function programTitlePresentation(value) {
   return String(value ?? '').replace(PROGRAM_FLAG_ALTERNATE_RE, token => PROGRAM_FLAG_LABELS.get(token.slice(1, -1)) || token);
+}
+
+export function programTitleParts(value) {
+  const title = String(value ?? '');
+  const pattern = new RegExp(`${PROGRAM_FLAG_ALTERNATE_RE.source}|${[...ENCLOSED_PROGRAM_FLAGS].join('|')}`, 'g');
+  const parts = [];
+  let offset = 0;
+  for (const match of title.matchAll(pattern)) {
+    if (match.index > offset) parts.push({ text: title.slice(offset, match.index) });
+    parts.push({ text: match[0], tone: programFlagPresentation(match[0]).tone });
+    offset = match.index + match[0].length;
+  }
+  if (offset < title.length) parts.push({ text: title.slice(offset) });
+  return parts;
 }
 
 export function isProgramLive(program, now = Date.now()) {

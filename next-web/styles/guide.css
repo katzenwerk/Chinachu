@@ -33,17 +33,41 @@
 .guide-channel-visibility legend { padding: 0 4px; font-size: 11px; font-weight: var(--font-title-weight); }
 .guide-channel-visibility label { display: flex; grid-template-columns: none; min-width: 0; align-items: center; gap: 6px; }
 .guide-channel-visibility label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-html:has(.guide-page) .main-content { padding-bottom: var(--space-3); }
-.guide-scroll { position: relative; height: calc(100dvh - var(--header-height) - var(--layout-page-top) - var(--space-3)); min-height: 420px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-subtle); box-shadow: inset 0 0 0 1px color-mix(in srgb,var(--border) 35%,transparent); cursor: grab; }
+html:has(.guide-page) .main-content { max-width: none; margin-inline: 0; padding-inline: 14px; padding-bottom: var(--space-3); }
+.guide-scroll { position: relative; height: calc(100dvh - var(--header-height) - var(--layout-page-top) - var(--space-3)); min-height: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-subtle); box-shadow: inset 0 0 0 1px color-mix(in srgb,var(--border) 35%,transparent); cursor: grab; }
 .guide-scroll.is-dragging,.guide-scroll.is-dragging * { cursor: grabbing !important; user-select: none; }
 .guide-canvas { position: relative; isolation: isolate; background: var(--panel-subtle); }
 .guide-channel-row { position: sticky; top: 0; z-index: 12; display: grid; height: var(--guide-header); background: var(--panel); box-shadow: 0 2px 5px rgba(20,40,28,.14); }
 .guide-corner { position: sticky; left: 0; z-index: 15; display: grid; place-items: center; border-right: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 11px; }
-.guide-channel { display: flex; min-width: 0; align-items: center; justify-content: center; gap: 7px; padding: 6px 8px; overflow: hidden; border-right: 1px solid var(--border); background: var(--panel); }
-.guide-channel .channel-logo { width: 48px; height: 28px; }
-.guide-channel > span:last-child { min-width: 0; overflow: hidden; font-size: 12px; font-weight: var(--font-title-weight); text-overflow: ellipsis; white-space: nowrap; }
+.guide-channel { display: flex; min-width: 0; align-items: center; gap: 7px; padding: 3px 8px; overflow: hidden; border: 0; border-right: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit; }
+button.guide-channel { cursor: pointer; }
+button.guide-channel:hover { background: var(--brand-soft); }
+.guide-channel .channel-logo { flex: 0 0 40px; width: 40px; height: 28px; }
+.guide-channel > span:last-child { flex: 1; min-width: 0; overflow: hidden; font-size: 12px; font-weight: var(--font-title-weight); text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.guide-scroll.is-weekly { width: 100%; margin-inline: auto; }
+.guide-canvas.is-weekly { margin-inline: auto; }
+.guide-week-date { justify-content: center; font-size: 12px; font-weight: var(--font-title-weight); }
+.guide-week-empty { position: absolute; margin: 0; padding: 0 8px; color: var(--muted); font-size: 12px; text-align: center; pointer-events: none; }
+.guide-toolbar-content [data-week-label] { max-width: 240px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.guide-header-toolbar.is-weekly .guide-date-controls { flex-wrap: nowrap; }
+.guide-header-toolbar.is-weekly [data-now] { display: none; }
+.program-hover { position: fixed; z-index: 100010; display: flex; flex-direction: column; gap: 6px; width: min(480px,calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 16px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); box-shadow: 0 8px 28px #0002; pointer-events: none; }
+.program-hover > header { display: flex; flex: 0 0 22px; min-width: 0; align-items: center; gap: 8px; overflow: hidden; }
+.program-hover .channel-logo { flex: 0 0 40px; width: 40px; height: 22px; }
+.program-hover small { min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.program-hover-title { position: relative; display: -webkit-box; flex: 0 0 auto; min-height: 0; max-height: 4.2em; margin: 0; padding-left: 13px; overflow: hidden; font-size: 16px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.program-hover-title::before { content: ''; position: absolute; top: 3px; bottom: 3px; left: 0; width: 3px; border-radius: 2px; background: var(--brand); }
+.program-hover-date { flex: 0 0 auto; margin: 0; overflow: hidden; color: var(--muted); font-size: 12px; line-height: 1.5; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.program-hover-description { flex: 0 1 auto; min-height: 0; margin: 0; padding-top: 8px; overflow: hidden; border-top: 1px solid var(--border); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.program-hover-description-text { display: -webkit-box; margin: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; max-height: 4.5em; }
+.program-hover-meta { display: flex; flex: 0 0 auto; min-width: 0; max-height: 44px; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 0; overflow: hidden; }
+.program-hover-chip { flex: 0 0 auto; max-width: 100%; padding: 2px 7px; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--panel-subtle); color: var(--muted); font-size: 11px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-height: 320px) {
+  .program-hover { gap: 4px; padding: 10px; }
+  .program-hover-meta { max-height: 21px; }
+}
 .guide-time-axis { position: sticky; left: 0; z-index: 10; width: var(--guide-axis); margin-top: 0; border-right: 1px solid var(--border); background: color-mix(in srgb,var(--panel) 95%,transparent); pointer-events: none; }
-.guide-time-axis time { position: absolute; right: 5px; transform: translateY(-7px); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.guide-time-axis time { position: absolute; left: 0; width: 100%; text-align: center; transform: translateY(-7px); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .guide-grid-line { position: absolute; z-index: 0; height: 1px; background: color-mix(in srgb,var(--border) 62%,transparent); pointer-events: none; }
 .guide-grid-line.is-hour { height: 1px; background: var(--border); }
 .guide-now-line { position: absolute; z-index: 9; height: 2px; background: #db3c48; box-shadow: 0 0 0 1px rgba(255,255,255,.45); pointer-events: none; }
@@ -53,12 +77,12 @@ html:has(.guide-page) .main-content { padding-bottom: var(--space-3); }
 .guide-program-title { display: -webkit-box; flex: 0 0 auto; overflow: hidden; font-size: 12px; font-weight: 600; line-height: 1.35; overflow-wrap: break-word; word-break: normal; -webkit-box-orient: vertical; -webkit-line-clamp: var(--guide-title-lines,2); }
 .guide-program-title time { font-size: 10px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .guide-program-flag { font-size: 10px; font-weight: 500; white-space: nowrap; }
-.guide-program-flag.is-new { color: #16703a; font-weight: 700; }
-.guide-program-flag.is-final { color: #b12630; font-weight: 700; }
-.guide-program-flag.is-repeat { color: #1767a5; font-weight: 700; }
-:root[data-theme="dark"] .guide-program-flag.is-new { color: #83dba0; }
-:root[data-theme="dark"] .guide-program-flag.is-final { color: #ff9097; }
-:root[data-theme="dark"] .guide-program-flag.is-repeat { color: #86c1ff; }
+:is(.guide-program-flag,.program-hover-flag).is-new { color: #16703a; font-weight: 700; }
+:is(.guide-program-flag,.program-hover-flag).is-final { color: #b12630; font-weight: 700; }
+:is(.guide-program-flag,.program-hover-flag).is-repeat { color: #1767a5; font-weight: 700; }
+:root[data-theme="dark"] :is(.guide-program-flag,.program-hover-flag).is-new { color: #83dba0; }
+:root[data-theme="dark"] :is(.guide-program-flag,.program-hover-flag).is-final { color: #ff9097; }
+:root[data-theme="dark"] :is(.guide-program-flag,.program-hover-flag).is-repeat { color: #86c1ff; }
 .guide-program.is-compact { display: block; gap: 0; padding: 0 3px; }
 .guide-program.is-compact .guide-program-title { display: block; overflow: hidden; font-size: 10px; line-height: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .guide-program.is-compact .guide-program-title time { font-size: inherit; }
@@ -116,7 +140,6 @@ html:has(.guide-page) .main-content { padding-bottom: var(--space-3); }
   .guide-date-controls input { flex: 0 0 142px; }
   .guide-types { flex: 1 1 auto; }
   .guide-display-settings > div { position: fixed; top: calc(var(--header-height) + 64px); right: 12px; left: 12px; width: auto; max-height: calc(100dvh - var(--header-height) - 76px); overflow: auto; }
-  .guide-scroll { min-height: 360px; }
   .guide-program-dialog { width: calc(100vw - 12px); max-height: 94dvh; }
   .guide-program-dialog article { max-height: 94dvh; }
   .guide-program-dialog footer { flex-wrap: wrap; }

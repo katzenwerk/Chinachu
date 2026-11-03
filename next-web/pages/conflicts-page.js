@@ -1,4 +1,8 @@
 import { invalidateResources, loadResource } from '../services/api-client.js';
+import { createMonthCalendar } from '../components/month-calendar.js';
+import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
+import { channelLogoUrl } from '../services/recording-model.js';
+import { reservationTags } from '../services/reservation-model.js';
 import { programDetailUrl } from '../services/program-detail-client.js';
 import { subscribeReservationNotifications } from '../services/realtime-client.js';
 import { createGuideProgramMenu } from './guide-page.js';
@@ -75,12 +79,6 @@ function timelineRange(period, offsetHours = 0) {
   const start = Math.round((center - TIMELINE_DURATION_MS / 2) / QUARTER_HOUR_MS) * QUARTER_HOUR_MS
     + offsetHours * HOUR_MS;
   return { start, end: start + TIMELINE_DURATION_MS, step: TIMELINE_STEP_MS };
-}
-
-function localDateTimeValue(timestamp) {
-  const date = new Date(timestamp);
-  const pad = value => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function timelineEntries(programs, range) {
@@ -210,19 +208,18 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
   next.textContent = '1時間後へ ▶';
   next.addEventListener('click', () => onShift(1));
   if (general !== null) {
-    const startLabel = document.createElement('label');
+    const startLabel = document.createElement('div');
     startLabel.className = 'conflicts-timeline-date-label';
     startLabel.textContent = '表示開始';
-    const startInput = document.createElement('input');
-    startInput.type = 'datetime-local';
-    startInput.value = localDateTimeValue(general.start);
-    startInput.setAttribute('aria-label', '通常タイムラインの表示開始日時');
-    startInput.addEventListener('change', () => {
-      const requested = new Date(startInput.value).getTime();
-      if (Number.isFinite(requested)) general.onStartChange(requested);
-    });
-    startLabel.append(startInput);
+    const pickerHost = document.createElement('div');
+    startLabel.append(pickerHost);
     controls.append(startLabel);
+    const calendar = createMonthCalendar(pickerHost, {
+      mode: 'datetime',
+      value: new Date(general.start),
+      onSelect: general.onStartChange
+    });
+    general.onCalendarCreated?.(calendar);
   }
   controls.append(previous, rangeLabel, reset, next);
   wrapper.append(title, legend, controls);
@@ -295,9 +292,9 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
       link.style.width = `${(visibleEnd - visibleStart) / duration * 100}%`;
       const name = titleOf(entry.program);
       link.textContent = name;
-      link.title = `${name}\n${timeRange(entry.period)}\n${channelOf(entry.program)}${entry.program.isConflict ? '\n競合判定' : ''}`;
+      setProgramHover(link, programHoverInfo(entry.program, { channelLogoUrl: channelLogoUrl(entry.program.channel), statuses: reservationTags(entry.program) }));
       if (id) link.href = programDetailUrl({ id });
-      link.setAttribute('aria-label', link.title.replaceAll('\n', '、'));
+      link.setAttribute('aria-label', `${name}、${timeRange(entry.period)}、${channelOf(entry.program)}${entry.program.isConflict ? '、競合判定' : ''}`);
       if (id) link.addEventListener('contextmenu', event => {
         event.preventDefault();
         event.stopPropagation();
@@ -417,9 +414,11 @@ export function renderConflictsPage(container) {
   const preferredRuleUids = new Map();
   const timelineOffsets = new Map();
   let overviewStart = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+  let overviewCalendar = null;
 
   const page = document.createElement('div');
   page.className = 'conflicts-page';
+  const programHover = createProgramHover(page);
   const intro = document.createElement('section');
   intro.className = 'panel conflicts-intro';
   const heading = document.createElement('h2');
@@ -499,9 +498,12 @@ export function renderConflictsPage(container) {
 
   function render() {
     if (!active || programs === null) return;
+    programHover.close();
     activeMenu?.remove();
     activeMenu = null;
     clearExpiryTimer();
+    overviewCalendar?.destroy();
+    overviewCalendar = null;
     const now = Date.now();
     const conflicts = programs.filter(program => program?.isConflict === true && program.isSkip !== true &&
       interval(program)?.end > now).sort((a, b) => interval(a).start - interval(b).start);
@@ -531,7 +533,8 @@ export function renderConflictsPage(container) {
       start: overviewStart,
       isCurrent: overviewStart === currentHour,
       onStartChange: timestamp => { overviewStart = timestamp; render(); },
-      onReset: () => { overviewStart = Math.floor(Date.now() / HOUR_MS) * HOUR_MS; render(); }
+      onReset: () => { overviewStart = Math.floor(Date.now() / HOUR_MS) * HOUR_MS; render(); },
+      onCalendarCreated: calendar => { overviewCalendar = calendar; }
     }, tuners));
 
     const endTimes = programs.map(program => interval(program)?.end).filter(end => end > now);
@@ -557,6 +560,8 @@ export function renderConflictsPage(container) {
       message.className = 'panel conflicts-message';
       message.textContent = '予約情報を更新できません。再度ページを開くか、接続状態をご確認ください。';
       content.replaceChildren(message);
+      overviewCalendar?.destroy();
+      overviewCalendar = null;
       overview.replaceChildren();
     });
   }
@@ -565,9 +570,11 @@ export function renderConflictsPage(container) {
   refresh();
   return () => {
     active = false;
+    programHover.dispose();
     generation++;
     clearExpiryTimer();
     activeMenu?.remove();
+    overviewCalendar?.destroy();
     ruleDialog?.close();
     unsubscribe();
   };

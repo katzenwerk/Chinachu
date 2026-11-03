@@ -21,17 +21,38 @@ function sameDate(a, b) {
   return a !== null && b !== null && dateValue(a) === dateValue(b);
 }
 
-export function createMonthCalendar(container, { onSelect }) {
+function validDate(value) {
+  if (!(value instanceof Date) && typeof value !== 'number') return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function pickerLabel(value, withTime) {
+  const date = dateValue(value).replaceAll('-', '/');
+  return withTime
+    ? `${date} ${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`
+    : date;
+}
+
+// mode: icon (the reservation-list popup), date (guide), datetime (timeline).
+export function createMonthCalendar(container, { onSelect, mode = 'icon', value = null, minDate = null } = {}) {
   const today = startOfDay(new Date());
-  let selected = null;
-  let viewMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const withTime = mode === 'datetime';
+  const iconOnly = mode === 'icon';
+  let currentValue = validDate(value);
+  let minimum = validDate(minDate);
+  let selected = currentValue ? startOfDay(currentValue) : null;
+  const initialMonth = currentValue || today;
+  let viewMonth = new Date(initialMonth.getFullYear(), initialMonth.getMonth(), 1);
+  const title = iconOnly ? '日付へジャンプ' : withTime ? '表示開始日時を選択' : '日付を選択';
 
   container.innerHTML = `
-    <div class="reserves-date-jump list-control-popup">
-      <button class="reserves-date-jump-button list-control-popup-trigger" type="button" title="日付へジャンプ" aria-label="日付へジャンプ" aria-haspopup="dialog" aria-expanded="false">
-        <svg class="icon" aria-hidden="true"><use href="#icon-calendar"></use></svg>
+    <div class="${iconOnly ? 'reserves-date-jump ' : ''}list-control-popup">
+      <button class="${iconOnly ? 'reserves-date-jump-button ' : 'button '}list-control-popup-trigger" type="button" title="${title}" aria-label="${title}" aria-haspopup="dialog" aria-expanded="false">
+        ${iconOnly ? '' : '<span class="month-calendar-trigger-text"></span>'}
+        <svg class="icon${iconOnly ? '' : ' icon-small'}" aria-hidden="true"><use href="#icon-calendar"></use></svg>
       </button>
-      <div class="list-control-popup-panel month-calendar" role="dialog" aria-label="日付へジャンプ" hidden>
+      <div class="list-control-popup-panel month-calendar" role="dialog" aria-label="${title}" hidden>
         <div class="month-calendar-header">
           <button type="button" class="month-calendar-nav is-prev" aria-label="前の月">‹</button>
           <strong></strong>
@@ -42,12 +63,77 @@ export function createMonthCalendar(container, { onSelect }) {
       </div>
     </div>`;
 
-  const root = container.querySelector('.reserves-date-jump');
-  const trigger = root.querySelector('.reserves-date-jump-button');
+  const root = container.querySelector('.list-control-popup');
+  const trigger = root.querySelector('.list-control-popup-trigger');
   const panel = root.querySelector('.month-calendar');
   const heading = panel.querySelector('.month-calendar-header strong');
   const days = panel.querySelector('.month-calendar-days');
   let popup;
+  let hourInput = null;
+  let minuteInput = null;
+
+  if (!iconOnly) {
+    trigger.style.display = 'inline-flex';
+    trigger.style.alignItems = 'center';
+    trigger.style.justifyContent = 'space-between';
+    trigger.style.gap = '8px';
+    trigger.style.whiteSpace = 'nowrap';
+    if (mode === 'date') trigger.style.minWidth = '142px';
+    panel.style.whiteSpace = 'normal';
+    panel.style.maxHeight = 'calc(100dvh - 115px)';
+    panel.style.overflowY = 'auto';
+  }
+
+  if (withTime) {
+    const timeRow = document.createElement('div');
+    timeRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px;';
+    const timeLabel = document.createElement('span');
+    timeLabel.textContent = '時刻';
+    timeLabel.style.marginRight = 'auto';
+    const createSelect = (max, label) => {
+      const input = document.createElement('select');
+      input.setAttribute('aria-label', label);
+      input.style.cssText = 'min-height:30px;padding:3px 5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--panel);color:var(--text);font:inherit;';
+      for (let number = 0; number <= max; number++) {
+        const option = document.createElement('option');
+        option.value = String(number);
+        option.textContent = String(number).padStart(2, '0');
+        input.append(option);
+      }
+      return input;
+    };
+    hourInput = createSelect(23, '時');
+    minuteInput = createSelect(59, '分');
+    const separator = document.createElement('span');
+    separator.textContent = ':';
+    timeRow.append(timeLabel, hourInput, separator, minuteInput);
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;justify-content:flex-end;margin-top:10px;';
+    const apply = document.createElement('button');
+    apply.type = 'button';
+    apply.className = 'button primary';
+    apply.textContent = 'この日時を表示';
+    apply.addEventListener('click', () => {
+      if (selected === null) return;
+      const next = new Date(selected.getFullYear(), selected.getMonth(), selected.getDate(),
+        Number(hourInput.value), Number(minuteInput.value));
+      currentValue = next;
+      updateTrigger();
+      popup.close('selection');
+      onSelect(next.getTime());
+    });
+    actions.append(apply);
+    panel.append(timeRow, actions);
+  }
+
+  function updateTrigger() {
+    if (iconOnly) return;
+    const displayed = currentValue || today;
+    const formatted = pickerLabel(displayed, withTime);
+    trigger.querySelector('.month-calendar-trigger-text').textContent = formatted;
+    trigger.setAttribute('aria-label', `${title}：${formatted}`);
+  }
 
   function render() {
     const first = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
@@ -69,6 +155,11 @@ export function createMonthCalendar(container, { onSelect }) {
         button.classList.add('is-selected');
         button.setAttribute('aria-selected', 'true');
       }
+      if (minimum && day < startOfDay(minimum)) {
+        button.disabled = true;
+        button.style.cursor = 'not-allowed';
+        button.style.opacity = '.35';
+      }
       buttons.push(button);
     }
     days.replaceChildren(...buttons);
@@ -76,7 +167,15 @@ export function createMonthCalendar(container, { onSelect }) {
 
   function selectDay(value) {
     const parts = value.split('-').map(Number);
-    selected = new Date(parts[0], parts[1] - 1, parts[2]);
+    const next = new Date(parts[0], parts[1] - 1, parts[2]);
+    if (minimum && next < startOfDay(minimum)) return;
+    selected = next;
+    if (withTime) {
+      render();
+      return;
+    }
+    currentValue = next;
+    updateTrigger();
     popup.close('selection');
     onSelect(value);
   }
@@ -88,14 +187,14 @@ export function createMonthCalendar(container, { onSelect }) {
 
   function focusDate(value) {
     const target = days.querySelector(`[data-date="${dateValue(value)}"]`);
-    target?.focus();
+    if (target && !target.disabled) target.focus();
   }
 
   panel.querySelector('.is-prev').addEventListener('click', () => moveMonth(-1));
   panel.querySelector('.is-next').addEventListener('click', () => moveMonth(1));
   days.addEventListener('click', event => {
     const button = event.target.closest('.month-calendar-day');
-    if (button) selectDay(button.dataset.date);
+    if (button && !button.disabled) selectDay(button.dataset.date);
   });
   days.addEventListener('keydown', event => {
     const button = event.target.closest('.month-calendar-day');
@@ -105,6 +204,7 @@ export function createMonthCalendar(container, { onSelect }) {
     if (Object.hasOwn(offsets, event.key)) {
       event.preventDefault();
       const next = addDays(current, offsets[event.key]);
+      if (minimum && next < startOfDay(minimum)) return;
       if (next.getMonth() !== viewMonth.getMonth()) {
         viewMonth = new Date(next.getFullYear(), next.getMonth(), 1);
         render();
@@ -117,10 +217,35 @@ export function createMonthCalendar(container, { onSelect }) {
     }
   });
 
-  popup = createHoverPopupController({ root, trigger, panel, onOpen: render });
+  popup = createHoverPopupController({
+    root, trigger, panel, hover: iconOnly,
+    onOpen: () => {
+      if (!iconOnly) {
+        selected = startOfDay(currentValue || today);
+        viewMonth = new Date(selected.getFullYear(), selected.getMonth(), 1);
+        if (withTime) {
+          hourInput.value = String((currentValue || today).getHours());
+          minuteInput.value = String((currentValue || today).getMinutes());
+        }
+      }
+      render();
+    }
+  });
+  updateTrigger();
   render();
 
   return {
+    setValue(next) {
+      currentValue = validDate(next);
+      selected = currentValue ? startOfDay(currentValue) : null;
+      if (currentValue) viewMonth = new Date(currentValue.getFullYear(), currentValue.getMonth(), 1);
+      updateTrigger();
+      if (popup.isOpen()) render();
+    },
+    setMinDate(next) {
+      minimum = validDate(next);
+      if (popup.isOpen()) render();
+    },
     destroy() { popup.destroy(); }
   };
 }

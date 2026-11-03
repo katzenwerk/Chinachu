@@ -151,7 +151,7 @@
 
   /* Keep EPG overflow inside the existing scroll viewport. */
   html:has(.guide-page) .main-content { padding-top: 6px; padding-bottom: calc(var(--mobile-nav-height) + 6px); }
-  .guide-scroll { height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 12px); min-height: 280px; max-width: 100%; touch-action: pan-x pan-y; }
+  .guide-scroll { height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 12px); min-height: 0; max-width: 100%; touch-action: pan-x pan-y; }
   .guide-time-axis { z-index: 14; background: var(--panel); box-shadow: 2px 0 4px color-mix(in srgb,var(--border) 60%,transparent); }
   .guide-corner { z-index: 16; background: var(--panel); }
   .guide-program-title,.guide-program.is-compact .guide-program-title { font-size: 15px; line-height: 1.35; }
@@ -262,8 +262,8 @@
   .rule-compact-range { flex-wrap: wrap; }
   .rule-editor-form > footer { padding: 10px 12px; gap: 8px; }
   .rule-match-row { grid-template-columns: minmax(0,1fr); font-size: 14px; }
-  .cleaner-dialog { overflow-y: auto; }
-  .cleaner-dialog-body { max-height: none; padding: 12px; overflow: visible; }
+  .cleaner-dialog { overflow: hidden; }
+  .cleaner-dialog-body { padding: 12px; }
   .cleaner-dialog-header,.cleaner-dialog-footer { flex-wrap: wrap; padding: 12px; }
   .cleaner-dialog-options { min-width: 0; padding: 8px; }
   .cleaner-dialog-options label.cleaner-dialog-suboption { margin-left: 12px; }
@@ -271,7 +271,7 @@
   .settings-save-dialog form { max-height: 100%; }
   .guide-context-menu,.rules-context-menu,.recorded-context-menu,.recorded-context-submenu { inset: auto 8px calc(var(--mobile-nav-height) + 8px) !important; width: auto; min-width: 0; max-height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 24px); border-radius: 12px; }
   :is(.guide-context-menu,.rules-context-menu,.recorded-context-menu,.recorded-context-submenu) button { min-height: 44px; font-size: 15px; }
-  :is(.main-content,dialog) :is(.button,button:not(.guide-program):not(.recorded-card-thumbnail):not(.program-modal-thumbnail),summary) { min-height: 44px; }
+  :is(.main-content,dialog) :is(.button,button:not(.guide-program):not(.guide-channel):not(.recorded-card-thumbnail):not(.program-modal-thumbnail),summary) { min-height: 44px; }
   :is(.main-content,dialog) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),select,textarea) { max-width: 100%; min-width: 0; min-height: 44px; font-size: 16px; }
   :is(.main-content,dialog) :is(input[type="checkbox"],input[type="radio"]) { width: 20px; height: 20px; }
   .storage-warning .storage-warning-tip { position: fixed; inset: auto 12px calc(var(--mobile-nav-height) + 12px); width: auto; max-width: none; max-height: 45dvh; overflow-y: auto; transform: none; white-space: normal; z-index: 100; font-size: 14px; }

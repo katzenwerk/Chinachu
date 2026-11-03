@@ -42,7 +42,7 @@
 .conflicts-timeline-controls { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .conflicts-timeline-nav { min-height: 30px; padding: 4px 9px; font-size: 11px; }
 .conflicts-timeline-nav:disabled { opacity: .45; cursor: default; }
-.conflicts-timeline-range-label { color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.conflicts-timeline-range-label { flex: 0 0 19em; color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; text-align: center; white-space: nowrap; }
 .conflicts-timeline-bar.is-clipped-left { border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 12px; }
 .conflicts-timeline-bar.is-clipped-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .conflicts-timeline-bar.is-clipped-left::before { position: absolute; top: 3px; left: 2px; content: '◀'; font-size: 9px; }

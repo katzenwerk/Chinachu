@@ -1,5 +1,6 @@
 import { buildRecordingStorageDisplay } from './storage-model.js';
 import { programDetailUrl } from './program-detail-client.js';
+import { programHoverInfo } from '../components/program-hover.js';
 
 const timeFormatter = new Intl.DateTimeFormat('ja-JP', {
   hour: '2-digit',
@@ -119,6 +120,8 @@ export function buildRecordingViewModels(programs, now = Date.now(), options = {
       key: id || `invalid-${index}`,
       id,
       title: String(program.title || program.fullTitle || 'タイトル未取得'),
+      hover: programHoverInfo(program, { channelLogoUrl: channelLogoUrl(channel),
+        statuses: [status === 'preparing' ? '準備中' : '録画中', storageDisplay.notice?.label] }),
       channelName,
       channelIdentifier: identifier,
       channelLogoUrl: channelLogoUrl(channel),

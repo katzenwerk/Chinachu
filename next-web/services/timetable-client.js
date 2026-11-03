@@ -2,6 +2,7 @@ import { invalidateResources, loadResources } from './api-client.js';
 import { hasReservationCapacityConflict } from './reservation-capacity-model.js';
 import { programRecordingAction, reservationActionLabel } from './program-detail-model.js';
 import { confirmReservationWarning } from '../components/reservation-confirm-dialog.js';
+import { TIMETABLE_DEFAULTS } from './timetable-model.js';
 
 async function json(response, label) {
   if (!response.ok) throw new Error(`${label}に失敗しました (HTTP ${response.status})`);
@@ -26,11 +27,11 @@ export function refreshTimetableData(names) {
 export function loadWuiConfig() {
   return fetch('/api/wui-config.json', { headers: { Accept: 'application/json' }, cache: 'no-store' })
     .then(response => response.status === 404
-      ? { version: 1, timetable: { channelWidth: 150, hourHeight: 180 } }
+      ? { version: 1, timetable: { ...TIMETABLE_DEFAULTS } }
       : json(response, 'WUI設定の取得'))
     .catch(error => ({
       version: 1,
-      timetable: { channelWidth: 150, hourHeight: 180 },
+      timetable: { ...TIMETABLE_DEFAULTS },
       loadWarning: error.message
     }));
 }

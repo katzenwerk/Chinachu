@@ -1,4 +1,5 @@
 import { channelDetailText, channelIdentifier, channelLogoUrl } from './recording-model.js';
+import { programHoverInfo } from '../components/program-hover.js';
 import { buildReservationStorageDisplay } from './storage-model.js';
 import { programDetailUrl } from './program-detail-client.js';
 import { buildProgramDisplayTitle } from './program-title.js';
@@ -76,7 +77,7 @@ function formatDateInputValue(value) {
   return `${year}-${month}-${day}`;
 }
 
-function reservationTags(program) {
+export function reservationTags(program) {
   const tags = [];
   if (program.isSkip === true) tags.push({ key: 'skip', label: 'スキップ' });
   if (program.isConflict === true) tags.push({ key: 'conflict', label: '競合', description: CONFLICT_DESCRIPTION });
@@ -133,6 +134,7 @@ export function buildReservationListModels(programs, options = {}) {
       id,
       detailUrl: programDetailUrl({ id }),
       fullTitle,
+      hover: programHoverInfo(program, { channelLogoUrl: channelLogoUrl(channel), statuses: reservationTags(program) }),
       displayTitle: displayTitle.text,
       displayTitleSource: displayTitle.source,
       displayEpisodeSource: displayTitle.episodeSource || null,
@@ -155,6 +157,8 @@ export function buildReservationListModels(programs, options = {}) {
       isSkip: program?.isSkip === true,
       isConflict: program?.isConflict === true,
       isManualReserved: program?.isManualReserved === true,
+      recordedDirId: program?.recordedDirId,
+      recordedDir: program?.recordedDir,
       ruleUid: validText(program?.ruleUid) || validText(program?.reservationMeta?.ruleUid),
       ruleId: program?.ruleId === undefined || program.ruleId === null ? null : String(program.ruleId)
     };
@@ -245,6 +249,7 @@ export function buildNextReservationView(programs, now = Date.now(), options = {
         durationText: end === null ? null : `${Math.max(1, Math.round((end - start) / 60000))}分`,
         title: String(program.title || program.fullTitle || 'タイトル未取得'),
         timelineTitle: String(program.fullTitle || program.title || 'タイトル未取得'),
+        hover: programHoverInfo(program, { channelLogoUrl: channelLogoUrl(channel), statuses: reservationTags(program) }),
         channelName: String(channel.name || 'チャンネル未取得'),
         channelText: [String(channel.name || 'チャンネル未取得'), identifier].filter(Boolean).join(' · '),
         channelLogoUrl: channelLogoUrl(channel),

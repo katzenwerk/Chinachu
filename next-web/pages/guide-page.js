@@ -1,4 +1,6 @@
+import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
 import { createChannelLogo } from '../components/channel-logo.js';
+import { createMonthCalendar } from '../components/month-calendar.js';
 import { createHomeProgramContextMenu } from '../components/home-program-context-menu.js';
 import { headerCompactMedia as createHeaderCompactMedia } from '../components/mobile-layout.js';
 import { invalidateResources, loadResource } from '../services/api-client.js';
@@ -16,14 +18,14 @@ import {
   subscribeRecordingNotifications, subscribeReservationNotifications, subscribeScheduleNotifications
 } from '../services/realtime-client.js';
 import {
-  broadcastDayStart, dateInputValue, dayStartFromInput, guideDisplayRange,
+  broadcastDayStart, dayStartFromInput, guideDisplayRange,
   programContentLayout, programFlagPresentation, programPosition, programState, programTitlePresentation,
   TIMETABLE_DEFAULTS, TIMETABLE_LIMITS
 } from '../services/timetable-model.js';
 
 const DAY_MS = 86400000;
 const AXIS_WIDTH = 48;
-const HEADER_HEIGHT = 60;
+const HEADER_HEIGHT = 36;
 const TYPES = ['GR', 'BS', 'CS', 'SKY'];
 const HIDDEN_CHANNELS_STORAGE_KEY = 'chinachu.next.guide.hiddenChannels.v1';
 
@@ -211,6 +213,14 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
   let minuteTimer = null;
   let dragDispose = null;
   let ruleDialog = null;
+  let dateCalendar = null;
+  let customChannelWidth = false;
+  let renderedHourHeight = config.hourHeight;
+  let layoutSignature = '';
+  let layoutFrame = null;
+  let layoutObserver = null;
+  let weeklyChannel = null;
+  let normalView = null;
   const preferredRuleUids = new Map();
   let refreshSequence = 0;
   let headerCompactMedia = null;
@@ -220,6 +230,43 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
 
   container.className = 'guide-page';
   container.innerHTML = '<section class="panel guide-loading"><p>番組表を読み込んでいます…</p></section>';
+  const programHover = createProgramHover(container);
+
+  function gridRange() {
+    return weeklyChannel ? { start: dayStart, end: dayStart + DAY_MS } : displayRange;
+  }
+
+  function gridColumns() {
+    if (weeklyChannel) {
+      const channel = data.schedule.find(item => item.id === weeklyChannel.id) || { ...weeklyChannel, programs: [] };
+      return Array.from({ length: 8 }, (_, index) => ({ channel, start: dayStart + index * DAY_MS, end: dayStart + (index + 1) * DAY_MS }));
+    }
+    return data.schedule.filter(channel => visibleTypes.has(channel.type) && !hiddenChannelIds.has(text(channel.id)))
+      .map(channel => ({ channel, ...displayRange }));
+  }
+
+  function updateWeeklyControls() {
+    const toolbar = document.querySelector('.guide-header-toolbar');
+    toolbar.classList.toggle('is-weekly', !!weeklyChannel);
+    toolbar.querySelector('[data-week-back]').hidden = !weeklyChannel;
+    const label = toolbar.querySelector('[data-week-label]');
+    label.hidden = !weeklyChannel;
+    label.textContent = weeklyChannel ? `${weeklyChannel.name}：週間番組表（8日分）` : '';
+    toolbar.querySelector('.guide-types').hidden = !!weeklyChannel;
+    toolbar.querySelector('.guide-channel-visibility').hidden = !!weeklyChannel;
+    toolbar.querySelector('[data-width]').disabled = !!weeklyChannel;
+  }
+
+  function openWeekly(channel) {
+    const scroll = container.querySelector('.guide-scroll');
+    normalView = { left: scroll.scrollLeft, top: scroll.scrollTop, dayStart, displayRange };
+    weeklyChannel = { id: channel.id, name: channel.name };
+    closeGuideProgramMenu();
+    updateWeeklyControls();
+    renderGrid();
+    scroll.scrollLeft = 0;
+    scroll.scrollTop = 0;
+  }
 
   async function refreshState(resources = ['reserves']) {
     const sequence = ++refreshSequence;
@@ -243,18 +290,60 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     subscribeScheduleNotifications(() => handleRealtime(['schedule']))
   );
 
+  function measureLayout(scroll, channelCount) {
+    scroll.classList.toggle('is-weekly', !!weeklyChannel);
+    const scrollbarWidth = Math.max(0, scroll.offsetWidth - scroll.clientWidth - 2);
+    scroll.style.maxWidth = weeklyChannel ? `${AXIS_WIDTH + 8 * 190 + 2 + scrollbarWidth}px` : '';
+    const main = container.closest('.main-content');
+    const bottomPadding = main ? parseFloat(getComputedStyle(main).paddingBottom) || 0 : 12;
+    const availableHeight = Math.max(0, window.innerHeight - scroll.getBoundingClientRect().top - bottomPadding);
+    scroll.style.height = `${availableHeight}px`;
+    const range = gridRange();
+    const hours = (range.end - range.start) / 3600000;
+    return {
+      hourHeight: Math.max(config.hourHeight, Math.floor(Math.max(0, scroll.clientHeight - HEADER_HEIGHT) / hours * 1000) / 1000),
+      channelWidth: weeklyChannel ? Math.max(150, Math.min(190, (scroll.clientWidth - AXIS_WIDTH) / 8))
+        : customChannelWidth || channelCount === 0 ? config.channelWidth
+        : Math.max(config.channelWidth, (scroll.clientWidth - AXIS_WIDTH) / channelCount)
+    };
+  }
+
+  function scheduleLayout() {
+    programHover.close();
+    if (disposed || !data || layoutFrame !== null) return;
+    layoutFrame = window.requestAnimationFrame(() => {
+      layoutFrame = null;
+      const scroll = container.querySelector('.guide-scroll');
+      if (!scroll) return;
+      const channelCount = gridColumns().length;
+      const layout = measureLayout(scroll, channelCount);
+      if (JSON.stringify(layout) !== layoutSignature) renderGrid(true);
+    });
+  }
+
   function renderGrid(preserveScroll = false) {
+    programHover.close();
     const scroll = container.querySelector('.guide-scroll');
-    const previous = preserveScroll && scroll ? { left: scroll.scrollLeft, top: scroll.scrollTop } : null;
+    const previous = preserveScroll && scroll ? { left: scroll.scrollLeft, top: scroll.scrollTop,
+      hourHeight: renderedHourHeight } : null;
     logoHandles.forEach(handle => handle.dispose());
     logoHandles = [];
-    const channels = data.schedule.filter(channel => visibleTypes.has(channel.type) && !hiddenChannelIds.has(text(channel.id)));
-    const hourHeight = config.hourHeight;
-    const channelWidth = config.channelWidth;
-    const bodyHeight = (displayRange.end - displayRange.start) / 3600000 * hourHeight;
-    const canvasWidth = AXIS_WIDTH + channels.length * channelWidth;
+    const columns = gridColumns();
+    const range = gridRange();
+    const layout = measureLayout(scroll, columns.length);
+    const { hourHeight, channelWidth } = layout;
+    layoutSignature = JSON.stringify(layout);
+    renderedHourHeight = hourHeight;
+    const widthOutput = document.querySelector('.guide-header-toolbar [data-width-output]');
+    const heightOutput = document.querySelector('.guide-header-toolbar [data-height-output]');
+    if (widthOutput) widthOutput.textContent = weeklyChannel ? `${Math.round(channelWidth)}px（週間表示）`
+      : `${config.channelWidth}px${channelWidth > config.channelWidth ? `（表示 ${Math.round(channelWidth)}px）` : ''}`;
+    if (heightOutput) heightOutput.textContent = `${config.hourHeight}px${hourHeight > config.hourHeight ? `（表示 ${Math.round(hourHeight)}px）` : ''}`;
+    const bodyHeight = (range.end - range.start) / 3600000 * hourHeight;
+    const canvasWidth = AXIS_WIDTH + columns.length * channelWidth;
     const canvas = document.createElement('div');
     canvas.className = 'guide-canvas';
+    canvas.classList.toggle('is-weekly', !!weeklyChannel);
     canvas.style.width = `${canvasWidth}px`;
     canvas.style.height = `${HEADER_HEIGHT + bodyHeight}px`;
     canvas.style.setProperty('--guide-axis', `${AXIS_WIDTH}px`);
@@ -263,14 +352,23 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     const header = document.createElement('div');
     header.className = 'guide-channel-row';
     header.style.width = `${canvasWidth}px`;
-    header.style.gridTemplateColumns = `${AXIS_WIDTH}px repeat(${channels.length},${channelWidth}px)`;
+    header.style.gridTemplateColumns = `${AXIS_WIDTH}px repeat(${columns.length},${channelWidth}px)`;
     header.innerHTML = '<div class="guide-corner"></div>';
-    channels.forEach(channel => {
-      const cell = document.createElement('div');
+    columns.forEach(({ channel, start }) => {
+      const cell = document.createElement(weeklyChannel ? 'div' : 'button');
       cell.className = 'guide-channel';
+      if (weeklyChannel) {
+        cell.textContent = new Intl.DateTimeFormat('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short' }).format(new Date(start));
+        cell.classList.add('guide-week-date');
+        cell.title = '04:00 〜 翌04:00';
+        header.append(cell);
+        return;
+      }
+      cell.type = 'button';
       const tooltip = channelDetailText(channel);
       cell.title = tooltip;
-      cell.setAttribute('aria-label', tooltip);
+      cell.setAttribute('aria-label', `${tooltip}。週間番組表を表示`);
+      cell.addEventListener('click', () => openWeekly(channel));
       const logo = createChannelLogo({ name: channel.name, url: logoUrl(channel), tooltip }, { variant: 'list' });
       logoHandles.push(logo);
       const name = document.createElement('span');
@@ -282,13 +380,13 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     const axis = document.createElement('div');
     axis.className = 'guide-time-axis';
     axis.style.height = `${bodyHeight}px`;
-    const halfHourCount = Math.round((displayRange.end - displayRange.start) / (30 * 60000));
+    const halfHourCount = Math.round((range.end - range.start) / (30 * 60000));
     for (let half = 0; half <= halfHourCount; half++) {
-      const timestamp = displayRange.start + half * 30 * 60000;
+      const timestamp = range.start + half * 30 * 60000;
       const y = half * hourHeight / 2;
       const line = document.createElement('div');
       line.className = `guide-grid-line${half % 2 === 0 ? ' is-hour' : ''}`;
-      line.style.top = `${HEADER_HEIGHT + y}px`;
+      line.style.top = `${HEADER_HEIGHT + y - (half === halfHourCount ? 1 : 0)}px`;
       line.style.left = `${AXIS_WIDTH}px`;
       line.style.width = `${canvasWidth - AXIS_WIDTH}px`;
       canvas.append(line);
@@ -300,10 +398,12 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
       }
     }
     canvas.append(axis);
-    channels.forEach((channel, channelIndex) => {
+    columns.forEach(({ channel, start, end }, channelIndex) => {
+      let programCount = 0;
       (channel.programs || []).forEach(program => {
-        const position = programPosition(program, displayRange.start, hourHeight, displayRange.end);
+        const position = programPosition(program, start, hourHeight, end);
         if (!position) return;
+        programCount += 1;
         const displayProgram = {
           ...program,
           channel: { ...channel, ...(program.channel || {}) }
@@ -318,8 +418,6 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
         const renderedHeight = Math.max(2, position.height - 2);
         const contentLayout = programContentLayout(renderedHeight, channelWidth);
         cell.style.height = `${renderedHeight}px`;
-        cell.title = [programTitlePresentation(program.fullTitle || program.title || ''),
-          state.reserve?.isConflict === true ? CONFLICT_DESCRIPTION : ''].filter(Boolean).join('\n');
         if (contentLayout.mode !== 'normal') cell.classList.add(`is-${contentLayout.mode}`);
         const episode = program.episode === null || program.episode === undefined ? '' : String(program.episode).trim();
         const subtitle = text(program.subTitle) || (episode ? `第${episode}話` : '');
@@ -331,8 +429,11 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
           : '';
         cell.innerHTML = contentLayout.mode === 'tiny' ? '' : title + description;
         cell.setAttribute('aria-label', `${formatTime(program.start)} ${state.key === 'none' ? '' : `${state.label} `}${displayTitle}`);
+        setProgramHover(cell, programHoverInfo(displayProgram, { channelLogoUrl: logoUrl(channel),
+          statuses: state.key === 'none' ? [] : [state.label] }));
         cell.addEventListener('click', () => openProgramDetailDialog({ id: program.id, onChanged: refreshState }));
         cell.addEventListener('contextmenu', event => {
+          programHover.close();
           event.preventDefault();
           event.stopPropagation();
           createGuideProgramMenu({ program: displayProgram, x: event.clientX, y: event.clientY,
@@ -366,21 +467,32 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
         });
         canvas.append(cell);
       });
+      if (weeklyChannel && programCount === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'guide-week-empty';
+        empty.textContent = 'データ未取得';
+        empty.style.left = `${AXIS_WIDTH + channelIndex * channelWidth}px`;
+        empty.style.width = `${channelWidth}px`;
+        empty.style.top = `${HEADER_HEIGHT + 12}px`;
+        canvas.append(empty);
+      }
     });
     const now = Date.now();
-    if (now >= displayRange.start && now < displayRange.end) {
+    const currentColumn = columns.findIndex(column => now >= column.start && now < column.end);
+    if (currentColumn !== -1) {
       const line = document.createElement('div');
       line.className = 'guide-now-line';
-      line.style.top = `${HEADER_HEIGHT + (now - displayRange.start) / 3600000 * hourHeight}px`;
-      line.style.left = `${AXIS_WIDTH}px`;
-      line.style.width = `${canvasWidth - AXIS_WIDTH}px`;
+      line.style.top = `${HEADER_HEIGHT + (now - columns[currentColumn].start) / 3600000 * hourHeight}px`;
+      line.style.left = `${AXIS_WIDTH + (weeklyChannel ? currentColumn * channelWidth : 0)}px`;
+      line.style.width = `${weeklyChannel ? channelWidth : canvasWidth - AXIS_WIDTH}px`;
       canvas.append(line);
     }
     const host = container.querySelector('.guide-scroll');
     host.replaceChildren(canvas);
     if (previous) {
       host.scrollLeft = previous.left;
-      host.scrollTop = previous.top;
+      host.scrollTop = previous.top === 0 ? 0 : HEADER_HEIGHT +
+        Math.max(0, previous.top - HEADER_HEIGHT) / previous.hourHeight * hourHeight;
     }
   }
 
@@ -393,8 +505,9 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     toolbar.innerHTML = `<details class="guide-header-controls" open>
       <summary>番組表操作</summary>
       <div class="guide-toolbar-content">
+        <button class="button" data-week-back type="button" hidden>通常番組表へ戻る</button><strong data-week-label hidden></strong>
         <fieldset class="guide-types"><legend>放送種別</legend>${availableTypes.map(type => `<label><input type="checkbox" value="${type}" checked>${type}</label>`).join('')}</fieldset>
-        <div class="guide-date-controls"><button class="button" data-prev type="button"${dayStart <= currentDayStart ? ' disabled' : ''}>前日</button><input data-date type="date" min="${dateInputValue(currentDayStart)}" value="${dateInputValue(dayStart)}"><button class="button" data-next type="button">翌日</button><button class="button" data-now type="button">現在時刻</button></div>
+        <div class="guide-date-controls"><button class="button" data-prev type="button"${dayStart <= currentDayStart ? ' disabled' : ''}>前日</button><div data-date-picker></div><button class="button" data-next type="button">翌日</button><button class="button" data-now type="button">現在時刻</button></div>
         <details class="guide-display-settings"><summary>表示調整</summary><div>
           <label>列幅 <output data-width-output>${config.channelWidth}px</output><input data-width type="range" min="${TIMETABLE_LIMITS.channelWidth[0]}" max="${TIMETABLE_LIMITS.channelWidth[1]}" step="${TIMETABLE_LIMITS.channelWidth[2]}" value="${config.channelWidth}"></label>
           <label>1時間の高さ <output data-height-output>${config.hourHeight}px</output><input data-height type="range" min="${TIMETABLE_LIMITS.hourHeight[0]}" max="${TIMETABLE_LIMITS.hourHeight[1]}" step="${TIMETABLE_LIMITS.hourHeight[2]}" value="${config.hourHeight}"></label>
@@ -405,6 +518,16 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
       </div>
     </details>`;
     setHeaderActions(toolbar);
+    dateCalendar?.destroy();
+    dateCalendar = createMonthCalendar(toolbar.querySelector('[data-date-picker]'), {
+      mode: 'date',
+      value: new Date(dayStart),
+      minDate: new Date(currentDayStart),
+      onSelect: date => {
+        const value = dayStartFromInput(date);
+        if (value !== null) selectDay(value);
+      }
+    });
     const controls = toolbar.querySelector('.guide-header-controls');
     headerCompactMedia = createHeaderCompactMedia(1100);
     headerCompactListener = event => { controls.open = !event.matches; };
@@ -412,6 +535,20 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     headerCompactMedia.addEventListener('change', headerCompactListener);
     const width = toolbar.querySelector('[data-width]');
     const height = toolbar.querySelector('[data-height]');
+    toolbar.querySelector('[data-week-back]').addEventListener('click', () => {
+      if (!normalView) return;
+      weeklyChannel = null;
+      dayStart = normalView.dayStart;
+      displayRange = normalView.displayRange;
+      dateCalendar.setValue(new Date(dayStart));
+      toolbar.querySelector('[data-prev]').disabled = dayStart <= broadcastDayStart();
+      updateWeeklyControls();
+      renderGrid();
+      const scroll = container.querySelector('.guide-scroll');
+      scroll.scrollLeft = normalView.left;
+      scroll.scrollTop = normalView.top;
+      normalView = null;
+    });
     const renderChannelChoices = () => {
       const listHost = toolbar.querySelector('[data-channel-list]');
       const groups = availableTypes.map(type => {
@@ -440,14 +577,15 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     renderChannelChoices();
     const liveScale = () => {
       const scroll = container.querySelector('.guide-scroll');
-      const anchorTime = displayRange.start + Math.max(0, scroll.scrollTop - HEADER_HEIGHT) / config.hourHeight * 3600000;
+      const previousTop = scroll.scrollTop;
+      const anchorTime = displayRange.start + Math.max(0, scroll.scrollTop - HEADER_HEIGHT) / renderedHourHeight * 3600000;
       config = { channelWidth: Number(width.value), hourHeight: Number(height.value) };
       toolbar.querySelector('[data-width-output]').textContent = `${config.channelWidth}px`;
       toolbar.querySelector('[data-height-output]').textContent = `${config.hourHeight}px`;
       renderGrid(true);
-      scroll.scrollTop = HEADER_HEIGHT + (anchorTime - displayRange.start) / 3600000 * config.hourHeight;
+      scroll.scrollTop = previousTop === 0 ? 0 : HEADER_HEIGHT + (anchorTime - displayRange.start) / 3600000 * renderedHourHeight;
     };
-    width.addEventListener('input', liveScale);
+    width.addEventListener('input', () => { customChannelWidth = true; liveScale(); });
     height.addEventListener('input', liveScale);
     toolbar.querySelector('.guide-types').addEventListener('change', event => {
       if (!(event.target instanceof HTMLInputElement)) return;
@@ -470,24 +608,20 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
       const latestCurrentDayStart = broadcastDayStart();
       dayStart = Math.max(value, latestCurrentDayStart);
       displayRange = guideDisplayRange(dayStart);
-      toolbar.querySelector('[data-date]').min = dateInputValue(latestCurrentDayStart);
-      toolbar.querySelector('[data-date]').value = dateInputValue(dayStart);
-      toolbar.querySelector('[data-date]').dispatchEvent(new Event('input', { bubbles: true }));
+      dateCalendar.setMinDate(new Date(latestCurrentDayStart));
+      dateCalendar.setValue(new Date(dayStart));
       toolbar.querySelector('[data-prev]').disabled = dayStart <= latestCurrentDayStart;
       renderGrid(true);
     };
     toolbar.querySelector('[data-prev]').addEventListener('click', () => selectDay(dayStart - DAY_MS));
     toolbar.querySelector('[data-next]').addEventListener('click', () => selectDay(dayStart + DAY_MS));
-    toolbar.querySelector('[data-date]').addEventListener('change', event => {
-      const value = dayStartFromInput(event.target.value);
-      if (value !== null) selectDay(value);
-    });
     toolbar.querySelector('[data-now]').addEventListener('click', () => {
       selectDay(broadcastDayStart());
-      container.querySelector('.guide-scroll').scrollTop = Math.max(0, HEADER_HEIGHT + (Date.now() - displayRange.start) / 3600000 * config.hourHeight - 160);
+      container.querySelector('.guide-scroll').scrollTop = Math.max(0, HEADER_HEIGHT + (Date.now() - displayRange.start) / 3600000 * renderedHourHeight - 160);
     });
     toolbar.querySelector('[data-reset]').addEventListener('click', () => {
       config = { ...TIMETABLE_DEFAULTS };
+      customChannelWidth = false;
       width.value = config.channelWidth;
       height.value = config.hourHeight;
       liveScale();
@@ -506,16 +640,22 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
       } finally { button.disabled = false; }
     });
     const scroll = container.querySelector('.guide-scroll');
-    scroll.addEventListener('scroll', () => closeGuideProgramMenu(), { passive: true });
+    scroll.addEventListener('scroll', () => { closeGuideProgramMenu(); programHover.close(); }, { passive: true });
     dragDispose = enableMouseDragScroll(scroll);
     renderGrid();
-    scroll.scrollTop = Math.max(0, HEADER_HEIGHT + (Date.now() - displayRange.start) / 3600000 * config.hourHeight - 160);
+    layoutObserver = new ResizeObserver(scheduleLayout);
+    layoutObserver.observe(scroll);
+    layoutObserver.observe(container);
+    layoutObserver.observe(toolbar);
+    window.addEventListener('resize', scheduleLayout);
+    scroll.scrollTop = Math.max(0, HEADER_HEIGHT + (Date.now() - displayRange.start) / 3600000 * renderedHourHeight - 160);
   }
 
   Promise.all([loadTimetableData(), loadWuiConfig()]).then(([loaded, wuiConfig]) => {
     if (disposed) return;
     data = loaded;
     config = { ...TIMETABLE_DEFAULTS, ...(wuiConfig.timetable || {}) };
+    customChannelWidth = config.channelWidth !== TIMETABLE_DEFAULTS.channelWidth;
     configLoadWarning = wuiConfig.loadWarning ? `保存済み設定を取得できないため初期値で表示しています。${wuiConfig.loadWarning}` : null;
     renderPage();
     minuteTimer = window.setInterval(() => renderGrid(true), 60000);
@@ -537,11 +677,16 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
   document.addEventListener('pointerdown', dismissMenu);
   return () => {
     disposed = true;
+    programHover.dispose();
     clearInterval(minuteTimer);
+    layoutObserver?.disconnect();
+    if (layoutFrame !== null) window.cancelAnimationFrame(layoutFrame);
+    window.removeEventListener('resize', scheduleLayout);
     realtimeDisposers.forEach(dispose => dispose());
     if (headerCompactMedia && headerCompactListener) headerCompactMedia.removeEventListener('change', headerCompactListener);
     setHeaderActions();
     dragDispose?.();
+    dateCalendar?.destroy();
     logoHandles.forEach(handle => handle.dispose());
     closeActiveLiveOverlay();
     closeGuideProgramMenu();

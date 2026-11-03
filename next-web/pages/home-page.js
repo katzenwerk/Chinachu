@@ -13,6 +13,7 @@ import { mountRecordingList } from '../components/recording-list.js';
 import { createReservationCard } from '../components/reservation-card.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { createChannelLogo } from '../components/channel-logo.js';
+import { createProgramHover, setProgramHover } from '../components/program-hover.js';
 import { applyStorageWarning } from '../components/storage-warning.js';
 import { buildRecentRecordedModels, createRecordedCard } from '../components/recorded-card.js';
 import { openRecordedPlaybackOverlay } from '../services/live-player-adapter.js';
@@ -157,6 +158,7 @@ function reservationTimelineRowSignature(model) {
   return JSON.stringify({
     detailUrl: model.detailUrl,
     title: model.timelineTitle,
+    hover: model.hover,
     channelLogoUrl: model.channelLogoUrl,
     channelName: model.channelName,
     channelFallbackText: model.channelFallbackText,
@@ -239,7 +241,7 @@ function createReservationTimelineRenderer() {
       state.title = replacement;
     }
     if (state.title.textContent !== model.timelineTitle) state.title.textContent = model.timelineTitle;
-    if (state.title.title !== model.timelineTitle) state.title.title = model.timelineTitle;
+    setProgramHover(state.title, model.hover);
     if (needsLink && state.title.getAttribute('href') !== model.detailUrl) state.title.href = model.detailUrl;
     state.channelLogo.update({
       url: model.channelLogoUrl,
@@ -333,6 +335,7 @@ function createReservationTimelineRenderer() {
 function mountReservationSection(container, isActive, onContextMenu) {
   const panel = createReservationSection();
   const content = panel.querySelector('.home-reservation-content');
+  const programHover = createProgramHover(content);
   let latestPrograms = [];
   let storageData = null;
   let disposed = false;
@@ -368,6 +371,7 @@ function mountReservationSection(container, isActive, onContextMenu) {
   content.addEventListener('keydown', keyboardContext);
 
   function renderPrograms(programs) {
+    programHover.close();
     latestPrograms = programs;
     const now = Date.now();
     const options = {
@@ -487,6 +491,7 @@ function mountReservationSection(container, isActive, onContextMenu) {
     window.clearInterval(timer);
     window.clearTimeout(displayBoundaryTimer);
     timelineRenderer.dispose();
+    programHover.dispose();
   };
 }
 

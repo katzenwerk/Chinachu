@@ -1,4 +1,5 @@
-import { createReservationListRenderer, dismissReservationProgramPreview } from '../components/reservation-list-row.js';
+import { dismissProgramHover } from '../components/program-hover.js';
+import { createReservationListRenderer } from '../components/reservation-list-row.js';
 import { createHoverPopupController } from '../components/hover-popup-controller.js';
 import { createHomeProgramContextMenu } from '../components/home-program-context-menu.js';
 import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor-dialog.js';
@@ -426,7 +427,7 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     const program = latestPrograms.find(value => value?.id != null && String(value.id) === model.id);
     if (!program) return;
     event.preventDefault();
-    dismissReservationProgramPreview();
+    dismissProgramHover();
     const rect = row.getBoundingClientRect();
     const point = event.type === 'contextmenu'
       ? { x: event.clientX, y: event.clientY }
@@ -464,7 +465,8 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
 
   return () => {
     active = false;
-    dismissReservationProgramPreview();
+    listRenderer.dispose();
+    dismissProgramHover();
     content.removeEventListener('contextmenu', openRowContext);
     content.removeEventListener('keydown', keyboardContext);
     contextMenu.destroy();

@@ -2,6 +2,7 @@ import { invalidateResources, loadResource } from '../services/api-client.js';
 import { headerCompactMedia, appendMobileContextButton } from '../components/mobile-layout.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { createChannelLogo } from '../components/channel-logo.js';
+import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
 import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor-dialog.js';
 import { createGuideProgramMenu } from './guide-page.js';
 import { CONFLICT_DESCRIPTION, programEndTime, ruleAction } from '../services/program-detail-model.js';
@@ -65,6 +66,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
     <div class="program-search-results" data-results></div>
     <div class="program-search-pagination" data-pagination hidden><button class="button" type="button" data-prev>前へ</button><span data-page></span><button class="button" type="button" data-next>次へ</button></div>`;
   container.replaceChildren(section);
+  const programHover = createProgramHover(section);
 
   const toolbar = document.createElement('div');
   toolbar.className = 'program-search-header';
@@ -101,6 +103,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
 
   function redraw() {
     if (disposed) return;
+    programHover.close();
     closeMenu();
     const query = keyword.value.trim();
     const waves = waveChecks.filter(check => check.checked).map(check => check.value);
@@ -159,6 +162,11 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
       head.className = 'program-search-info-head';
       const title = document.createElement('strong');
       title.textContent = program.fullTitle || program.title || 'タイトル未取得';
+      const hover = programHoverInfo({ ...program, channel: displayChannel }, {
+        channelLogoUrl: channelLogoUrl(displayChannel), statuses: state.key === 'none' ? [] : [state.label]
+      });
+      setProgramHover(title, hover);
+      setProgramHover(station, hover);
       // 「未予約」は通常状態なので表示しない。その他は予約一覧と同じピル型タグを使う。
       if (state.key !== 'none') {
         const status = document.createElement('span');
@@ -331,6 +339,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
 
   return () => {
     disposed = true;
+    programHover.dispose();
     window.clearTimeout(keywordTimer);
     window.clearTimeout(displayBoundaryTimer);
     latestRequest += 1;

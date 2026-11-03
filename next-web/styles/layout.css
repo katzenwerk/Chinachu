@@ -251,3 +251,7 @@
   .header-page-actions .recorded-header-content,
   .header-page-actions .recorded-results-toolbar { width: 100%; }
 }
+
+.result-warning-label:focus .storage-warning-tip { opacity: 1; transform: translateY(0); }
+.result-warning-label:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.storage-warning.result-warning-label .storage-warning-tip { position: fixed; inset: auto; width: max-content; max-width: min(340px,calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: hidden; transform: none; white-space: pre-line; }

@@ -1,5 +1,6 @@
 import { applyStorageWarning } from './storage-warning.js';
 import { createChannelLogo } from './channel-logo.js';
+import { createProgramHover, setProgramHover } from './program-hover.js';
 
 function previewUrl(model) {
   return `/api/recording/${encodeURIComponent(model.id)}/preview.jpg?width=480&height=270&_n=${Date.now()}`;
@@ -69,6 +70,8 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
   const stateBadge = article.querySelector('.recording-state-badge');
   const detailLink = article.querySelector('.recording-detail');
   let currentModel = initialModel;
+  const programHover = createProgramHover(article);
+  article.querySelectorAll('h3,.recording-title-overlay,.mobile-card-title,.recording-detail').forEach(target => setProgramHover(target, () => currentModel.hover));
   let currentPreviewKey = null;
   let previewController = null;
   let activeObjectUrl = null;
@@ -149,7 +152,6 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
     currentModel = model;
     article.dataset.recordingId = model.id || '';
     title.textContent = model.title;
-    title.title = model.title;
     detailLink.href = model.detailUrl || '';
     detailLink.hidden = model.detailUrl === null;
     detailLink.setAttribute('aria-label', `${model.title}の詳細`);
@@ -174,6 +176,7 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
 
   function dispose() {
     disposed = true;
+    programHover.dispose();
     if (previewController) previewController.abort();
     previewController = null;
     if (activeObjectUrl) URL.revokeObjectURL(activeObjectUrl);

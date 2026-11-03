@@ -1,4 +1,5 @@
-import { createReservationListRenderer, dismissReservationProgramPreview } from '../components/reservation-list-row.js';
+import { dismissProgramHover } from '../components/program-hover.js';
+import { createReservationListRenderer } from '../components/reservation-list-row.js';
 import { headerCompactMedia } from '../components/mobile-layout.js';
 import { createHoverPopupController } from '../components/hover-popup-controller.js';
 import {
@@ -759,7 +760,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     const item = contextTarget(event);
     if (!item) return;
     event.preventDefault();
-    dismissReservationProgramPreview();
+    dismissProgramHover();
     contextMenu.open(item, { x: event.clientX, y: event.clientY });
   });
   content.addEventListener('keydown', event => {
@@ -853,6 +854,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
 
   return () => {
     active = false;
+    listRenderer.dispose();
     requestController?.abort();
     exportController?.abort();
     window.clearTimeout(searchTimer);
@@ -866,6 +868,6 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     unsubscribe();
     unsubscribeSeries();
     clearCards();
-    dismissReservationProgramPreview();
+    dismissProgramHover();
   };
 }
