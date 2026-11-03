@@ -1,3 +1,32 @@
+# Chinachu 0.10.7-thorn.33
+
+## Recording History and Cleaner
+
+- Distinguish missing recording files, recording-ledger inconsistencies, and explicit deletions. Normal lists and details use saved match state without checking recording files.
+- Let Cleaner retain history while recording confirmed file absence. Restore missing recordings through explicit searches and path repair; explicitly deleted recordings remain terminal.
+- Keep mount and scan failures separate from confirmed absence, and preserve missing-file state across match and Series updates.
+
+## Recording Maintenance and TS Analysis
+
+- Add per-recording maintenance actions for duration probing, thumbnail generation, and saved-file TS analysis. Offer file search when an explicit operation discovers a missing file.
+- Reuse Operator's serialized, low-priority post-processing controls, deferring or interrupting optional work to prioritize recording.
+- Show completed saved TS analysis on recording cards, with expandable anomaly details and a compact, responsive maintenance dialog.
+- Accept completed external TS Analyzer JSON through `POST /api/recorded/:id/analysis.json`, using existing API authentication and CSRF checks. Preserve existing completed results and avoid duplicate writes or reanalysis.
+- Add thumbnail creation from the detail dialog when an image is missing. Deinterlace newly generated thumbnails without regenerating existing images automatically.
+
+## Guide and WUI
+
+- Use more of the available guide area, compact station headers, and add an experimental eight-day guide for a selected station while retaining saved display settings.
+- Share program hover previews across guides, lists, timelines, and cards, with concise descriptions and placement that switches direction near screen edges.
+- Make storage-card links filter rules, reservations, and recorded results by the selected destination, including empty results.
+- Add calendar navigation to guides and reservation timelines, and show conflict notifications.
+- Improve Series status and detail actions, remove duplicate manual-assignment controls, and add a single-image preview for currently broadcasting programs with recording-start guards.
+
+## Reservation Updates
+
+- Recalculate affected reservations after manual reservation, skip, cancellation, and new-rule operations using the same allocation logic as Scheduler.
+- Detect concurrent rule and reservation changes before Scheduler publication, and preserve retryable history when reservation updates fail.
+
 # Chinachu 0.10.7-thorn.32
 
 This release reduces interference from recording post-processing and background updates, strengthens recording-history recovery, and adds a manual TS Analyzer. Improvements to DROP rates and resource usage still require observation under real recording loads.

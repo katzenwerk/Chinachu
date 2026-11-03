@@ -49,7 +49,7 @@ For existing PM2 installations, choose **No** when prompted for service setup. R
 
 For gamma and older thorn releases, full compatibility is not guaranteed. Some settings may require reconfiguration, and preserving older recording history requires a separate initial `match.json` build.
 
-thorn.30 can update directly to thorn.32 using this procedure; an intermediate thorn.31 installation is not required. Use the updated installer after the Git update rather than the old thorn.30 updater.
+thorn.30 can update directly to the current thorn release using this procedure; intermediate thorn releases are not required. Use the updated installer after the Git update rather than the old thorn.30 updater.
 
 Review local changes and untracked files before updating. Resolve conflicting paths individually; do not delete local files to force the update through.
 
