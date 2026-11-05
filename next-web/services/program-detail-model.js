@@ -61,8 +61,6 @@ function programState(detail) {
     };
   }
   if (detail.currentSource === 'recording') return { key: 'recording', label: '録画中' };
-  if (detail.program?.isSkip === true) return { key: 'skipped', label: 'スキップ' };
-  if (detail.currentSource === 'reserves' || status === 'RESERVED') return { key: 'reserved', label: '予約済み' };
   if (status === 'RECORDED' || status === 'RECORDED_UNTRACKED' || detail.currentSource === 'recorded') {
     if (detail.program?.operatorAbort === true || detail.program?.operatorEndLack === true) {
       const abortReason = validText(detail.program?.operatorAbortReason);
@@ -73,6 +71,8 @@ function programState(detail) {
     }
     return { key: 'recorded', label: '録画済み' };
   }
+  if (detail.program?.isSkip === true) return { key: 'skipped', label: 'スキップ' };
+  if (detail.currentSource === 'reserves' || status === 'RESERVED') return { key: 'reserved', label: '予約済み' };
   if (status === 'SKIPPED_ONLY') return { key: 'missed', label: '未録画', reason: { key: 'skipped', label: 'スキップ' } };
   if (status === 'MISSED') return { key: 'missed', label: '未録画' };
   return { key: 'program', label: '通常番組' };
@@ -203,7 +203,8 @@ function recordingPathInfo(detail, state, file) {
   const visible = state.key === 'recording' || ['recorded', 'aborted', 'deleted', 'unknown', 'file-missing'].includes(state.key) ||
     ['MISSED', 'SKIPPED_ONLY'].includes(historyStatus);
   if (!visible) return null;
-  const path = validText(detail.match?.recording?.path) || validText(detail.program?.recorded) ||
+  const path = (detail.currentSource === 'recorded' && validText(detail.program?.recorded)) ||
+    validText(detail.match?.recording?.path) || validText(detail.program?.recorded) ||
     validText(detail.program?.path);
   const unavailable = file.key === 'deleted' ? '削除済み' : null;
   return {

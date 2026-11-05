@@ -38,6 +38,14 @@ function canonicalProgramKey(program) {
     : null;
 }
 
+function selectCurrentProgram(candidates, matchStatus = null) {
+  const completed = matchStatus === 'RECORDED' || matchStatus === 'RECORDED_UNTRACKED';
+  const order = completed
+    ? ['recording', 'recorded', 'reserves', 'schedule']
+    : ['recording', 'reserves', 'recorded', 'schedule'];
+  return order.map(source => [source, candidates[source]]).find(([, program]) => program !== null) || null;
+}
+
 async function loadRules() {
   try {
     const rules = await loadResource('rules');
@@ -183,12 +191,13 @@ export async function loadProgramDetail({ key = null, id = null, signal } = {}) 
       id === null ? Promise.resolve(null) : loadProgramById(id, signal),
       loadRules()
     ]);
-    const current = [
-      ['recording', findProgramByIdentity(recording, id, key)],
-      ['reserves', findProgramByIdentity(reserves, id, key)],
-      ['recorded', findProgramByIdentity(recorded, id, key)],
-      ['schedule', scheduled && canonicalProgramKey(scheduled) === key ? scheduled : null]
-    ].find(([, program]) => program !== null);
+    const candidates = {
+      recording: findProgramByIdentity(recording, id, key),
+      reserves: findProgramByIdentity(reserves, id, key),
+      recorded: findProgramByIdentity(recorded, id, key),
+      schedule: scheduled && canonicalProgramKey(scheduled) === key ? scheduled : null
+    };
+    const current = selectCurrentProgram(candidates, resolved.match.status);
     return {
       ...resolved,
       program: current ? current[1] : resolved.program,
@@ -207,12 +216,13 @@ export async function loadProgramDetail({ key = null, id = null, signal } = {}) 
     loadProgramById(id, signal),
     loadRules()
   ]);
-  const current = [
-    ['recording', findProgram(recording, id)],
-    ['reserves', findProgram(reserves, id)],
-    ['recorded', findProgram(recorded, id)],
-    ['schedule', scheduled]
-  ].find(([, program]) => program !== null);
+  const candidates = {
+    recording: findProgram(recording, id),
+    reserves: findProgram(reserves, id),
+    recorded: findProgram(recorded, id),
+    schedule: scheduled
+  };
+  const current = selectCurrentProgram(candidates);
 
   const currentKey = current ? canonicalProgramKey(current[1]) : null;
   if (currentKey !== null) {
@@ -220,10 +230,11 @@ export async function loadProgramDetail({ key = null, id = null, signal } = {}) 
     try { resolved = await loadResolvedMatch(currentKey, signal); }
     catch (error) { if (error?.code !== 'not-found') throw error; }
     if (resolved !== null) {
+      const selected = selectCurrentProgram(candidates, resolved.match.status);
       return {
         ...resolved,
-        program: current[1],
-        currentSource: current[0],
+        program: selected[1],
+        currentSource: selected[0],
         historyAmbiguous: false,
         reserves,
         rules
