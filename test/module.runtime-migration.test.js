@@ -85,3 +85,32 @@ test('TS analysis preserves CC/TEI/sync and owned pending bytes for all packet/c
 	} finally {fs.rmSync(root,{recursive:true,force:true});}
 
 });
+
+test('series title search index stays with its dictionary snapshot and rebuilds after atomic publication',t=>{
+	const {DatabaseSync}=require('node:sqlite');
+	const {createSeriesResolver}=require('../lib/series-resolver');
+	const root=fs.mkdtempSync(path.join(os.tmpdir(),'chinachu-search-index-'));
+	t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+	const file=path.join(root,'dictionary.sqlite');
+	function publish(title) {
+		const stage=file+'.new',db=new DatabaseSync(stage);
+		db.exec('CREATE TABLE titles(tid INTEGER PRIMARY KEY,title TEXT,lookup_key TEXT,short_title TEXT,first_year TEXT,first_month TEXT); CREATE TABLE aliases(tid INTEGER,lookup_key TEXT); CREATE TABLE episodes(tid INTEGER,episode INTEGER,subtitle TEXT,lookup_key TEXT)');
+		db.prepare('INSERT INTO titles VALUES (1,?,?,NULL,NULL,NULL)').run(title,title.toLowerCase());
+		db.close();fs.renameSync(stage,file);
+	}
+	publish('Ａｌｐｈａ 番組');
+	const old=createSeriesResolver({dictionaryPath:file});
+	t.after(()=>old.close());
+	assert.equal(old.searchDictionaryTitles('Alpha',20)[0].tid,1);
+	assert.equal(old.searchDictionaryTitles('1',20)[0].match,'tid');
+	assert.equal(old.searchDictionaryTitles('alpha 番組',20)[0].match,'exact');
+	assert.deepEqual(old.searchDictionaryTitles('  ',20),[]);
+	publish('Beta');
+	assert.equal(old.searchDictionaryTitles('Alpha',20)[0].title,'Ａｌｐｈａ 番組');
+	const next=createSeriesResolver({dictionaryPath:file});t.after(()=>next.close());
+	assert.deepEqual(next.searchDictionaryTitles('Alpha',20),[]);
+	assert.equal(next.searchDictionaryTitles('Beta',20)[0].title,'Beta');
+	fs.writeFileSync(file+'.bad','invalid SQLite');
+	assert.throws(()=>createSeriesResolver({dictionaryPath:file+'.bad'}));
+	assert.equal(next.searchDictionaryTitles('Beta',20)[0].tid,1);
+});

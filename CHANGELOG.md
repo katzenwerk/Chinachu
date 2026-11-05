@@ -14,6 +14,7 @@
 ## Performance
 
 - Speed up Cleaner reconciliation with per-plan path and identity indexes while preserving cleanup decisions.
+- Reuse normalized titles within each dictionary snapshot to reduce repeated series search work.
 
 # Chinachu 0.10.7-thorn.33
 
