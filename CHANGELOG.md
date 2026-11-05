@@ -17,6 +17,10 @@
 - Reuse normalized titles within each dictionary snapshot to reduce repeated series search work.
 - Reduce per-packet Buffer allocations during TS analysis without changing parsing or recording behavior.
 
+## Guide and WUI
+
+- Clear page search text when navigating away while preserving searches during updates within the same page.
+
 # Chinachu 0.10.7-thorn.33
 
 ## Recording History and Cleaner

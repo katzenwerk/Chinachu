@@ -75,12 +75,12 @@ async function copyText(text) {
   if (!copied) throw new Error('Copy command failed');
 }
 
-export function renderLogPage(container) {
+export function renderLogPage(container, query = new URLSearchParams()) {
   let active = true;
   let source = 'operator';
   let mode = 'realtime';
   let level = 'all';
-  let search = '';
+  let search = query.get('search') || '';
   let lines = [];
   let files = [];
   let selectedFileId = '';
@@ -156,6 +156,7 @@ export function renderLogPage(container) {
   const retryButton = page.querySelector('.log-retry');
   const followButton = page.querySelector('.log-follow');
   const searchInput = page.querySelector('.log-search input');
+  searchInput.value = search;
   const levelSelect = page.querySelector('.log-level select');
   const copyButton = page.querySelector('.log-copy');
   const serviceAction = page.querySelector('.log-service-action');

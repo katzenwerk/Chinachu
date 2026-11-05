@@ -371,7 +371,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
 
   function updateHash() {
     const params = new URLSearchParams();
-    if (search !== '') params.set('search', search);
+
     if (ruleUid !== null) params.set('ruleUid', ruleUid);
     if (channelId !== null) params.set('channelId', channelId);
     if (storageToken !== null) params.set('storage', storageToken);

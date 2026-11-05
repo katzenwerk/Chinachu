@@ -15,7 +15,6 @@ import {
 const SIZE_KEY = 'chinachu.next.series.cardSize';
 const COLUMNS_KEY = 'chinachu.next.series.columns';
 const VIEW_KEY = 'chinachu.next.series.view';
-const SEARCH_KEY = 'chinachu.next.series.search';
 const TABS = new Set(['all', 'reservations', 'recordings', 'attention']);
 
 const dateTimeFormatter = new Intl.DateTimeFormat('ja-JP', {
@@ -117,14 +116,6 @@ function readPreference(key, allowed, fallback) {
 
 function writePreference(key, value) {
   try { window.localStorage.setItem(key, value); } catch (_) {}
-}
-
-function readStoredText(key) {
-  try { return window.sessionStorage.getItem(key) || ''; } catch (_) { return ''; }
-}
-
-function writeStoredText(key, value) {
-  try { window.sessionStorage.setItem(key, value); } catch (_) {}
 }
 
 function link(href, label, className = '') {
@@ -755,7 +746,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   const setHeaderActions = typeof options.setHeaderActions === 'function' ? options.setHeaderActions : () => {};
   let tab = TABS.has(query.get('tab')) ? query.get('tab') : 'all';
   let viewMode = readPreference(VIEW_KEY, ['list', 'card'], 'list');
-  let searchValue = readStoredText(SEARCH_KEY);
+  let searchValue = query.get('search') || '';
   const selectedId = query.get('id');
   const eventKey = query.get('event');
   let sequence = 0;
@@ -907,7 +898,6 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     let searchComposing = false;
     const applySearch = () => {
       searchValue = search.value;
-      writeStoredText(SEARCH_KEY, searchValue);
       reloadList(200);
     };
     search.addEventListener('compositionstart', () => { searchComposing = true; });

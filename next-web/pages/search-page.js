@@ -270,8 +270,6 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   function navigateKeyword() {
     const query = keyword.value.trim();
     defaultUpcomingOnly = query === '';
-    const nextHash = `#search${query ? `?q=${encodeURIComponent(query)}` : ''}`;
-    if (window.location.hash !== nextHash) window.history.pushState(null, '', nextHash);
     pageIndex = 0;
     redraw();
   }
@@ -296,16 +294,8 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   pagination.querySelector('[data-next]').addEventListener('click', () => { pageIndex += 1; redraw(); });
   const outsidePointer = event => { if (!contextMenu?.contains(event.target)) closeMenu(); };
   const escape = event => { if (event.key === 'Escape') closeMenu(); };
-  const onHistory = () => {
-    if (disposed || !window.location.hash.startsWith('#search')) return;
-    keyword.value = new URLSearchParams(window.location.hash.split('?')[1] || '').get('q') || '';
-    defaultUpcomingOnly = keyword.value.trim() === '';
-    pageIndex = 0;
-    redraw();
-  };
   document.addEventListener('pointerdown', outsidePointer, true);
   document.addEventListener('keydown', escape, true);
-  window.addEventListener('popstate', onHistory);
   window.addEventListener('scroll', closeMenu, true);
 
   releases.push(subscribeReservationNotifications(() => { if (!disposed) void reloadReservations(); }));
@@ -348,7 +338,6 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
     compactMedia.removeEventListener('change', setCompact);
     document.removeEventListener('pointerdown', outsidePointer, true);
     document.removeEventListener('keydown', escape, true);
-    window.removeEventListener('popstate', onHistory);
     window.removeEventListener('scroll', closeMenu, true);
     releases.forEach(release => release?.());
     setHeaderActions();

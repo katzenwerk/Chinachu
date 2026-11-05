@@ -208,13 +208,33 @@ const unsubscribeWuiConnection = subscribeWuiConnection(connectionState => {
   if (routeReady && (event.kind === 'started' || event.kind === 'reconnected')) route();
 });
 
+let currentPageName = null;
+let currentPageSearch = '';
+
 async function route() {
+  const raw = window.location.hash.slice(1) || 'home';
+  const [name, queryString = ''] = raw.split('?');
+  const query = new URLSearchParams(queryString);
+  const searchKey = name === 'search' ? 'q' : 'search';
+  if (currentPageName === name) {
+    const input = document.querySelector('#header-page-actions input[type="search"]') || shell.outlet.querySelector('input[type="search"]');
+    if (input) currentPageSearch = input.value;
+    if (!query.has(searchKey)) query.set(searchKey, currentPageSearch);
+  } else {
+    currentPageSearch = '';
+  }
+  if (query.has(searchKey)) currentPageSearch = query.get(searchKey) || '';
+  // A search supplied by a link is consumed once, not retained in browser history.
+  const addressQuery = new URLSearchParams(queryString);
+  if (addressQuery.has(searchKey)) {
+    addressQuery.delete(searchKey);
+    history.replaceState(null, '', `#${name}${addressQuery.size ? `?${addressQuery}` : ''}`);
+  }
+  currentPageName = name;
   if (disposeCurrentPage !== null) {
     disposeCurrentPage();
     disposeCurrentPage = null;
   }
-	const raw = window.location.hash.slice(1) || 'home';
-  const [name, queryString = ''] = raw.split('?');
   shell.setPageActions();
   shell.setActiveRoute(name);
   shell.title.textContent = routeTitles[name] || '未実装';
@@ -229,7 +249,7 @@ async function route() {
     return;
   }
   if (name === 'search') {
-    disposeCurrentPage = renderSearchPage(page, new URLSearchParams(queryString), { setHeaderActions: shell.setPageActions });
+    disposeCurrentPage = renderSearchPage(page, query, { setHeaderActions: shell.setPageActions });
     return;
   }
   if (name === 'recording') {
@@ -237,13 +257,13 @@ async function route() {
     return;
   }
   if (name === 'recorded') {
-    disposeCurrentPage = renderRecordedPage(page, new URLSearchParams(queryString), {
+    disposeCurrentPage = renderRecordedPage(page, query, {
       setHeaderActions: shell.setPageActions
     });
     return;
   }
   if (name === 'reserves') {
-    disposeCurrentPage = renderReservesPage(page, new URLSearchParams(queryString), {
+    disposeCurrentPage = renderReservesPage(page, query, {
       setHeaderActions: shell.setPageActions
     });
     return;
@@ -253,14 +273,14 @@ async function route() {
     return;
   }
   if (name === 'rules') {
-    disposeCurrentPage = renderRulesPage(page, new URLSearchParams(queryString), {
+    disposeCurrentPage = renderRulesPage(page, query, {
       setHeaderActions: shell.setPageActions,
       showToast: shell.showToast
     });
     return;
   }
   if (name === 'series') {
-    disposeCurrentPage = renderSeriesPage(page, new URLSearchParams(queryString), {
+    disposeCurrentPage = renderSeriesPage(page, query, {
       setHeaderActions: shell.setPageActions
     });
     return;
@@ -270,11 +290,11 @@ async function route() {
     return;
   }
   if (name === 'log') {
-    disposeCurrentPage = renderLogPage(page);
+    disposeCurrentPage = renderLogPage(page, query);
     return;
   }
   if (name === 'program') {
-    disposeCurrentPage = renderProgramDetailPage(page, new URLSearchParams(queryString));
+    disposeCurrentPage = renderProgramDetailPage(page, query);
     return;
   }
   if (name === 'cleaner') {

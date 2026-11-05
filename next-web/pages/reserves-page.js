@@ -126,7 +126,7 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     const setOrDelete = (key, value, defaultValue) => {
       if (value === defaultValue || value === '') params.delete(key); else params.set(key, String(value));
     };
-    setOrDelete('search', search, '');
+    params.delete('search');
     setOrDelete('status', status, 'all');
     setOrDelete('ruleUid', ruleUid, null);
     setOrDelete('rule', ruleId, null);

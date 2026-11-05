@@ -109,7 +109,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
 
   function updateHash() {
     const params = new URLSearchParams();
-    if (search) params.set('search', search);
+
     if (status !== 'all') params.set('status', status);
     if (openRuleUid) params.set('ruleUid', openRuleUid);
     if (storageToken !== null) params.set('storage', storageToken);

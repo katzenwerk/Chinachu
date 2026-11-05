@@ -854,6 +854,7 @@ export function createAppShell(root) {
       closeMobilePageToolbar();
       closeNotifications();
       if (mobile.matches && activeRoute !== route) window.scrollTo({ top: 0, behavior: 'instant' });
+      if (activeRoute !== route) headerSearchInput.value = '';
       activeRoute = route;
       headerSearch.hidden = route !== 'home' && route !== 'guide';
       headerSearch.classList.remove('is-expanded');
