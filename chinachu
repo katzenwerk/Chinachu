@@ -721,7 +721,6 @@ upgrade_pm2_identity_valid () {
     uid=$(awk '/^Uid:/ { print $2 }' "/proc/$pid/status") || return 1
     gid=$(awk '/^Gid:/ { print $2 }' "/proc/$pid/status") || return 1
     [ "$uid" = "$expected_uid" ] && [ "$gid" = "$expected_gid" ] || return 1
-    printf '%s\n' "$SERVICE_SETUP_PROCESS_PIDS" | grep -Fxq -- "$pid" || return 1
   done
 }
 
@@ -849,7 +848,7 @@ upgrade_inspect_pm2_manager () {
   online_names=$(upgrade_pm2_online_names "$manager_active") || return 1
   if [ -n "$online_names" ]; then
     upgrade_pm2_identity_valid "$manager_active" "$online_names" "$manager_expected_uid" "$manager_expected_gid" || {
-      upgrade_error "A running Chinachu PM2 process does not match its registration, path, or runtime identity."
+      upgrade_error "A running Chinachu PM2 process has an unexpected UID/GID."
       return 1
     }
   fi
@@ -887,7 +886,7 @@ upgrade_revalidate_pm2_manager () {
     return 1
   }
   upgrade_pm2_identity_valid "$current_active" "$current_online" "$manager_expected_uid" "$manager_expected_gid" || {
-    upgrade_error "A running Chinachu process changed before service control."
+    upgrade_error "A running Chinachu process has an unexpected UID/GID before service control."
     return 1
   }
   manager_active="$current_active"
@@ -1018,6 +1017,7 @@ upgrade_cleanup_failed_start () {
     case " $online_names " in *" $name "*) ;; *) return 1 ;; esac
   done
   SERVICE_SETUP_PROCESS_PIDS=$(service_setup_chinachu_pids) || return 1
+  upgrade_processes_match_state "$active" || return 1
   upgrade_pm2_identity_valid "$active" "$running" "$manager_expected_uid" "$manager_expected_gid" || return 1
   activity=$(upgrade_activity_snapshot) || return 1
   IFS=$'\t' read -r count next <<< "$activity"
@@ -1302,6 +1302,7 @@ chinachu_upgrade () {
       return 1
     }
     SERVICE_SETUP_PROCESS_PIDS=$(service_setup_chinachu_pids) || { upgrade_start_failed "process attribution"; return 1; }
+    upgrade_processes_match_state "$manager_active" || { upgrade_start_failed "process attribution"; return 1; }
     upgrade_pm2_identity_valid "$manager_active" "$online_names" "$manager_expected_uid" "$manager_expected_gid" || {
       upgrade_start_failed "PM2 identity verification"
       return 1
