@@ -1,16 +1,16 @@
 # Chinachu thorn
 
-`thorn` is an unofficial maintenance branch based on Chinachu `gamma`, updated for modern Linux environments and Node.js 24, with a focus on long-term operation and maintainability.
+`thorn` is an unofficial maintenance branch based on Chinachu `gamma`, updated for modern Linux environments and Node.js 26.13.0, with a focus on long-term operation and maintainability.
 
 See [CHANGELOG.md](CHANGELOG.md) for features and release history. Some features are experimental and may differ from upstream `gamma`.
 
 ## Requirements
 
 - Linux
-- Node.js 24.x and npm
+- Node.js 26.13.0 (26.x), npm 11.19+ within 11.x, and libatomic1 on Ubuntu/Mint
 - Mirakurun server (4.1.3 or later recommended)
 - FFmpeg / ffprobe
-- PM2 (optional, for service management)
+- PM2 (installed for Full service setup)
 
 ## Installation
 
@@ -22,7 +22,17 @@ cd Chinachu
 ./chinachu installer full
 ```
 
-Follow the installer prompts for dependencies and optional PM2 service setup.
+Full installation builds dependencies and configures Local PM2/startup, requesting sudo for systemd changes. Existing Local/Root management is repaired in place. Individual installer commands remain available for custom service management.
+
+Node installation uses official binaries by default. Failed downloads or extraction never start a source build automatically. Explicitly opt in with `./chinachu installer node --allow-source-build` (also supported by full and upgrade). The `node-prepare 26.13.0` installer command prepares Node without switching links. Set `CHINACHU_INSTALLER_PROFILE=0` to disable stage resource metrics.
+
+For a planned cutover, `./chinachu installer dependencies-prepare` builds locked dependencies in isolation using the target Node/npm without replacing live modules. Its stdout is the prepared directory; progress goes to stderr. After verifying recordings and stopping the selected Chinachu services, use `./chinachu installer dependencies-publish <prepared-dir>` to replace the old modules with the prepared tree. Old runtime/dependency backups are not generated. Changed manifests or an unknown/running service state block publication. Prepare Node first; publication errors stop the update. Preparation and publication do not start services.
+
+Use `./chinachu runtime-check` for read-only runtime/PM2 diagnosis; explicitly use sudo to include Root PM2. Exit 2 means issues found; 1 means diagnosis failed. No registration, save or startup change is performed. Review active, dump.pm2, dump.pm2.bak and startup before reboot; preserve saved-only and non-Chinachu entries.
+
+Runtime repair switches runtime links, PM2 configuration, systemd and saved state to Node 26, removes Chinachu-managed Node 24, then starts and verifies services on Node 26. Service startup success is not a prerequisite for removing Node 24. No Node 24 backup or rollback is provided.
+
+Ordinary source updates restart only existing Chinachu registrations and pin their interpreter to the repository's `.nave/node`, and put `.nave` first in their PATH. Runtime repair rebuilds an outdated daemon/startup; this temporarily stops other applications and modules in the selected PM2 manager too. Their unrelated settings and saved-only entries are preserved without an unconditional `pm2 save`. Explicit Node 24 references in Chinachu/PM2 settings are migrated; references in other services are reported for resolution without changing those services. Run `sudo ./chinachu service runtime-repair local` (or `root` for the existing Root manager) to apply the same repair without a Git update. Already consistent environments are not rebuilt. System Node and unrelated PM2 managers are unchanged. With no Chinachu PM2 registration, Upgrade still prepares/verifies Node 26, npm and dependencies and removes the old managed Node 24, without registering PM2. Runtime work precedes skipping source updates for a dirty tree or an unchanged upstream. `upgrade --allow-source-build` also passes the explicit build permission through runtime repair and sudo.
 
 ## Updating
 
@@ -45,7 +55,7 @@ git merge --ff-only origin/thorn &&
 ./chinachu installer full
 ```
 
-For existing PM2 installations, choose **No** when prompted for service setup. Restart the services after installation and any required migration.
+Full repairs the existing PM2 manager and startup runtime after installation. It preserves the selected Local/Root manager and unrelated process settings.
 
 For gamma and older thorn releases, full compatibility is not guaranteed. Some settings may require reconfiguration, and preserving older recording history requires a separate initial `match.json` build.
 

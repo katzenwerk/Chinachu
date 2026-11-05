@@ -16,7 +16,7 @@ fi
 shopt -s extglob
 
 # variables
-NODE_VER=24.20.0
+NODE_VER=26.13.0
 
 declare -A BOOTSTRAP_EXISTING_CHECKSUMS=()
 BOOTSTRAP_NODE_COMMAND=""
@@ -68,7 +68,7 @@ main () {
   NPM_PATH=${NAVE_DIR}/installed/${NODE_VER}/bin/npm
   USR_DIR=${CHINACHU_DIR}/usr
 
-  export PATH=$USR_DIR/bin:${NAVE_DIR}/installed/${NODE_VER}/bin:$PATH
+  export PATH=${NAVE_DIR}:${NAVE_DIR}/installed/${NODE_VER}/bin:$USR_DIR/bin:$PATH
   export LD_LIBRARY_PATH=$USR_DIR/lib:$LD_LIBRARY_PATH
   export PKG_CONFIG_PATH=$USR_DIR/lib/pkgconfig
 
@@ -80,6 +80,7 @@ main () {
   local cmd="$1"
   shift
   case $cmd in
+    runtime-check ) cmd=chinachu_runtime_check ;;
     installer | upgrade | updater | service | update | search | \
     reserve | unreserve | skip | unskip | stop | \
     rule | enrule | disrule | rmrule | \
@@ -120,13 +121,16 @@ chinachu_installer () {
   fi
 
   case "$choice" in
-    1 | auto | full ) chinachu_installer_auto_full ;;
-    2 | node ) chinachu_installer_node ;;
-    3 | dependencies | modules ) chinachu_installer_node_modules ;;
+    1 | auto | full ) chinachu_installer_auto_full "$2" ;;
+    2 | node ) chinachu_installer_node "$2" ;;
+    node-prepare ) chinachu_installer_node_prepare "${2:-$NODE_VER}" "$3" ;;
+    3 | dependencies | modules ) chinachu_installer_node_modules "$2" ;;
+    dependencies-prepare ) chinachu_installer_dependencies_prepare ;;
+    dependencies-publish ) chinachu_installer_dependencies_publish "$2" ;;
     ffmpeg ) chinachu_installer_ffmpeg ;;
     4 | bootstrap | runtime ) chinachu_runtime_bootstrap ;;
     5 | verify ) chinachu_installer_verify ;;
-    6 | service | pm2 ) chinachu_installer_pm2_service ;;
+    6 | service | pm2 ) chinachu_installer_pm2_service "$2" ;;
     0 | exit | quit ) return 0 ;;
     * )
       installer_error "installer項目を選択できませんでした: $choice"
@@ -144,7 +148,7 @@ chinachu_installer_auto_full () {
   if chinachu_installer_node_ready; then
     printf 'Using existing Nave Node.js v%s.\n' "$NODE_VER"
   else
-    chinachu_installer_node || installer_error "Node.js installation failed."
+    chinachu_installer_node_prepare "$NODE_VER" "$1" || installer_error "Node.js preparation failed."
   fi
   installer_success "v${NODE_VER}"
 
@@ -155,6 +159,7 @@ chinachu_installer_auto_full () {
     chinachu_installer_node_modules || installer_error "Dependency installation failed."
   fi
   installer_success "Ready"
+  chinachu_installer_node_ready || chinachu_installer_node || installer_error "Node.js activation failed."
 
   installer_step 4 6 "Runtime Bootstrap"
   chinachu_runtime_bootstrap || installer_error "Runtime bootstrap failed."
@@ -164,7 +169,7 @@ chinachu_installer_auto_full () {
   chinachu_installer_verify || installer_error "Installer verification failed."
   installer_success "Passed"
 
-  installer_step 6 6 "PM2 Service Setup (Optional)"
+  installer_step 6 6 "PM2 Runtime / Service Setup"
   chinachu_installer_offer_pm2 auto || return 1
 
   printf '\n%sInstallation completed successfully.%s\n' "$INSTALLER_GREEN" "$INSTALLER_RESET"
@@ -202,73 +207,157 @@ chinachu_installer_offer_pm2 () {
 }
 
 chinachu_installer_pm2_service () {
-  chinachu_installer_offer_pm2 menu
+  chinachu_installer_offer_pm2 "${1:-menu}"
 }
 
-chinachu_installer_node () {
-  local nave_download
-  ensure_dir "$NAVE_DIR" || return 1
+chinachu_installer_profile () {
+  local label="$1"
+  shift
+  if [ "${CHINACHU_INSTALLER_PROFILE:-1}" != 0 ] && command -v python3 > /dev/null 2>&1; then
+    chinachu_installer_low_priority python3 "$CHINACHU_DIR/lib/installer-profile.py" "$label" "$@"
+  else
+    chinachu_installer_low_priority "$@"
+  fi
+}
 
-  if chinachu_application_processes_running; then
-    installer_warning "The Nave Node.js runtime is being used by a running Chinachu process."
-    printf 'Stop only the affected Chinachu Operator/WUI after checking recordings and near-term reservations, then retry.\n' >&2
+# Inherit these priorities in download, extraction and any Nave source build.
+chinachu_installer_priority_prefix () {
+  priority=()
+  if command -v nice > /dev/null 2>&1; then priority+=(nice -n 10); fi
+  if command -v ionice > /dev/null 2>&1; then priority+=(ionice -c 3); fi
+}
+
+chinachu_installer_low_priority () {
+  local -a priority=()
+  chinachu_installer_priority_prefix
+  "${priority[@]}" "$@"
+}
+
+# Preparation never changes the active links or an existing runtime directory.
+chinachu_installer_node_prepare () {
+  local version="${1:-$NODE_VER}" mode="${2:-}" nave_download stage
+  case "$mode" in "" | --allow-source-build) ;; *) installer_warning "Unknown Node install option: $mode"; return 1 ;; esac
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  local NODE_VER="$version"
+  local NODE_PATH="$NAVE_DIR/installed/$version/bin/node"
+  local NPM_PATH="$NAVE_DIR/installed/$version/bin/npm"
+  chinachu_installer_runtime_ready && return 0
+  if [ -e "$NAVE_DIR/installed/$version" ] || [ -L "$NAVE_DIR/installed/$version" ]; then
+    installer_warning "Invalid existing runtime: $NAVE_DIR/installed/$version; inspect it before retrying. No files were removed."
     return 1
   fi
-
-  echo "Installing Node using Nave..."
+  ensure_dir "$NAVE_DIR" || return 1
   if [ ! -x "$NAVE_DIR/nave.sh" ]; then
     nave_download="$NAVE_DIR/nave.sh.download.$$"
     wget -O "$nave_download" https://raw.githubusercontent.com/isaacs/nave/v3.2.2/nave.sh || { rm -f -- "$nave_download"; return 1; }
     chmod a+x "$nave_download" || { rm -f -- "$nave_download"; return 1; }
     mv -- "$nave_download" "$NAVE_DIR/nave.sh" || return 1
   fi
-  if [ -e "$NAVE_DIR/installed/$NODE_VER" ] && ! chinachu_installer_node_ready; then
-    remove_dir "$NAVE_DIR/installed/$NODE_VER" || return 1
+  stage=$(mktemp -d "$NAVE_DIR/.prepare.XXXXXXXX") || return 1
+  if ! chinachu_installer_low_priority env NAVE_DIR="$stage" NAVE_JOBS=1 JOBS=1 MAKEFLAGS=-j1 bash "$CHINACHU_DIR/lib/installer-nave.sh" "$NAVE_DIR/nave.sh" "$version" "$mode" ||
+     ! ( NODE_PATH="$stage/installed/$version/bin/node"
+         NPM_PATH="$stage/installed/$version/bin/npm"
+         chinachu_installer_runtime_ready ); then
+    chinachu_installer_low_priority rm -rf -- "$stage"
+    return 1
   fi
-  "$NAVE_DIR/nave.sh" install "$NODE_VER" || return 1
+  ensure_dir "$NAVE_DIR/installed" || return 1
+  # -T prevents nesting inside a runtime created by another installer.
+  mv -T -- "$stage/installed/$version" "$NAVE_DIR/installed/$version" || { chinachu_installer_low_priority rm -rf -- "$stage"; return 1; }
+  chinachu_installer_low_priority rm -rf -- "$stage"
+}
+
+chinachu_installer_runtime_ready () {
+  local npm_version node_version
+  [ -x "$NODE_PATH" ] && [ -x "$NPM_PATH" ] || return 1
+  node_version=$("$NODE_PATH" --version 2>&1) || {
+    printf 'Node runtime failed: %s\n' "$node_version" >&2
+    case "$node_version" in *libatomic*) printf 'Install the distribution libatomic1 runtime package before retrying; no packages were changed.\n' >&2 ;; esac
+    return 1
+  }
+  [ "$node_version" = "v${NODE_VER}" ] || return 1
+  npm_version=$(PATH="$(dirname -- "$NODE_PATH"):$PATH" "$NPM_PATH" --version 2>/dev/null) || return 1
+  [[ "$npm_version" =~ ^11\.([0-9]+)\.[0-9]+$ ]] || return 1
+  (( 10#${BASH_REMATCH[1]} >= 19 ))
+}
+
+chinachu_installer_node () {
+  local link
+  chinachu_installer_require_stopped || return 1
+  chinachu_installer_node_prepare "$NODE_VER" "$1" || return 1
+  for link in node npm; do
+    if [ -e "$NAVE_DIR/$link" ] && [ ! -L "$NAVE_DIR/$link" ]; then
+      installer_warning "$NAVE_DIR/$link is not a symlink."
+      return 1
+    fi
+  done
   ln -s "$NODE_PATH" "$NAVE_DIR/node.new.$$" || return 1
-  mv -Tf -- "$NAVE_DIR/node.new.$$" "$NAVE_DIR/node" || return 1
-  ln -s "$NPM_PATH" "$NAVE_DIR/npm.new.$$" || return 1
-  mv -Tf -- "$NAVE_DIR/npm.new.$$" "$NAVE_DIR/npm" || return 1
+  ln -s "$NPM_PATH" "$NAVE_DIR/npm.new.$$" || { rm -f -- "$NAVE_DIR/node.new.$$"; return 1; }
+  if mv -Tf -- "$NAVE_DIR/node.new.$$" "$NAVE_DIR/node" &&
+     mv -Tf -- "$NAVE_DIR/npm.new.$$" "$NAVE_DIR/npm" && chinachu_installer_node_ready; then
+    return 0
+  fi
+  rm -f -- "$NAVE_DIR/node.new.$$" "$NAVE_DIR/npm.new.$$"
+  return 1
+}
 
-  [ -x "$NODE_PATH" ] || return 1
-  [ "$("$NODE_PATH" --version)" = "v${NODE_VER}" ] || return 1
+# Preparation never changes live modules; publication requires stopped applications.
+chinachu_installer_dependencies_prepare () {
+  local stage
+  chinachu_installer_runtime_ready || return 1
+  stage=$(mktemp -d "$CHINACHU_DIR/.dependencies.XXXXXXXX") || return 1
+  if ! ( cp -- package.json package-lock.json "$stage/" &&
+         cp -a -- common "$stage/common" &&
+         cd -- "$stage" &&
+         chinachu_installer_profile dependencies-ci env PATH="$(dirname -- "$NODE_PATH"):$PATH" "$NPM_PATH" ci >&2 &&
+         "$NODE_PATH" -p 'process.versions.modules' > node_modules/.chinachu-node-abi &&
+         chinachu_installer_dependencies_ready ); then
+    chinachu_installer_low_priority rm -rf -- "$stage"
+    return 1
+  fi
+  printf '%s\n' "$stage"
+}
 
-  echo "done."
-
-  return 0
+chinachu_installer_dependencies_publish () {
+  local stage="$1"
+  case "$stage" in "$CHINACHU_DIR"/.dependencies.*) ;; *) return 1 ;; esac
+  [ "$(dirname -- "$stage")" = "$CHINACHU_DIR" ] && [ -d "$stage" ] && [ ! -L "$stage" ] || return 1
+  chinachu_installer_require_stopped || return 1
+  cmp -s package.json "$stage/package.json" &&
+    cmp -s package-lock.json "$stage/package-lock.json" &&
+    cmp -s common/package.json "$stage/common/package.json" || {
+      installer_warning "Prepared manifests changed; keep the old environment and prepare dependencies again."
+      return 1
+    }
+  ( cd -- "$stage" && chinachu_installer_dependencies_ready ) || return 1
+  # The prepared tree has passed all checks; do not retain a copy of old dependencies.
+  chinachu_installer_low_priority rm -rf -- node_modules || return 1
+  mv -T -- "$stage/node_modules" node_modules || return 1
+  chinachu_installer_low_priority rm -rf -- "$stage"
 }
 
 chinachu_installer_node_modules () {
-  [ -x "$NPM_PATH" ] || fail "Nave npm is not available: $NPM_PATH"
-  if chinachu_application_processes_running; then
-    installer_warning "Chinachu Operator/WUI is running from this working tree."
-    printf 'Stop only the affected services after checking recordings and near-term reservations, then retry dependency repair.\n' >&2
+  local stage
+  chinachu_installer_require_stopped || return 1
+  stage=$(chinachu_installer_dependencies_prepare) || return 1
+  if ! chinachu_installer_dependencies_publish "$stage"; then
+    installer_warning "Dependency publication failed; prepared dependencies: $stage"
     return 1
   fi
-  remove_dir node_modules || return 1
-
-  echo "Installing Node Modules using NPM..."
-
-  "$NPM_PATH" ci || return 1
-
-  echo "done."
-
-  return 0
 }
 
 chinachu_installer_node_ready () {
-  [ -x "$NODE_PATH" ] && [ -x "$NPM_PATH" ] || return 1
-  [ "$("$NODE_PATH" --version 2>/dev/null)" = "v${NODE_VER}" ] || return 1
+  chinachu_installer_runtime_ready || return 1
   [ "$(readlink -f -- "$NAVE_DIR/node" 2>/dev/null)" = "$(readlink -f -- "$NODE_PATH" 2>/dev/null)" ] || return 1
-  [ "$(readlink -f -- "$NAVE_DIR/npm" 2>/dev/null)" = "$(readlink -f -- "$NPM_PATH" 2>/dev/null)" ] || return 1
-  "$NPM_PATH" --version > /dev/null 2>&1
+  [ "$(readlink -f -- "$NAVE_DIR/npm" 2>/dev/null)" = "$(readlink -f -- "$NPM_PATH" 2>/dev/null)" ]
 }
 
 chinachu_installer_dependencies_ready () {
   [ -x "$NODE_PATH" ] && [ -x "$NPM_PATH" ] || return 1
   [ -r package.json ] && [ -r package-lock.json ] && [ -d node_modules ] || return 1
-  "$NPM_PATH" ls --all > /dev/null 2>&1 || return 1
+  [ -r node_modules/.chinachu-node-abi ] || return 1
+  [ "$(cat node_modules/.chinachu-node-abi)" = "$("$NODE_PATH" -p 'process.versions.modules')" ] || return 1
+  chinachu_installer_profile dependencies-verify env PATH="$(dirname -- "$NODE_PATH"):$PATH" "$NPM_PATH" ls --all > /dev/null || return 1
   "$NODE_PATH" -e '
     const fs = require("fs"), util = require("util");
     const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
@@ -281,6 +370,14 @@ chinachu_installer_dependencies_ready () {
   '
 }
 
+chinachu_installer_require_stopped () {
+  local state=0
+  chinachu_application_processes_running || state=$?
+  [ "$state" = 1 ] && return 0
+  installer_warning "Chinachu is running or its stopped state cannot be verified. Keep runtime links/modules unchanged; verify the selected PM2 manager after recording checks."
+  return 1
+}
+
 chinachu_application_processes_running () {
   local process cwd command
   for process in /proc/[0-9]*
@@ -291,6 +388,18 @@ chinachu_application_processes_running () {
     case "$command" in
       *app-operator.js* | *app-wui.js* ) return 0 ;;
     esac
+  done
+  local home pid_file pid
+  home=$(getent passwd "$(id -un)" | cut -d: -f6) || return 2
+  [ -n "$home" ] || return 2
+  for pid_file in "$home"/.pm2/pids/chinachu-operator-*.pid "$home"/.pm2/pids/chinachu-wui-*.pid; do
+    [ -e "$pid_file" ] || continue
+    [ -r "$pid_file" ] || return 2
+    read -r pid < "$pid_file" || [ -n "$pid" ] || return 2
+    case "$pid" in "" | *[!0-9]*) return 2 ;; 0) continue ;; esac
+    cwd=$(readlink -f -- "/proc/$pid/cwd" 2>/dev/null) || return 2
+    [ "$cwd" != "$CHINACHU_DIR" ] || return 0
+    return 2 # PID reuse/foreign namespace cannot prove this saved application stopped.
   done
   return 1
 }
@@ -585,12 +694,13 @@ upgrade_pm2_state_valid () {
       const cwd = env.pm_cwd || env.cwd || root;
       const script = env.pm_exec_path || env.script || item.pm_exec_path || item.script;
       if (!script || path.resolve(cwd, script) !== expected.get(item.name)) process.exit(1);
-      if (mode === "active") {
+      if (env.exec_mode && !["fork", "fork_mode"].includes(env.exec_mode)) process.exit(1);
+      if (mode === "active" || mode === "failed-start") {
         const status = env.status;
         const pid = Number(item.pid);
-        if (status !== "online" && status !== "stopped") process.exit(1);
+        if (status !== "online" && status !== "stopped" && !(mode === "failed-start" && status === "errored")) process.exit(1);
         if (status === "online" && !(pid > 0)) process.exit(1);
-        if (status === "stopped" && pid > 0) process.exit(1);
+        if (status !== "online" && pid > 0) process.exit(1);
       }
     }
   ' "$CHINACHU_DIR" "$2"
@@ -625,6 +735,20 @@ upgrade_pm2_identity_valid () {
   done
 }
 
+upgrade_pm2_runtime_valid () {
+  local output="$1" names="$2" version="$3" name pid expected
+  expected=$(readlink -f -- "$NAVE_DIR/installed/$version/bin/node") || return 1
+  for name in $names; do
+    pid=$(printf '%s' "$output" | "$BOOTSTRAP_NODE_COMMAND" -e '
+      const list = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      const item = list.find(item => item.name === process.argv[1]);
+      if (!item || !Number.isInteger(item.pid) || item.pid <= 0) process.exit(1);
+      process.stdout.write(String(item.pid));
+    ' "$name") || return 1
+    [ "$(readlink -f -- "/proc/$pid/exe")" = "$expected" ] || return 1
+  done
+}
+
 upgrade_pm2_status () {
   printf '%s' "$1" | "$BOOTSTRAP_NODE_COMMAND" -e '
     const fs = require("fs");
@@ -655,7 +779,7 @@ upgrade_processes_match_state () {
 upgrade_inspect_pm2_manager () {
   local include_root="$1" local_has=false root_has=false
 
-  SERVICE_SETUP_PM2_BIN=$(command -v pm2 2>/dev/null || true)
+  SERVICE_SETUP_PM2_BIN=$(service_setup_find_pm2 2>/dev/null || true)
   SERVICE_SETUP_LOCAL_USER="$UPGRADE_USER"
   SERVICE_SETUP_INCLUDE_ROOT="$include_root"
   SERVICE_SETUP_ROOT_ACTIVE='[]'
@@ -835,13 +959,42 @@ upgrade_show_activity () {
   printf 'Running Chinachu services will stop during the update; nearby reservations may be affected.\n'
 }
 
+upgrade_runtime_repair_needed () {
+  [ -n "$manager_prefix" ] || return 1
+  if ! chinachu_installer_node_ready || ! chinachu_installer_dependencies_ready ||
+     compgen -G "$NAVE_DIR/installed/24.*" > /dev/null; then
+    return 0
+  fi
+  # The PM2 inspection is read-only; runtime repair is only announced when needed.
+  "$NODE_PATH" "$CHINACHU_DIR/lib/pm2-runtime-migrate.js" \
+    "$CHINACHU_DIR" "$SERVICE_SETUP_PM2_BIN" "$manager_user" check > /dev/null 2>&1 && return 1
+  return 0
+}
+
+upgrade_show_runtime_notice () {
+  if compgen -G "$NAVE_DIR/installed/24.*" > /dev/null; then
+    printf '\nNode.js 24から26への移行を行います。\n'
+  else
+    printf '\nNode.js 26の実行環境を更新します。\n'
+  fi
+  if [ -n "$manager_prefix" ]; then
+    printf '必要に応じてPM2を入れ直し、Chinachuと同じPM2で管理するサービスを一時停止・再起動します。\n'
+    printf '更新中は対象サービスを一時的に利用できません。\n'
+  else
+    printf '更新中はChinachuを一時的に利用できない場合があります。\n'
+  fi
+}
+
 upgrade_confirm () {
-  local recording_count="${1:-0}" answer
+  local recording_count="${1:-0}" runtime_notice="${2:-false}" answer
   [ -t 0 ] || { upgrade_error "Upgrade application requires an interactive terminal."; return 1; }
+  if [ "$runtime_notice" = true ]; then upgrade_show_runtime_notice; fi
   if [ "$recording_count" -gt 0 ]; then
     printf '\n%sWARNING:%s %s active recording(s) may be interrupted and left incomplete.\n' \
       "$INSTALLER_YELLOW" "$INSTALLER_RESET" "$recording_count"
     read -r -p 'Continue upgrade even though recording is active? [y/N] ' answer || return 1
+  elif [ "$runtime_notice" = true ]; then
+    read -r -p '更新を続行しますか？ [y/N] ' answer || return 1
   else
     read -r -p 'Apply this fast-forward update? [y/N] ' answer || return 1
   fi
@@ -850,11 +1003,84 @@ upgrade_confirm () {
   return 1
 }
 
+upgrade_start_existing_runtime () {
+  local home uid
+  home=$(service_setup_user_home "$manager_user") || return 1
+  uid=$(id -u "$manager_user") || return 1
+  printf '%s' "$manager_active" | "$BOOTSTRAP_NODE_COMMAND" "$CHINACHU_DIR/lib/pm2-runtime-client.js" start "$SERVICE_SETUP_PM2_BIN" "$home/.pm2" "$uid" "$CHINACHU_DIR" "$online_names"
+}
+
+upgrade_failed () {
+  upgrade_error "Upgrade failed at: $1. No automatic source/runtime rollback was attempted."
+  printf 'Manager: %s; previously online: %s. Recheck recording/reservation and current PM2 state before service control.\n' "${manager_user:-unregistered}" "${online_names:-none}" >&2
+  printf 'After repairing the target environment, run installer bootstrap and installer verify as the repository owner, then start only the previously online services with --interpreter %s/.nave/node.\n' "$CHINACHU_DIR" >&2
+  return 1
+}
+
+upgrade_cleanup_failed_start () {
+  local active running name activity count next
+  service_setup_pm2_daemon_active "$manager_user" || return 1
+  active=$(service_setup_pm2_as_user "$manager_user" jlist) || return 1
+  upgrade_pm2_state_valid "$active" failed-start || return 1
+  running=$(upgrade_pm2_online_names "$active") || return 1
+  [ -n "$running" ] || return 0
+  for name in $running; do
+    case " $online_names " in *" $name "*) ;; *) return 1 ;; esac
+  done
+  SERVICE_SETUP_PROCESS_PIDS=$(service_setup_chinachu_pids) || return 1
+  upgrade_pm2_identity_valid "$active" "$running" "$manager_expected_uid" "$manager_expected_gid" || return 1
+  activity=$(upgrade_activity_snapshot) || return 1
+  IFS=$'\t' read -r count next <<< "$activity"
+  [ "$count" = 0 ] || return 1
+  service_setup_pm2_as_user "$manager_user" stop $running || return 1
+  active=$(service_setup_pm2_as_user "$manager_user" jlist) || return 1
+  upgrade_pm2_state_valid "$active" failed-start || return 1
+  running=$(upgrade_pm2_online_names "$active") || return 1
+  [ -z "$running" ]
+}
+
+upgrade_start_failed () {
+  if ! upgrade_cleanup_failed_start; then
+    upgrade_error "Partial start could not be cleaned up safely (recording, unknown state or identity). Some services may still be running; do not switch runtime links."
+  fi
+  upgrade_failed "$1"
+}
+
+upgrade_pm2_persistence_report () {
+  [ -n "$manager_prefix" ] || return 0
+  "$BOOTSTRAP_NODE_COMMAND" -e '
+    const path = require("path");
+    const [root, version, activeJson, savedJson, manager] = process.argv.slice(1);
+    const active = JSON.parse(activeJson), saved = JSON.parse(savedJson);
+    const names = ["chinachu-operator", "chinachu-wui"];
+    const link = path.join(root, ".nave/node");
+    const binary = path.join(root, ".nave/installed", version, "bin/node");
+    let pending = false;
+    for (const [label, list] of [["active", active], ["saved", saved]]) {
+      for (const name of names) {
+        const item = list.find(item => item && item.name === name);
+        const env = item && (item.pm2_env || item);
+        const interpreter = env && env.exec_interpreter;
+        const resolved = interpreter && interpreter !== "node" ? path.resolve(env.pm_cwd || env.cwd || root, interpreter) : null;
+        if (resolved === link || resolved === binary) continue;
+        pending = true;
+        console.warn(`PM2 ${manager} ${label}: ${name} is ${!item ? "not registered" : "not pinned to the target runtime"}.`);
+        console.warn(`Review this manager before OS restart. Set only Chinachu exec_interpreter to ${link}; preserve other processes and saved-only entries.`);
+      }
+    }
+    console.log("PM2 saved state was not written. Run ./chinachu runtime-check (explicit sudo for Root PM2) before reboot. Check startup, dump.pm2 and dump.pm2.bak; use pm2 save only after reviewing all active/saved differences.");
+    if (pending) process.exitCode = 2;
+  ' "$CHINACHU_DIR" "$upstream_node_version" "$manager_active" "$manager_saved" "$manager_user"
+}
+
 chinachu_upgrade () {
   local status branch upstream remote changed_files upstream_launcher upstream_node_version
   local dependencies_needed=false node_needed=false restart_needed=false
+  local runtime_approved=false runtime_notice=false
   local manager_prefix='' manager_user='' manager_active='[]' manager_saved='[]'
   local manager_expected_uid='' manager_expected_gid='' online_names='' operator_status='' wui_status='' file
+  local source_build="${1:-}"
+  case "$source_build" in "" | --allow-source-build) ;; *) upgrade_error "Unknown Upgrade option: $source_build"; return 1 ;; esac
   local inspect_status activity recording_count=0 next_reservation='' latest_activity latest_recording_count latest_next_reservation
 
   . "$CHINACHU_DIR/lib/service-setup.sh" || return 1
@@ -901,7 +1127,7 @@ chinachu_upgrade () {
     printf 'Operator     : %s\n' "$operator_status"
     printf 'WUI          : %s\n\n' "$wui_status"
     printf '現在のユーザーで更新を実行します。\n'
-    printf '管理者権限は必要ありません。\n'
+    printf '実行環境の更新が必要な場合は管理者権限を使用します。\n'
   fi
 
   printf '\nChinachu Upgrade preflight\n────────────────────────────────\n'
@@ -913,11 +1139,30 @@ chinachu_upgrade () {
   fi
   print_ffmpeg_commands "Runtime"
 
+  # Runtime repair is independent of whether Git can update this working tree.
+  if [ -n "$manager_prefix" ]; then
+    if upgrade_runtime_repair_needed; then
+      upgrade_confirm 0 true || return $?
+      runtime_approved=true
+    fi
+    service_setup_runtime_repair "${manager_prefix,,}" "$source_build" || { upgrade_failed "runtime repair"; return 1; }
+    upgrade_inspect_pm2_manager "$SERVICE_SETUP_INCLUDE_ROOT" || return 1
+  else
+    # An unmanaged installation still needs the target runtime; never register PM2 here.
+    upgrade_as_user "$CHINACHU_DIR/chinachu" installer node-prepare "$NODE_VER" "$source_build" || { upgrade_failed "Node.js preparation"; return 1; }
+    if ! chinachu_installer_node_ready; then
+      upgrade_as_user "$CHINACHU_DIR/chinachu" installer node "$source_build" || { upgrade_failed "Node.js activation"; return 1; }
+    fi
+    if ! chinachu_installer_dependencies_ready; then
+      upgrade_as_user "$CHINACHU_DIR/chinachu" installer dependencies || { upgrade_failed "dependency installation/publication"; return 1; }
+    fi
+    upgrade_as_user "$CHINACHU_DIR/chinachu" installer verify || { upgrade_failed "runtime verification"; return 1; }
+    upgrade_as_user "$NODE_PATH" "$CHINACHU_DIR/lib/pm2-runtime-migrate.js" "$CHINACHU_DIR" '' '' prune || { upgrade_failed "Node 24 removal"; return 1; }
+  fi
   status=$(upgrade_git status --porcelain --untracked-files=all) || return 1
   if [ -n "$status" ]; then
-    upgrade_error "The working tree has tracked or untracked changes. Upgrade did not fetch or modify it."
-    upgrade_git status --short
-    return 1
+    printf 'Runtime verified/repaired. Source update skipped: the working tree has tracked or untracked changes.\n'
+    return 0
   fi
   branch=$(upgrade_git branch --show-current) || return 1
   [ -n "$branch" ] || { upgrade_error "Detached HEAD is not supported by Upgrade."; return 1; }
@@ -938,17 +1183,19 @@ chinachu_upgrade () {
 
   changed_files=$(upgrade_git diff --name-only HEAD "$upstream") || return 1
   if [ -z "$changed_files" ]; then
-    printf 'Already up to date. No service or PM2 state was changed.\n'
+    printf 'Already up to date; runtime repair/verification completed.\n'
     return 0
   fi
 
   upstream_launcher=$(upgrade_git show "$upstream:chinachu") || return 1
   upstream_node_version=$(printf '%s\n' "$upstream_launcher" | sed -n 's/^NODE_VER=//p' | sed -n '1p')
-  [ -n "$upstream_node_version" ] || { upgrade_error "Could not determine the target Node.js version."; return 1; }
+  [[ "$upstream_node_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { upgrade_error "Could not determine the target Node.js version."; return 1; }
   if [ "$upstream_node_version" != "$NODE_VER" ] || ! chinachu_installer_node_ready; then node_needed=true; fi
-  if printf '%s\n' "$changed_files" | grep -Eq '^(package.json|package-lock.json)$' || ! chinachu_installer_dependencies_ready; then
+  if printf '%s\n' "$changed_files" | grep -Eq '^(package.json|package-lock.json|common/package.json)$' || ! chinachu_installer_dependencies_ready; then
     dependencies_needed=true
   fi
+  # A runtime change must rebuild native dependencies even with an unchanged lockfile.
+  if [ "$node_needed" = true ]; then dependencies_needed=true; fi
   while IFS= read -r file; do
     if upgrade_file_requires_restart "$file"; then restart_needed=true; break; fi
   done <<< "$changed_files"
@@ -985,7 +1232,21 @@ chinachu_upgrade () {
     upgrade_show_activity "$recording_count" "$next_reservation"
   fi
 
-  upgrade_confirm "$recording_count" || return $?
+  # Runtime migration was already approved before PM2/Node changes began.
+  if [ "$runtime_approved" != true ] || [ "$recording_count" -gt 0 ]; then
+    if [ "$runtime_approved" != true ] && [ "$node_needed" = true ] &&
+       compgen -G "$NAVE_DIR/installed/24.*" > /dev/null; then
+      runtime_notice=true
+    fi
+    upgrade_confirm "$recording_count" "$runtime_notice" || return $?
+  fi
+
+  if [ "$node_needed" = true ]; then
+    upgrade_as_user "$CHINACHU_DIR/chinachu" installer node-prepare "$upstream_node_version" "$source_build" || {
+      upgrade_error "Node.js preparation failed; services and runtime links were not changed."
+      return 1
+    }
+  fi
 
   if [ "$restart_needed" = true ]; then
     upgrade_revalidate_pm2_manager || return 1
@@ -1001,60 +1262,108 @@ chinachu_upgrade () {
       upgrade_show_activity "$latest_recording_count" "$latest_next_reservation"
       upgrade_confirm "$latest_recording_count" || return $?
     fi
+  fi
+  if [ "$restart_needed" = true ] && [ -n "$online_names" ]; then
     service_setup_pm2_as_user "$manager_user" stop $online_names || {
-      upgrade_error "Could not stop the previously running Chinachu PM2 services."
+      upgrade_failed "PM2 stop (some services may already be stopped)"
       return 1
     }
   fi
 
   if ! upgrade_git merge --ff-only "$upstream"; then
-    upgrade_error "Fast-forward application failed. No forced rollback was attempted."
+    upgrade_failed "fast-forward application"
     return 1
   fi
 
   if [ "$node_needed" = true ]; then
     upgrade_as_user "$CHINACHU_DIR/chinachu" installer node || {
-      upgrade_error "Node.js repair failed. Previously stopped services remain stopped."
+      upgrade_failed "Node.js activation"
       return 1
     }
   fi
   if [ "$dependencies_needed" = true ]; then
     upgrade_as_user "$CHINACHU_DIR/chinachu" installer dependencies || {
-      upgrade_error "Dependency repair failed. Previously stopped services remain stopped."
+      upgrade_failed "dependency installation/publication"
       return 1
     }
   fi
-  upgrade_as_user "$CHINACHU_DIR/chinachu" installer bootstrap || return 1
+  upgrade_as_user "$CHINACHU_DIR/chinachu" installer bootstrap || { upgrade_failed "runtime bootstrap"; return 1; }
   upgrade_as_user "$CHINACHU_DIR/chinachu" installer verify || {
-    upgrade_error "Post-update verification failed. No forced rollback was attempted."
+    upgrade_failed "post-update verification"
     return 1
   }
 
   if [ "$restart_needed" = true ] && [ -n "$online_names" ]; then
     service_setup_pm2_daemon_active "$manager_user" || {
-      upgrade_error "The selected PM2 daemon is no longer available; services were not restarted."
+      upgrade_failed "PM2 daemon unavailable before start"
       return 1
     }
-    service_setup_pm2_as_user "$manager_user" start $online_names || {
-      upgrade_error "Updated files were verified, but previously running services could not be restarted."
+    upgrade_start_existing_runtime || {
+      upgrade_start_failed "PM2 start"
       return 1
     }
-    manager_active=$(service_setup_pm2_as_user "$manager_user" jlist) || return 1
+    manager_active=$(service_setup_pm2_as_user "$manager_user" jlist) || { upgrade_start_failed "PM2 state read after start"; return 1; }
     [ "$(upgrade_pm2_online_names "$manager_active")" = "$online_names" ] || {
-      upgrade_error "Not all previously running Chinachu services returned ONLINE."
+      upgrade_start_failed "PM2 partial start"
       return 1
     }
+    upgrade_pm2_runtime_valid "$manager_active" "$online_names" "$upstream_node_version" || {
+      upgrade_start_failed "PM2 runtime verification"
+      return 1
+    }
+    SERVICE_SETUP_PROCESS_PIDS=$(service_setup_chinachu_pids) || { upgrade_start_failed "process attribution"; return 1; }
     upgrade_pm2_identity_valid "$manager_active" "$online_names" "$manager_expected_uid" "$manager_expected_gid" || {
-      upgrade_error "Restarted Chinachu services have an unexpected UID/GID."
+      upgrade_start_failed "PM2 identity verification"
       return 1
     }
   fi
 
-  printf '\nUpgrade completed. PM2 registration and saved state were not changed.\n'
+  if [ -n "$manager_prefix" ]; then
+    service_setup_runtime_repair "${manager_prefix,,}" "$source_build" || { upgrade_failed "PM2 daemon/startup unification"; return 1; }
+    manager_saved=$(cat -- "$(service_setup_user_home "$manager_user")/.pm2/dump.pm2") || return 1
+  fi
+  upgrade_pm2_persistence_report
+  status=$?
+  case "$status" in
+    0) ;;
+    *) upgrade_failed "PM2 persistence verification"; return 1 ;;
+  esac
+  printf '\nUpgrade completed. PM2 manager/service selection and saved state were preserved.\n'
   chinachu_auth_setup_hint "$UPGRADE_USER"
 }
 
+chinachu_runtime_check () {
+  . "$CHINACHU_DIR/lib/service-setup.sh" || return 1
+  resolve_bootstrap_node || return 1
+  if [ "$(id -u)" -eq 0 ]; then
+    SERVICE_SETUP_LOCAL_USER=$(service_setup_origin_user) || return 1
+    SERVICE_SETUP_INCLUDE_ROOT=true
+  else
+    SERVICE_SETUP_LOCAL_USER=$(id -un) || return 1
+    SERVICE_SETUP_INCLUDE_ROOT=false
+    printf 'Root PM2 is not inspected without an explicit sudo invocation.\n' >&2
+  fi
+  SERVICE_SETUP_PM2_BIN=$(service_setup_find_pm2 2>/dev/null || true)
+  service_setup_capture_state "$SERVICE_SETUP_INCLUDE_ROOT" || return 1
+  local user="$SERVICE_SETUP_LOCAL_USER" home root_home
+  home=$(service_setup_user_home "$user") || return 1
+  root_home=$(service_setup_user_home root) || return 1
+  {
+    printf '{"managers":[{"user":"%s","home":"%s","active":%s,"saved":%s,"activeKnown":%s,"savedKnown":%s}' "$user" "$home" "$SERVICE_SETUP_LOCAL_ACTIVE" "$SERVICE_SETUP_LOCAL_SAVED" "$SERVICE_SETUP_LOCAL_ACTIVE_KNOWN" "$SERVICE_SETUP_LOCAL_SAVED_KNOWN"
+    if [ "$SERVICE_SETUP_INCLUDE_ROOT" = true ]; then
+      printf ',{"user":"root","home":"%s","active":%s,"saved":%s,"activeKnown":%s,"savedKnown":%s}' "$root_home" "$SERVICE_SETUP_ROOT_ACTIVE" "$SERVICE_SETUP_ROOT_SAVED" "$SERVICE_SETUP_ROOT_ACTIVE_KNOWN" "$SERVICE_SETUP_ROOT_SAVED_KNOWN"
+    fi
+    printf ']}'
+  } | "$BOOTSTRAP_NODE_COMMAND" "$CHINACHU_DIR/tools/runtime-diagnostics.js" "$CHINACHU_DIR" "$NODE_VER"
+}
+
 chinachu_service () {
+  if [ "$1" = runtime-repair ]; then
+    . "$CHINACHU_DIR/lib/service-setup.sh" || return 1
+    shift
+    service_setup_runtime_repair "$@"
+    return $?
+  fi
   if [ "$1" = "setup" ]; then
     . "$CHINACHU_DIR/lib/service-setup.sh" || return 1
     shift
@@ -1069,6 +1378,7 @@ chinachu_service_help () {
   cat <<EOF
 
 Usage: ./chinachu service setup [local|root]
+       ./chinachu service runtime-repair [local|root]
 
 Examples:
 
@@ -1249,7 +1559,13 @@ Usage: ./chinachu <cmd> ...
 Commands:
 
 installer               Install or repair Chinachu components.
-upgrade                 Apply a safe fast-forward update (may prompt for sudo).
+upgrade [--allow-source-build]  Apply a safe fast-forward update.
+runtime-check           Read-only Node/PM2/dump/backup/startup diagnosis (exit 2: issues).
+
+Node installation defaults to official binaries; source fallback requires --allow-source-build.
+Examples: installer node [--allow-source-build], installer node-prepare 26.13.0 [--allow-source-build].
+Dependencies: installer dependencies-prepare, then dependencies-publish <prepared-dir> after verified stops.
+Set CHINACHU_INSTALLER_PROFILE=0 to disable per-stage resource metrics.
 updater                 Alias of upgrade.
 service setup           Configure or review PM2 services.
 
@@ -1550,15 +1866,13 @@ verify_bootstrap_existing_files () {
 }
 
 chinachu_installer_verify () {
-  local node_version
-
+  resolve_bootstrap_node || return 1
   [ -x "$NODE_PATH" ] || installer_error "Nave Node.js is not executable: $NODE_PATH"
-  node_version=$("$NODE_PATH" --version) || installer_error "Nave Node.js could not be executed."
-  [ "$node_version" = "v${NODE_VER}" ] || installer_error "Nave Node.js version mismatch: expected v${NODE_VER}, got $node_version"
-
+  chinachu_installer_runtime_ready || installer_error "Runtime validation failed (expected Node.js v$NODE_VER and npm ^11.19.0)."
   [ -x "$NPM_PATH" ] || installer_error "Nave npm is not executable: $NPM_PATH"
-  "$NPM_PATH" --version > /dev/null || installer_error "Nave npm could not be executed."
-  "$NPM_PATH" ls --all > /dev/null || installer_error "npm dependency tree is invalid."
+  PATH="$(dirname -- "$NODE_PATH"):$PATH" "$NPM_PATH" --version > /dev/null || installer_error "Nave npm could not be executed."
+  chinachu_installer_node_ready || installer_error "Nave runtime links do not match the target Node.js/npm."
+  chinachu_installer_dependencies_ready || installer_error "Dependencies do not match the target Node.js ABI or package lock."
 
   verify_runtime_ffmpeg || installer_error "System ffmpeg and ffprobe verification failed."
   print_ffmpeg_commands "Runtime"

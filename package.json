@@ -33,7 +33,7 @@
     "dateformat": "^5.0.3",
     "easy-table": "~0.2.0",
     "fast-xml-parser": "5.11.1",
-    "mirakurun": "4.1.5",
+    "mirakurun": "4.2.1",
     "opts": "^1.2.7",
     "socket.io": "^4.8.4"
   },
@@ -45,11 +45,17 @@
     "check": "find api common/lib lib test -type f -name '*.js' -exec node --check {} \\; && find . -maxdepth 1 -type f -name 'app-*.js' -exec node --check {} \\; && find next-web -type f -name '*.js' ! -path 'next-web/sample/*' ! -path 'next-web/lib/mpeg2toh264/*' -exec sh -c 'for file do node --input-type=module --check < \"$file\" || { echo \"Syntax check failed: $file\" >&2; exit 1; }; done' sh {} +"
   },
   "engines": {
-    "node": "^24.17.0",
+    "node": "^26.13.0",
     "npm": "^11.19.0"
   },
   "allowScripts": {
     "core-js": false,
     "mirakurun": false
+  },
+  "overrides": {
+    "mirakurun": {
+      "glob": "14.0.3",
+      "uuid": "11.1.1"
+    }
   }
 }

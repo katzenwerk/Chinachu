@@ -108,6 +108,24 @@ describe('Service Setup safety contract', function() {
 			const calls = fs.readFileSync(fixture.callsFile, 'utf8');
 			assert.match(calls, /^start .*processes\.json$/m);
 			assert.doesNotMatch(calls, /^save$/m);
+			for (const uid of [1000, 0]) {
+				const forwarded = runShell([
+					'CHINACHU_DIR=' + JSON.stringify(fixture.temporaryDir),
+					'NODE_VER=26.13.0',
+					'id() { echo ' + uid + '; }',
+					'stat() { echo fixture; }',
+					'service_setup_origin_user() { echo fixture; }',
+					'service_setup_find_pm2() { echo /fixture/pm2; }',
+					'chinachu_installer_node_ready() { return 1; }',
+					'resolve_bootstrap_node() { return 0; }',
+					'sudo() { printf "%s\\n" "$*"; }',
+					'runuser() { printf "%s\\n" "$*"; return 17; }',
+					'service_setup_runtime_repair local --allow-source-build'
+				].join('\n'));
+				assert.equal(forwarded.status, uid === 0 ? 1 : 0);
+				assert.match(forwarded.stdout, /--allow-source-build\n$/);
+				assert.match(forwarded.stdout, uid === 0 ? /installer node-prepare 26\.13\.0/ : /service runtime-repair local/);
+			}
 		} finally {
 			fs.rmSync(fixture.temporaryDir, { recursive: true, force: true });
 		}
@@ -132,7 +150,7 @@ describe('Service Setup safety contract', function() {
 		try {
 			const result = runShell([
 				'BOOTSTRAP_NODE_COMMAND=' + JSON.stringify(process.execPath),
-				'SERVICE_SETUP_LOCAL_USER=testuser',
+				'SERVICE_SETUP_LOCAL_USER=' + JSON.stringify(os.userInfo().username),
 				'SERVICE_SETUP_LOCAL_DUMP=' + JSON.stringify(dump),
 				'SERVICE_SETUP_LOCAL_ACTIVE=' + JSON.stringify(active),
 				'SERVICE_SETUP_LOCAL_SAVED=' + JSON.stringify(fs.readFileSync(dump, 'utf8')),
@@ -142,7 +160,8 @@ describe('Service Setup safety contract', function() {
 			].join('\n'));
 
 			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
-			assert.strictEqual(fs.readFileSync(calls, 'utf8'), 'testuser save\n');
+			assert.strictEqual(fs.readFileSync(calls, 'utf8'), '');
+			assert(!fs.readdirSync(temporaryDir).some(name=>name.includes('backup')));
 			assert.deepStrictEqual(
 				JSON.parse(fs.readFileSync(dump, 'utf8')).map(item => item.name),
 				[ 'chinachu-operator', 'chinachu-wui', 'mirakurun-server', 'old-service' ]

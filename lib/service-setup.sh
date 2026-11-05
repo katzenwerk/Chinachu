@@ -31,11 +31,15 @@ service_setup_pm2_as_user () {
   shift
   home=$(service_setup_user_home "$user") || return 1
   [ -n "$home" ] || return 1
+  if [ "$1" = jlist ] && [ -n "$BOOTSTRAP_NODE_COMMAND" ] && [ -r "$CHINACHU_DIR/lib/pm2-runtime-client.js" ]; then
+    "$BOOTSTRAP_NODE_COMMAND" "$CHINACHU_DIR/lib/pm2-runtime-client.js" inspect "$SERVICE_SETUP_PM2_BIN" "$home/.pm2" "$(id -u "$user")"
+    return $?
+  fi
   if [ "$user" = "$(id -un)" ]; then
-    env PM2_HOME="$home/.pm2" "$SERVICE_SETUP_PM2_BIN" "$@"
+    env PM2_HOME="$home/.pm2" "$NODE_PATH" "$SERVICE_SETUP_PM2_BIN" "$@"
   elif [ "$(id -u)" -eq 0 ]; then
     command -v runuser > /dev/null 2>&1 || return 1
-    runuser -u "$user" -- env PM2_HOME="$home/.pm2" "$SERVICE_SETUP_PM2_BIN" "$@"
+    runuser -u "$user" -- env PM2_HOME="$home/.pm2" "$NODE_PATH" "$SERVICE_SETUP_PM2_BIN" "$@"
   else
     return 1
   fi
@@ -68,22 +72,64 @@ service_setup_pm2_startup_enabled () {
   [ "$(systemctl is-enabled "$unit" 2>/dev/null)" = enabled ]
 }
 
-service_setup_ensure_local_startup () {
-  local user="$1" home
-  [ "$(id -u)" -eq 0 ] || return 1
-  [ -n "$user" ] && [ "$user" != root ] || return 1
-  command -v systemctl > /dev/null 2>&1 || return 1
-  [ -n "$SERVICE_SETUP_PM2_BIN" ] || return 1
+service_setup_find_pm2 () {
+  local candidate
+  for candidate in "$NAVE_DIR/installed/$NODE_VER/bin/pm2" "$NAVE_DIR/pm2-cli"; do
+    if [ -r "$candidate" ]; then readlink -f -- "$candidate"; return; fi
+  done
+  command -v pm2
+}
 
-  if service_setup_pm2_startup_enabled "$user"; then
-    return 0
+service_setup_runtime_repair () {
+  local mode="${1:-local}" source_build="${2:-}" user home binary stage='' names owner active=''
+  case "$mode" in local) user=$(service_setup_origin_user) || return 1 ;; root) user=root ;; *) return 1 ;; esac
+  if [ "$(id -u)" -ne 0 ]; then
+    binary=$(service_setup_find_pm2) || return 1
+    if chinachu_installer_node_ready && chinachu_installer_dependencies_ready &&
+       "$NODE_PATH" "$CHINACHU_DIR/lib/pm2-runtime-migrate.js" "$CHINACHU_DIR" "$binary" "$user" check &&
+       ! compgen -G "$NAVE_DIR/installed/24.*" > /dev/null; then
+      return 0
+    fi
+    sudo -- "$CHINACHU_DIR/chinachu" service runtime-repair "$mode" "$source_build"
+    return $?
   fi
-
+  owner=$(stat -c %U -- "$CHINACHU_DIR") || return 1
+  resolve_bootstrap_node || return 1
+  # Prepare target Node before using its npm to install a missing PM2 CLI.
+  runuser -u "$owner" -- "$CHINACHU_DIR/chinachu" installer node-prepare "$NODE_VER" "$source_build" || return 1
+  binary=$(service_setup_find_pm2) || binary=''
+  # The PM2 CLI itself must not live in the Node 24 directory being removed.
+  case "$binary" in "$NAVE_DIR"/installed/24.*/*) binary='' ;; esac
+  if [ -z "$binary" ]; then
+    runuser -u "$owner" -- env PATH="$(dirname -- "$NODE_PATH"):$PATH" "$NPM_PATH" install --global --prefix "$NAVE_DIR/installed/$NODE_VER" pm2@7.0.4 || return 1
+    binary=$(service_setup_find_pm2) || return 1
+  fi
   home=$(service_setup_user_home "$user") || return 1
-  [ -n "$home" ] || return 1
+  "$NODE_PATH" "$CHINACHU_DIR/lib/pm2-runtime-migrate.js" "$CHINACHU_DIR" "$binary" "$user" references || return 1
+  if ! chinachu_installer_dependencies_ready; then
+    stage=$(runuser -u "$owner" -- "$CHINACHU_DIR/chinachu" installer dependencies-prepare) || return 1
+  fi
+  if ! chinachu_installer_node_ready || [ -n "$stage" ]; then
+    service_setup_guard_activity || return 1
+    SERVICE_SETUP_PM2_BIN="$binary"
+    active=$(service_setup_pm2_as_user "$user" jlist) || return 1
+    names=$(upgrade_pm2_online_names "$active") || return 1
+    [ -z "$names" ] || service_setup_pm2_as_user "$user" stop $names || return 1
+    if [ -n "$stage" ]; then
+      runuser -u "$owner" -- "$CHINACHU_DIR/chinachu" installer dependencies-publish "$stage" || return 1
+    fi
+    runuser -u "$owner" -- "$CHINACHU_DIR/chinachu" installer node || return 1
+    runuser -u "$owner" -- "$CHINACHU_DIR/chinachu" installer verify || return 1
+  fi
+  ln -sfn -- "$binary" "$NAVE_DIR/pm2-cli" || return 1
+  { printf '#!/bin/bash\nexec %q %q "$@"\n' "$NAVE_DIR/node" "$NAVE_DIR/pm2-cli"; } > "$NAVE_DIR/pm2" || return 1
+  chmod 755 "$NAVE_DIR/pm2" || return 1
+  chown "$owner" "$NAVE_DIR/pm2" || return 1
+  printf '%s' "$active" | "$NODE_PATH" "$CHINACHU_DIR/lib/pm2-runtime-migrate.js" "$CHINACHU_DIR" "$binary" "$user" repair-prune
+}
 
-  env PATH="$PATH:/usr/bin" "$SERVICE_SETUP_PM2_BIN" startup systemd -u "$user" --hp "$home" || return 1
-  service_setup_pm2_startup_enabled "$user"
+service_setup_ensure_local_startup () {
+  service_setup_runtime_repair local
 }
 
 service_setup_json_has_chinachu () {
@@ -310,6 +356,20 @@ service_setup_capture_pm2_environment () {
   if service_setup_pm2_daemon_active "$user"; then
     daemon_active=true
     if [ -n "$SERVICE_SETUP_PM2_BIN" ] && active=$(service_setup_pm2_as_user "$user" jlist 2>/dev/null) && printf '%s' "$active" | service_setup_json_is_array; then :; else active='[]'; active_known=false; fi
+  elif [ -e "$home/.pm2/pm2.pid" ] || [ -S "$home/.pm2/rpc.sock" ] || [ -S "$home/.pm2/pub.sock" ]; then
+    # PID namespaces can hide an otherwise reachable daemon. RPC never starts one.
+    active_known=false
+    local owner
+    owner=$(id -u "$user") || return 1
+    if [ -n "$SERVICE_SETUP_PM2_BIN" ] && [ -n "$BOOTSTRAP_NODE_COMMAND" ] &&
+       [ -r "$CHINACHU_DIR/lib/pm2-runtime-client.js" ] &&
+       active=$("$BOOTSTRAP_NODE_COMMAND" "$CHINACHU_DIR/lib/pm2-runtime-client.js" inspect "$SERVICE_SETUP_PM2_BIN" "$home/.pm2" "$owner" 2>/dev/null) &&
+       printf '%s' "$active" | service_setup_json_is_array; then
+      active_known=true
+      daemon_active=true
+    else
+      active='[]'
+    fi
   fi
   if [ -e "$dump" ]; then
     if [ -r "$dump" ]; then
@@ -455,47 +515,36 @@ service_setup_print_persistence_environment () {
   fi
 }
 
-service_setup_merge_persistence_dump () {
-  "$BOOTSTRAP_NODE_COMMAND" -e '
-    const fs = require("fs"), current = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    const original = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-    const names = new Set(current.filter(Boolean).map(x => x.name));
-    for (const item of original) {
-      if (!item || !item.name || item.name === "chinachu-operator" || item.name === "chinachu-wui" || names.has(item.name)) continue;
-      current.push(item); names.add(item.name);
-    }
-    fs.writeFileSync(process.argv[3], JSON.stringify(current, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-  ' "$1" "$2" "$3"
-}
-
 service_setup_persistence_save_environment () {
   local prefix="$1" user_var="SERVICE_SETUP_${1}_USER" dump_var="SERVICE_SETUP_${1}_DUMP"
-  local active_var="SERVICE_SETUP_${1}_ACTIVE" dump="${!dump_var}" user="${!user_var}" stamp backup='' temporary had_dump=false
-  stamp=$(date -u +%Y%m%dT%H%M%SZ).$$; temporary="$dump.persistence.$$"
-  if [ -e "$dump" ]; then
-    had_dump=true; backup="$dump.persistence-backup.$stamp"
-    cp --preserve=mode,ownership,timestamps -- "$dump" "$backup" || return 1
-  fi
-  if ! service_setup_pm2_as_user "$user" save; then
-    if [ "$had_dump" = true ]; then cp --preserve=mode,ownership,timestamps -- "$backup" "$dump"; else rm -f -- "$dump"; fi
-    return 1
-  fi
-  if [ "$had_dump" = true ]; then
-    if ! service_setup_merge_persistence_dump "$dump" "$backup" "$temporary"; then cp --preserve=mode,ownership,timestamps -- "$backup" "$dump"; return 1; fi
-    chown --reference="$dump" "$temporary" 2>/dev/null || true
-    chmod --reference="$dump" "$temporary" 2>/dev/null || true
-    if ! mv -- "$temporary" "$dump"; then cp --preserve=mode,ownership,timestamps -- "$backup" "$dump"; return 1; fi
-  fi
-  if ! service_setup_capture_pm2_environment "$prefix" "$user" || ! service_setup_load_persistence_fields "$prefix"; then
-    if [ "$had_dump" = true ]; then cp --preserve=mode,ownership,timestamps -- "$backup" "$dump"; else rm -f -- "$dump"; fi
-    return 1
-  fi
-  local active_only_var="SERVICE_SETUP_${prefix}_ACTIVE_ONLY" saved_only_var="SERVICE_SETUP_${prefix}_SAVED_ONLY"
-  local saved_var="SERVICE_SETUP_${prefix}_SAVED"
-  if [ -n "${!active_only_var}" ] || { [ "$had_dump" = true ] && ! printf '%s' "${!saved_var}" | service_setup_json_preserves_other_names "$(<"$backup")"; }; then
-    if [ "$had_dump" = true ]; then cp --preserve=mode,ownership,timestamps -- "$backup" "$dump"; else rm -f -- "$dump"; fi
-    return 1
-  fi
+  local active_var="SERVICE_SETUP_${1}_ACTIVE" dump="${!dump_var}" user="${!user_var}"
+  # Save the intended process set directly; no PM2-wide save or backup copy.
+  printf '%s' "${!active_var}" | "$BOOTSTRAP_NODE_COMMAND" -e '
+    const fs = require("fs"), [dump, uid, gid] = process.argv.slice(1);
+    const active = JSON.parse(fs.readFileSync(0, "utf8"));
+    const originalStat = fs.existsSync(dump) ? fs.statSync(dump) : null;
+    const saved = originalStat ? JSON.parse(fs.readFileSync(dump, "utf8")) : [];
+    if (!Array.isArray(active) || !Array.isArray(saved)) throw new Error("Invalid PM2 process list");
+    const current = active.filter(item => !(item.pm2_env || item).pmx_module).map(item => {
+      const env = structuredClone(item.pm2_env || item);
+      delete env.pm_id; delete env.instances; delete env.prev_restart_delay;
+      return env;
+    });
+    const names = new Set(current.map(item => item.name));
+    for (const item of saved) {
+      if (!item || !item.name || ["chinachu-operator", "chinachu-wui"].includes(item.name) || names.has(item.name)) continue;
+      current.push(item); names.add(item.name);
+    }
+    const temp = dump + ".persistence." + process.pid;
+    try {
+      fs.writeFileSync(temp, JSON.stringify(current, null, 2) + "\n", {flag:"wx", mode:originalStat ? originalStat.mode & 0o777 : 0o600});
+      if (process.getuid() === 0) fs.chownSync(temp, originalStat ? originalStat.uid : Number(uid), originalStat ? originalStat.gid : Number(gid));
+      fs.renameSync(temp, dump);
+    } finally {if (fs.existsSync(temp)) fs.unlinkSync(temp);}
+  ' "$dump" "$(id -u "$user")" "$(id -g "$user")" || return 1
+  service_setup_capture_pm2_environment "$prefix" "$user" && service_setup_load_persistence_fields "$prefix" || return 1
+  local active_only_var="SERVICE_SETUP_${prefix}_ACTIVE_ONLY"
+  [ -z "${!active_only_var}" ] || return 1
   printf -v "SERVICE_SETUP_${prefix}_PERSISTENCE_SAVED" '%s' true
 }
 
@@ -595,9 +644,31 @@ service_setup_log_rotation_review () {
 
 service_setup_installer_offer () {
   local source="$1" answer
+  if [ "$source" = auto ] && [ "$(id -u)" -ne 0 ]; then
+    sudo -- "$CHINACHU_DIR/chinachu" installer pm2 auto
+    return $?
+  fi
+  resolve_bootstrap_node || return 1
+  SERVICE_SETUP_LOCAL_USER=$(service_setup_origin_user) || return 1
+  SERVICE_SETUP_PM2_BIN=$(service_setup_find_pm2 2>/dev/null) || SERVICE_SETUP_PM2_BIN=''
+  if [ -n "$SERVICE_SETUP_PM2_BIN" ]; then
+    service_setup_capture_state "$([ "$(id -u)" -eq 0 ] && echo true || echo false)" || return 1
+    if printf '%s' "$SERVICE_SETUP_LOCAL_ACTIVE$SERVICE_SETUP_LOCAL_SAVED" | grep -q 'chinachu-'; then
+      service_setup_runtime_repair local || return 1
+      return 0
+    fi
+    if [ "$(id -u)" -eq 0 ] && printf '%s' "$SERVICE_SETUP_ROOT_ACTIVE$SERVICE_SETUP_ROOT_SAVED" | grep -q 'chinachu-'; then
+      service_setup_runtime_repair root || return 1
+      return 0
+    fi
+  fi
   if [ "$(id -u)" -eq 0 ]; then
     printf '\n────────────────────────────────\nChinachuのPM2サービス設定・確認\n────────────────────────────────\n\n'
-    chinachu_service_setup
+    if [ "$source" = auto ]; then
+      service_setup_run_setup local
+    else
+      chinachu_service_setup
+    fi
     return $?
   fi
   if [ "$source" != menu ]; then
@@ -730,7 +801,6 @@ service_setup_rollback_registration () {
   else
     SERVICE_SETUP_ROLLED_BACK=false
   fi
-  if [ "$SERVICE_SETUP_SAVE_ATTEMPTED" = true ]; then service_setup_pm2 save > /dev/null 2>&1 || return 1; fi
 }
 
 service_setup_print_setup_result () {
@@ -747,7 +817,6 @@ service_setup_fail_before_start () {
 service_setup_fail_after_start () {
   local rollback='不要' saved='変更なし'
   if service_setup_rollback_registration; then [ "$SERVICE_SETUP_ROLLED_BACK" != true ] || rollback='実施済み'; else rollback='失敗（手動確認が必要）'; fi
-  [ "$SERVICE_SETUP_SAVE_ATTEMPTED" != true ] || saved='save試行後（rollback結果を確認）'
   service_setup_error "$1"
   service_setup_print_setup_result 'rollback後は未登録' "$saved" "$rollback" 'PM2状態を確認してService Setupを再実行'
   return 1
@@ -756,8 +825,14 @@ service_setup_fail_after_start () {
 service_setup_register () {
   local mode="$1" output before after scheduler_size
   resolve_bootstrap_node || return 1
-  SERVICE_SETUP_PM2_BIN=$(command -v pm2) || { service_setup_fail_before_start "PM2が見つかりません。"; return 1; }
-  SERVICE_SETUP_CREATED=false; SERVICE_SETUP_ROLLED_BACK=false; SERVICE_SETUP_SAVE_ATTEMPTED=false
+  SERVICE_SETUP_PM2_BIN=$(service_setup_find_pm2) || {
+    [ "$(id -u)" -eq 0 ] || { service_setup_fail_before_start "PM2が見つかりません。"; return 1; }
+    local owner
+    owner=$(stat -c %U -- "$CHINACHU_DIR") || return 1
+    runuser -u "$owner" -- env PATH="$(dirname -- "$NODE_PATH"):$PATH" "$NPM_PATH" install --global --prefix "$NAVE_DIR/installed/$NODE_VER" pm2@7.0.4 || return 1
+    SERVICE_SETUP_PM2_BIN=$(service_setup_find_pm2) || return 1
+  }
+  SERVICE_SETUP_CREATED=false; SERVICE_SETUP_ROLLED_BACK=false
   if [ "$mode" = local ]; then
     SERVICE_SETUP_PM2_USER=$(service_setup_origin_user) || { service_setup_fail_before_start "local方式の一般ユーザーを特定できません。"; return 1; }
     SERVICE_SETUP_RUNTIME_USER="$SERVICE_SETUP_PM2_USER"
@@ -1048,7 +1123,7 @@ service_setup_local_persistence_needs_repair () {
 service_setup_repair_local_persistence () {
   local active_var saved_var
   [ "$(id -u)" -eq 0 ] || return 1
-  SERVICE_SETUP_PM2_BIN=${SERVICE_SETUP_PM2_BIN:-$(command -v pm2 2>/dev/null)}
+  SERVICE_SETUP_PM2_BIN=${SERVICE_SETUP_PM2_BIN:-$(service_setup_find_pm2 2>/dev/null)}
   [ -n "$SERVICE_SETUP_PM2_BIN" ] || { service_setup_error 'PM2が見つかりません。'; return 1; }
 
   active_var=SERVICE_SETUP_LOCAL_ACTIVE
@@ -1129,12 +1204,7 @@ service_setup_run_setup () {
     return 1
   fi
 
-  if [ "$mode" = local ]; then
-    service_setup_ensure_local_startup "$SERVICE_SETUP_LOCAL_USER" || {
-      service_setup_error 'Local PM2のOS自動起動設定に失敗しました。Chinachu active/saved stateは維持します。'
-      return 1
-    }
-  fi
+  service_setup_runtime_repair "$mode" || return 1
 
   service_setup_log_rotation_review || return 1
   service_setup_capture_state true || return 1
@@ -1194,7 +1264,7 @@ service_setup_run_setup () {
 service_setup_run_menu () {
   local choice loop_menu=false show_state=true result mode_label
   resolve_bootstrap_node || return 1
-  SERVICE_SETUP_PM2_BIN=$(command -v pm2 2>/dev/null) || SERVICE_SETUP_PM2_BIN=""
+  SERVICE_SETUP_PM2_BIN=$(service_setup_find_pm2 2>/dev/null) || SERVICE_SETUP_PM2_BIN=""
   SERVICE_SETUP_LOCAL_USER=$(service_setup_origin_user) || { service_setup_error "有効な非root SUDO_USERを特定できません。"; return 1; }
   SERVICE_SETUP_INCLUDE_ROOT=true
 
