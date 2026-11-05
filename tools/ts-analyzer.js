@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Offline, read-only tool. Chinachu thorn.31's TS parser is loaded unmodified;
+// Offline, read-only tool. The current Chinachu TS parser is loaded directly;
 // supplemental CC-repeat validation and PCR-gap inspection live only here.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -10,7 +10,6 @@ const { performance } = require('node:perf_hooks');
 const { BroadcastClock, formatPCR, formatJst } = require('./ts-time-reader');
 
 const READ_CHUNK_BYTES = 4 * 1024 * 1024;
-const EXPECTED_BLOB_SHA = 'ed824b2de3358e75771581b1c3dcfb1fbe294633';
 const MAX_CC_SAMPLES = 20;
 const MAX_GAP_SAMPLES = 100;
 const NULL_PID = 0x1fff;
@@ -27,8 +26,7 @@ function usage() {
   ./tools/ts-analyzer [--analyzer PATH] --json FILE.ts
 
 Options:
-  --analyzer PATH       Path to Chinachu thorn.31 lib/ts-drop-analyzer.js
-  --allow-other-version Allow other engine SHA explicitly (results may differ)
+  --analyzer PATH       Path to lib/ts-drop-analyzer.js
   --dir DIRECTORY       Scan regular .ts files immediately inside directory (no recursion)
   --summary             One result line per file; no event timeline
   --events              Show legacy one-line CC/PCR events
@@ -42,7 +40,7 @@ PCR gaps are candidates for missing timeline data, not proof of dropped video.`)
 }
 
 function parseArgs(argv) {
-  const opts = { analyzer: null, allowOtherVersion: false, dirs: [], files: [],
+  const opts = { analyzer: null, dirs: [], files: [],
     summary: false, events: false, json: false, gapThresholdMs: 2000, pcrPid: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -50,7 +48,6 @@ function parseArgs(argv) {
     if (arg === '--json') { opts.json = true; continue; }
     if (arg === '--summary') { opts.summary = true; continue; }
     if (arg === '--events' || arg === '--verbose') { opts.events = true; continue; }
-    if (arg === '--allow-other-version') { opts.allowOtherVersion = true; continue; }
     if (['--analyzer', '--dir', '--pcr-gap-ms', '--pcr-pid'].includes(arg)) {
       const value = argv[++i];
       if (!value || value.startsWith('--')) throw new Error(`Missing value for ${arg}`);
@@ -432,10 +429,6 @@ async function main() {
   if (opts.help) return usage();
   const analyzerPath = locateAnalyzer(opts.analyzer);
   const sha = gitBlobSha(analyzerPath);
-  if (sha !== EXPECTED_BLOB_SHA && !opts.allowOtherVersion) {
-    throw new Error(`Different analyzer: ${sha}. Expected thorn.31 ${EXPECTED_BLOB_SHA}. ` +
-      'Use --allow-other-version only if you intend to compare a modified engine.');
-  }
   const { TsDropAnalyzer } = require(analyzerPath);
   if (typeof TsDropAnalyzer !== 'function') throw new Error('TsDropAnalyzer export not found');
   const targets = await collectTargets(opts);

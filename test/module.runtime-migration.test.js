@@ -2,6 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),cp=require('node:child_process');
 const {diagnose}=require('../lib/runtime-diagnostics');
+const {TsDropAnalyzer}=require('../lib/ts-drop-analyzer');
 
 test('runtime diagnosis detects mixed live/saved/backup/startup targets without writes',t=>{
 	const root=fs.mkdtempSync(path.join(os.tmpdir(),'chinachu-diagnosis-'));
@@ -49,4 +50,38 @@ test('Nave adapter never falls back to source without the explicit flag, and pro
 	assert.equal(fs.readFileSync(path.join(root,'source-allowed'),'utf8').trim(),'1:1:-j1');
 	const profile=cp.spawnSync('python3',[path.resolve(__dirname,'../lib/installer-profile.py'),'failure-fixture','bash','-c','exit 7'],{encoding:'utf8'});
 	assert.equal(profile.status,7);assert.match(profile.stderr,/"status":7/);
+});
+
+test('TS analysis preserves CC/TEI/sync and owned pending bytes for all packet/chunk boundaries',()=>{
+	const packet=(pid,cc,flags=0)=>{const b=Buffer.alloc(188,0xff);b[0]=0x47;b[1]=(pid>>8)|flags;b[2]=pid&255;b[3]=0x10|cc;return b;};
+	const data=Buffer.concat([packet(33,0),packet(33,1),packet(33,4),packet(33,4),packet(34,0,0x80),packet(8191,0),Buffer.from([0,1,2]),packet(33,7),packet(33,8),packet(33,9),Buffer.from([0x47,0])]);
+	const run=size=>{
+		const analyzer=new TsDropAnalyzer({now:()=>0,hrtime:()=>0n});
+		for(let i=0;i<data.length;i+=size) {
+			const input=Buffer.from(data.subarray(i,i+size));analyzer.push(input);input.fill(0);
+		}
+		return analyzer.finish();
+	};
+	const expected=run(data.length);
+	assert.equal(expected.ccErrorEvents,1);assert.equal(expected.duplicatePackets,1);
+	assert.equal(expected.teiPackets,1);assert.equal(expected.nullPackets,1);
+	assert.equal(expected.syncErrorEvents,1);assert.equal(expected.syncRecoveries,1);assert.equal(expected.trailingBytes,2);
+	for(const size of [1,2,17,187,188,189,375,564,1024]) assert.deepEqual(run(size),expected,'chunk size '+size);	const root=fs.mkdtempSync(path.join(os.tmpdir(),'chinachu-ts-cli-'));
+	try {
+		const input=path.join(root,'sample.ts');
+		fs.writeFileSync(input,Buffer.concat([packet(33,0),packet(33,1),packet(33,2)]));
+		const cli=cp.spawnSync(process.execPath,[path.resolve(__dirname,'../tools/ts-analyzer.js'),'--json',input],{encoding:'utf8'});
+		assert.equal(cli.status,0,cli.stderr);
+		const result=JSON.parse(cli.stdout);
+		assert.equal(result.completed,true);
+		const {externalAnalysis}=require('../lib/saved-ts-analysis');
+		const request={path:input,file:{size:564},result};
+		const historical=externalAnalysis(request);
+		assert.equal(historical.result.analyzerBlobSha,result.analyzerBlobSha);
+		delete result.analyzerBlobSha;
+		assert.equal(externalAnalysis(request).result.completed,true);
+		result.analyzerBlobSha='different-engine';
+		assert.equal(externalAnalysis(request).result.analyzerBlobSha,'different-engine');
+	} finally {fs.rmSync(root,{recursive:true,force:true});}
+
 });

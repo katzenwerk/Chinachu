@@ -7,6 +7,10 @@
 - Repair the runtime before skipping source updates for local changes or an unchanged upstream; installations without PM2 are repaired without registering services.
 - Unify PM2 runtime, startup and saved settings on Node 26. Remove managed Node 24 after configuration changes and before service startup, without creating migration backups or providing a Node 24 rollback.
 
+## TS Analysis
+
+- Remove fixed engine SHA requirements from CLI analysis, Operator analysis and external result registration while keeping historical saved results readable.
+
 # Chinachu 0.10.7-thorn.33
 
 ## Recording History and Cleaner
