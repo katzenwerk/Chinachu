@@ -27,6 +27,11 @@
 - Suppress successful routine status GET logs while retaining other accesses, errors and operation records.
 - Log low-space transitions, recording start/end checks and recovery without repeating unchanged capacity warnings.
 
+## Recording Maintenance
+
+- Continue status updates after communication errors and show Operator failure messages and recording-related wait reasons when reopening maintenance.
+- Summarize saved TS verdicts, anomaly counts and GAP locations; keep technical details collapsible and distinguish missing samples from zero findings.
+
 # Chinachu 0.10.7-thorn.33
 
 ## Recording History and Cleaner

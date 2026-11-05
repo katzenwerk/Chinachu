@@ -5,7 +5,8 @@ import { formatRecordingSeconds, savedTsResultInfo } from '../services/recorded-
 
 const STEP_LABELS = { checking: '対象確認中', running: '実行中', failed: '失敗', interrupted: '中断' };
 export function savedTsLabel(value) {
-  return savedTsResultInfo(value).label;
+  const info = savedTsResultInfo(value);
+  return info.findings ? '要確認' : info.label;
 }
 function fact(host, name, value) {
   const dt = document.createElement('dt');
@@ -17,92 +18,102 @@ export function createSavedTsSummary(value) {
   if (!value) return null;
   const section = document.createElement('section');
   section.className = 'program-saved-ts-summary';
-  const heading = document.createElement('h4');
-  heading.textContent = '保存TS解析';
-  const list = document.createElement('dl');
-  list.className = 'program-saved-ts-facts';
-  function summaryFact(name, value, className = '') {
-    const pair = document.createElement('div');
-    pair.className = className;
-    fact(pair, name, value);
-    list.append(pair);
-  }
+  const heading = document.createElement('h4'); heading.textContent = '保存TS解析';
+  const list = document.createElement('dl'); list.className = 'program-saved-ts-facts';
   const result = value.result || {};
-  summaryFact('結果', savedTsLabel(value), 'is-wide is-result');
-  summaryFact('対象パス', value.registeredPath || value.file?.path || '不明', 'is-wide');
-  if (Number.isFinite(value.file?.size)) summaryFact('対象ファイルサイズ', `${value.file.size} bytes`, 'is-wide');
-  for (const [name, key] of [['CC異常合計', 'ccErrorEvents'], ['TEI', 'teiPackets'], ['同期異常', 'syncErrorEvents'],
-    ['ヘッダー異常', 'invalidHeaderPackets'], ['PCR時間飛び候補', 'pcrGapEvents'], ['低データ量の時間飛び候補', 'pcrLowDataGapEvents'],
-    ['PCR逆行候補', 'pcrBackwards'], ['PCR時計切替', 'pcrResets']]) {
-    if (Number.isFinite(result[key])) summaryFact(name, result[key]);
+  const present = value => value !== undefined && value !== null && value !== '' && value !== '-';
+  const count = value => Number.isFinite(value) && value >= 0 ? `${value}件` : '不明';
+  const pid = value => Number.isInteger(value) ? `0x${value.toString(16).toUpperCase().padStart(4, '0')}` : value;
+  const offset = value => Number.isFinite(value) && value >= 0 ? `${value.toLocaleString('ja-JP')} bytes（0x${value.toString(16).toUpperCase()}）` : '不明';
+  function summaryFact(name, value, className = '') {
+    const pair = document.createElement('div'); pair.className = className;
+    fact(pair, name, value); list.append(pair);
   }
+  function note(host, text) {
+    const paragraph = document.createElement('p'); paragraph.textContent = text; host.append(paragraph);
+  }
+  function table(host, label, rows, fields) {
+    const wrap = document.createElement('div'); wrap.className = 'program-saved-ts-table-scroll';
+    wrap.tabIndex = 0; wrap.setAttribute('role', 'region'); wrap.setAttribute('aria-label', label);
+    const table = document.createElement('table');
+    const caption = document.createElement('caption'); caption.textContent = label;
+    const head = document.createElement('thead'); const headers = document.createElement('tr');
+    for (const [name] of fields) { const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = name; headers.append(cell); }
+    head.append(headers);
+    const body = document.createElement('tbody');
+    for (const row of rows) {
+      const line = document.createElement('tr');
+      for (const [, key, format] of fields) {
+        const cell = document.createElement('td');
+        cell.textContent = present(row[key]) ? (format ? format(row[key]) : row[key]) : '不明';
+        line.append(cell);
+      }
+      body.append(line);
+    }
+    table.append(caption, head, body); wrap.append(table); host.append(wrap);
+  }
+  function sampleLabel(name, rows, total, truncated) {
+    if (Number.isFinite(total) && total > rows.length) return `${name}（全${total}件中、詳細${rows.length}件）`;
+    if (!Number.isFinite(total) || truncated) return `${name}（詳細${rows.length}件・${truncated ? '保存上限あり' : '全件数不明'}）`;
+    return name;
+  }
+  summaryFact('結果', savedTsLabel(value), 'is-wide is-result');
+  summaryFact('CC異常合計', count(result.ccErrorEvents));
+  summaryFact('GAP候補', count(result.pcrGapEvents));
+  summaryFact('その他の異常', `TEI ${count(result.teiPackets)} / 同期 ${count(result.syncErrorEvents)} / ヘッダー ${count(result.invalidHeaderPackets)}`, 'is-wide');
   if (!result.completed) summaryFact('未完了・失敗理由', result.stopReason || result.error || '不明', 'is-wide');
   if (result.completed && result.pcrSamples === 0) summaryFact('PCR評価', 'PCR未検出のため時間飛びは評価できません。', 'is-wide');
   if (value.lastAttempt) summaryFact('直近の再解析', `${value.lastAttempt.status}: ${value.lastAttempt.reason || ''}（前回の完了結果を保持）`, 'is-wide');
-  for (const [key, label] of [['pcrPid', 'PCR PID'], ['pcrSamples', 'PCRサンプル数'], ['totValidSections', '有効TOT数']]) {
-    if (result[key] !== undefined && result[key] !== null) summaryFact(label, result[key]);
-  }
   section.append(heading, list);
-  const pidEntries = Object.entries(result.ccErrorsByPid || {}).filter(([, count]) => Number.isFinite(count) && count > 0);
-  if (pidEntries.length) {
-    const pidHeading = document.createElement('h4'); pidHeading.textContent = 'CC異常・PID別件数';
-    const pids = document.createElement('dl');
-    for (const [pid, count] of pidEntries) fact(pids, /^\d+$/.test(pid) ? `PID 0x${Number(pid).toString(16).toUpperCase().padStart(4, '0')}` : `PID ${pid}`, `${count}件`);
-    section.append(pidHeading, pids);
-    if (result.pidResultsTruncated) {
-      const note = document.createElement('p'); note.textContent = 'PID別内訳は保存上限までの表示です。全PIDの内訳は保存されていません。'; section.append(note);
-    }
+  const gaps = Array.isArray(result.pcrGapSamples) ? result.pcrGapSamples : [];
+  if (gaps.length) {
+    table(section, sampleLabel('GAP候補の発生箇所', gaps, result.pcrGapEvents, result.pcrGapSamplesTruncated), gaps, [
+      ['PCR観測時刻（開始）', 'fromPcr'], ['時間差', 'deltaMs', value => Number.isFinite(value) ? `${(value / 1000).toFixed(2)}秒` : '不明'],
+      ['通常区間比', 'rateRatio', value => Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '不明'],
+      ['データ量低下', 'lowData', value => value === true ? '疑いあり' : value === false ? '記録なし' : '不明']
+    ]);
+    note(section, 'PCR観測時刻は厳密な再生位置ではありません。GAPは時間飛び候補で、欠落の確定ではありません。');
+  } else if (result.pcrGapEvents > 0) {
+    note(section, `GAP候補の発生位置は未保存です（全${result.pcrGapEvents}件中、詳細0件）。`);
   }
-  const present = value => value !== undefined && value !== null && value !== '' && value !== '-';
-  const offset = value => Number.isFinite(value) && value >= 0 ? `${value.toLocaleString('ja-JP')} bytes（0x${value.toString(16).toUpperCase()}）` : null;
-  function samples(label, values, total, fields, truncated) {
-    if (!Array.isArray(values) || !values.length) return;
-    const title = document.createElement('h4');
-    title.textContent = `${label}（${Number.isFinite(total) ? `${total}件中、` : ''}記録済みの${values.length}件を表示）`;
-    const entries = document.createElement('ol'); entries.className = 'program-saved-ts-events';
-    for (const sample of values) {
-      const item = document.createElement('li'); const facts = document.createElement('dl');
-      for (const [name, key, format] of fields) {
-        if (!present(sample[key])) continue;
-        const value = format ? format(sample[key]) : sample[key];
-        if (present(value)) fact(facts, name, value);
-      }
-      item.append(facts); entries.append(item);
-    }
-    section.append(title, entries);
-    if (truncated || Number.isFinite(total) && total > values.length) {
-      const note = document.createElement('p'); note.textContent = '保存サンプルのみを表示しています。全件の発生位置は保持していません。'; section.append(note);
-    }
+  if (result.pcrLowDataGapEvents > 0) note(section, `GAP候補の補足：低データ量の疑い ${count(result.pcrLowDataGapEvents)}`);
+  const details = document.createElement('details');
+  const summary = document.createElement('summary'); summary.textContent = '技術詳細'; details.append(summary);
+  const stats = document.createElement('dl');
+  if (Number.isFinite(value.file?.size)) fact(stats, '対象ファイルサイズ', `${value.file.size} bytes`);
+  for (const [key, label] of [['pcrPid', 'PCR PID'], ['pcrSamples', 'PCRサンプル数'], ['totValidSections', '有効TOT数'],
+    ['pcrBackwards', 'PCR逆行候補'], ['pcrResets', 'PCR時計切替']]) {
+    if (present(result[key])) fact(stats, label, key === 'pcrPid' ? pid(result[key]) : result[key]);
   }
-  samples('CC異常の発生箇所', result.ccSamples, result.ccErrorEvents, [
-    ['PID', 'pid', value => Number.isInteger(value) ? `0x${value.toString(16).toUpperCase().padStart(4, '0')}` : value],
-    ['バイト位置', 'byteOffset', offset], ['種別', 'kind', value => ({ 'counter-jump': 'CC不連続', 'repeat-changed': '同一CCで内容変更', 'repeat-excess': '同一CCの繰り返し過多' })[value] || value], ['PID内の検出順', 'occurrence'],
-    ['直前CC', 'previousCc'], ['期待CC', 'expectedCc'], ['実測CC', 'actualCc'], ['PCR', 'pcr'], ['直近TOT', 'tot']
-  ], result.ccSamplesTruncated);
-  samples('GAP候補の発生箇所', result.pcrGapSamples, result.pcrGapEvents, [
-    ['PCR PID', 'pid'], ['PCR区間', 'segment'], ['開始バイト位置', 'fromOffset', offset], ['終了バイト位置', 'toOffset', offset],
-    ['開始PCR', 'fromPcr'], ['終了PCR', 'toPcr'], ['時間差', 'deltaMs', value => Number.isFinite(value) ? `${value} ms` : null],
-    ['区間データ量', 'bytesBetween', value => Number.isFinite(value) ? `${value.toLocaleString('ja-JP')} bytes` : null],
-    ['通常区間比', 'rateRatio', value => Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : null],
-    ['データ量低下', 'lowData', value => value === true ? '疑いあり' : value === false ? '記録なし' : null], ['直近TOT', 'tot']
-  ], result.pcrGapSamplesTruncated);
-  if ((result.ccErrorEvents > 0 && !result.ccSamples?.length) || (result.pcrGapEvents > 0 && !result.pcrGapSamples?.length)) {
-    const note = document.createElement('p'); note.textContent = '発生件数は保存されていますが、該当する発生位置サンプルは保存されていません。'; section.append(note);
-  }
+  details.append(stats);
+  const pids = Object.entries(result.ccErrorsByPid || {}).filter(([, count]) => Number.isFinite(count) && count > 0)
+    .map(([key, count]) => ({ pid: /^\d+$/.test(key) ? Number(key) : key, count }));
+  if (pids.length) table(details, 'CC異常・PID別件数', pids, [['PID', 'pid', pid], ['件数', 'count', count]]);
+  if (result.pidResultsTruncated) note(details, 'PID別内訳は保存上限までの表示です。');
+  const cc = Array.isArray(result.ccSamples) ? result.ccSamples : [];
+  if (cc.length) table(details, sampleLabel('CC異常の発生箇所', cc, result.ccErrorEvents, result.ccSamplesTruncated), cc, [
+    ['PID', 'pid', pid], ['種別', 'kind', value => ({ 'counter-jump': 'CC不連続', 'repeat-changed': '同一CCで内容変更', 'repeat-excess': '同一CCの繰り返し過多' })[value] || value],
+    ['バイト位置', 'byteOffset', offset], ['PID内の検出順', 'occurrence'], ['直前CC', 'previousCc'],
+    ['期待CC', 'expectedCc'], ['実測CC', 'actualCc'], ['PCR観測値', 'pcr'], ['直近TOT', 'tot']
+  ]);
+  else if (result.ccErrorEvents > 0) note(details, `CC異常の発生位置は未保存です（全${result.ccErrorEvents}件中、詳細0件）。`);
+  if (gaps.length) table(details, 'GAP候補・技術情報（上の一覧と同じ順序）', gaps, [
+    ['PCR PID', 'pid', pid], ['PCR区間', 'segment'], ['開始バイト位置', 'fromOffset', offset], ['終了バイト位置', 'toOffset', offset],
+    ['終了PCR観測値', 'toPcr'], ['区間データ量', 'bytesBetween', value => Number.isFinite(value) ? `${value.toLocaleString('ja-JP')} bytes` : '不明'], ['直近TOT', 'tot']
+  ]);
   if ([result.teiPackets, result.syncErrorEvents, result.invalidHeaderPackets].some(value => value > 0)) {
-    const note = document.createElement('p'); note.textContent = 'TEI・同期異常・ヘッダー異常は件数のみが保存されており、個別の発生位置は保存されていません。'; section.append(note);
+    note(details, 'TEI・同期異常・ヘッダー異常は件数のみが保存されており、個別の発生位置は保存されていません。');
   }
-  const hasFindings = result.status === 'SUSPECT' || [result.ccErrorEvents, result.pcrGapEvents, result.teiPackets, result.syncErrorEvents, result.invalidHeaderPackets, result.pcrBackwards].some(value => value > 0);
-  if (hasFindings) {
-    const note = document.createElement('p');
-    note.textContent = 'PCRと直近TOTは保存された観測値です。GAPは時間飛び候補で、欠落の確定ではありません。'; section.append(note);
+  const shown = new Set(['file', 'ccErrorEvents', 'pcrGapEvents', 'teiPackets', 'syncErrorEvents', 'invalidHeaderPackets',
+    'pcrBackwards', 'pcrResets', 'pcrPid', 'pcrSamples', 'totValidSections', 'ccErrorsByPid']);
+  if (result.pcrLowDataGapEvents > 0) shown.add('pcrLowDataGapEvents');
+  const extra = Object.fromEntries(Object.entries(result).filter(([key]) => !shown.has(key)));
+  if (Object.keys(extra).length) {
+    const raw = document.createElement('details'); const title = document.createElement('summary'); title.textContent = 'その他の解析統計（JSON）';
+    const pre = document.createElement('pre'); pre.textContent = JSON.stringify(extra, null, 2);
+    raw.append(title, pre); details.append(raw);
   }
-  if (hasFindings || result.completed !== true || value.lastAttempt) {
-    const details = document.createElement('details');
-    const summary = document.createElement('summary'); summary.textContent = '保存済みの追加情報・元データ';
-    const pre = document.createElement('pre'); pre.textContent = JSON.stringify(result, (key, data) => ['checkedAt', 'startedAt', 'elapsedMs', 'wallTimeMs', 'processingTimeMs', 'mtimeMs'].includes(key) ? undefined : data, 2);
-    details.append(summary, pre); section.append(details);
-  }
+  section.append(details);
   return section;
 }
 export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordingWarnings = () => null }) {
@@ -111,7 +122,7 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
   const controller = new AbortController();
   let disposed = false, pending = false, pendingInput = null, state = null, timer = null, error = '', refreshError = '', manualPath = '', announced = '';
   let selectedRoots = null, confirmed = false, confirmedToken = null;
-  let analysisOpen = false, searchOpen = false, manualOpen = false, recoveryRequested = false, activeRunAt = null;
+  let analysisOpen = null, searchOpen = false, manualOpen = false, recoveryRequested = false;
   const failures = {};
   const busy = () => pending || ['queued', 'running'].includes(state?.job?.status);
   function button(label, fn, disabled = false) {
@@ -137,11 +148,12 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
   }
   function accept(next) {
     state = next;
+    if (analysisOpen === null && next.analysis) analysisOpen = true;
     if (next.job?.action === 'apply' && next.job.status === 'complete' && next.file?.state === 'present') {
       recoveryRequested = false; searchOpen = false; manualOpen = false;
     }
     for (const [name, stage] of Object.entries(next.job?.stages || {})) {
-      if (next.job.createdAt === activeRunAt && ['failed', 'interrupted'].includes(stage.state)) failures[name] = stage.message || STEP_LABELS[stage.state];
+      if (['failed', 'interrupted'].includes(stage.state)) failures[name] = stage.message || STEP_LABELS[stage.state];
       if (stage.state === 'complete') delete failures[name];
     }
   }
@@ -163,7 +175,7 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
   }
   function planPoll() {
     window.clearTimeout(timer);
-    if (!disposed && ['queued', 'running'].includes(state?.job?.status)) timer = window.setTimeout(poll, 1500);
+    if (!disposed && (error || ['queued', 'running'].includes(state?.job?.status))) timer = window.setTimeout(poll, 1500);
   }
   async function poll() {
     try {
@@ -171,8 +183,9 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
       if (disposed) return;
       accept(next); error = '';
       await updated();
-      if (!disposed) { render(); planPoll(); }
+      if (!disposed) render();
     } catch (cause) { if (!disposed) { error = cause.message; render(); } }
+    finally { planPoll(); }
   }
   async function perform(input) {
     if (busy() || disposed) return;
@@ -180,7 +193,6 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
     try {
       const next = await requestRecordedMaintenance(id, input, controller.signal);
       if (disposed) return;
-      if (input.action === 'run') activeRunAt = next.job?.createdAt ?? null;
       accept(next); pending = false; pendingInput = null;
       await updated();
       if (!disposed) { render(); planPoll(); }
@@ -211,8 +223,8 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
     const name = document.createElement('p'); name.textContent = title;
     header.append(heading, name);
     const stages = state?.job?.stages || {};
-    const runFileMissing = activeRunAt !== null && state?.job?.createdAt === activeRunAt && state.job.action === 'run' &&
-      ['complete', 'failed'].includes(state.job.status) && state.file?.state === 'missing' && state.file.checkedAt >= activeRunAt;
+    const runFileMissing = state?.job?.action === 'run' &&
+      ['complete', 'failed'].includes(state.job.status) && state.file?.state === 'missing' && state.file.checkedAt >= state.job.createdAt;
     const canProcess = !!state && !state.fileMissing && !runFileMissing && !busy() && !error;
     const probeDone = state?.ffprobe?.state === 'complete';
     const thumbnailDone = state?.thumbnail?.available === true;
@@ -221,7 +233,11 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
       const input = pendingInput;
       if (input?.action === 'run' && (input.tasks?.[task] || input.redo?.[task])) return '要求送信中…';
       const selected = state?.job?.action === 'run' && (state.job.tasks?.[task]?.selected || state.job.tasks?.[task]?.redo);
-      if (selected && state.job.status === 'queued') return '実行待ち';
+      if (selected && state.job.status === 'queued') {
+        const reason = { recording: '録画中', 'recording-transition': '録画開始・終了付近の保護',
+          'post-processing': '先行する後処理の完了待ち' }[state.job.waitReason];
+        return reason ? `実行待ち（${reason}）` : '実行待ち';
+      }
       const stage = stages[task];
       if (['checking', 'running'].includes(stage?.state)) return STEP_LABELS[stage.state];
       if (selected && state.job.status === 'running' && !stage) return '対象確認・実行待ち';
@@ -301,7 +317,7 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
     }
     const analysisInfo = savedTsResultInfo(analysis);
     const incompleteTs = stages.ts?.state === 'interrupted' || analysis?.lastAttempt?.status === 'INCOMPLETE' || analysis?.result?.status === 'INCOMPLETE';
-    const analysisText = progress('ts') || (analysis ? analysisInfo.label : failures.ts ? (incompleteTs ? '解析未完了' : '解析失敗') : '未解析');
+    const analysisText = progress('ts') || (analysis ? savedTsLabel(analysis) : failures.ts ? (incompleteTs ? '解析未完了' : '解析失敗') : '未解析');
     const hasAnalysisDetails = !!analysis || !!failures.ts;
     const tsAction = button(analysis || failures.ts ? '再解析' : '解析する', () => runTask('ts', !!analysis), !canProcess);
     tsAction.title = '保存TS全量を読み込みます。録画優先で待機・中断し、待機期限は10分です。';
@@ -323,8 +339,7 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
       }
       body.append(warnings);
     }
-    const currentJob = state?.job?.createdAt === activeRunAt || recoveryRequested;
-    if (error || currentJob && state?.job?.status === 'failed' && state.job.message) {
+    if (error || state?.job?.status === 'failed' && state.job.message) {
       const message = document.createElement('p'); message.setAttribute('role', 'alert'); message.textContent = error || state.job.message; body.append(message);
       if (error) body.append(button('表示を更新', poll, pending));
     }
@@ -351,12 +366,11 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
   document.body.append(dialog); render(); dialog.showModal();
   loadRecordedMaintenance(id, controller.signal).then(next => {
     if (disposed) return;
-    if (next.job?.action === 'run' && ['queued', 'running'].includes(next.job.status)) activeRunAt = next.job.createdAt;
     accept(next); render();
     if (['queued', 'running'].includes(next.job?.status)) {
       planPoll();
     }
 
-  }).catch(cause => { if (!disposed) { error = cause.message; render(); } });
+  }).catch(cause => { if (!disposed) { error = cause.message; render(); planPoll(); } });
   return dialog;
 }

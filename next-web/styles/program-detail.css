@@ -202,14 +202,20 @@ button.program-modal-thumbnail.is-empty span { top: 50%; left: 50%; transform: t
 .recorded-maintenance-body dl,.program-saved-ts-summary dl { display: grid; grid-template-columns: minmax(100px,max-content) minmax(0,1fr); gap: 6px 12px; margin: 0; font-size: 12px; }
 .recorded-maintenance-body dd,.program-saved-ts-summary dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .recorded-maintenance-body > footer { flex: 0 0 auto; padding: 12px 20px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.program-saved-ts-summary { display: grid; gap: 8px; font-size: 12px; }
+.program-saved-ts-summary { display: grid; gap: 8px; min-width: 0; font-size: 12px; }
 .program-saved-ts-summary .program-saved-ts-facts { grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); gap: 8px 20px; }
 .program-saved-ts-facts > div { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: baseline; gap: 6px 12px; min-width: 0; }
 .program-saved-ts-facts > .is-wide { grid-column: 1 / -1; grid-template-columns: 100px minmax(0,1fr); }
 .program-saved-ts-facts dt { color: var(--muted); overflow-wrap: anywhere; }
 .program-saved-ts-facts > .is-result { padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .program-saved-ts-facts > .is-result dd { font-weight: var(--font-title-weight); }
-.program-saved-ts-events { display: grid; gap: 12px; margin: 0; padding-left: 24px; }
+.program-saved-ts-summary details { min-width: 0; }
+.program-saved-ts-summary summary { cursor: pointer; }
+.program-saved-ts-summary details > :not(summary) { margin-top: 8px; }
+.program-saved-ts-table-scroll { min-width: 0; max-width: 100%; overflow-x: auto; }
+.program-saved-ts-table-scroll table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.program-saved-ts-table-scroll caption { text-align: left; padding-bottom: 6px; font-weight: var(--font-title-weight); }
+.program-saved-ts-table-scroll th,.program-saved-ts-table-scroll td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
 .program-saved-ts-summary pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-height: 420px) {

@@ -462,6 +462,14 @@ recordedMaintenance = recordedMaintenanceModule.createMaintenance({
 			!isRecordedForReserve(program) && Number(program.start) > Date.now() && Number(program.start) - Date.now() <= 20000);
 		return approaching ? Math.max(1000, guard) : guard;
 	},
+	waitReason(ts) {
+		if (shutdownStarted) return null;
+		if (ts && (recording.length || activeRecordingOutputs.size)) return 'recording';
+		if (this.delay(ts) > 0) return 'recording-transition';
+		if (recordedMaintenance.isBusy() || matchLedgerProcess || activeDurationProbes.size ||
+			pendingRecordedLedgerWrites || recordedThumbnailGenerator.getState().active) return 'post-processing';
+		return null;
+	},
 	probe: filePath => new Promise(resolve => startDurationProbe({ filePath, queuedAt: Date.now(), maintenance: true,
 		callback: duration => resolve(duration) })),
 	onChanged: () => { try { recorded = reservationStore.readArray(RECORDED_DATA_FILE); } catch (error) {
