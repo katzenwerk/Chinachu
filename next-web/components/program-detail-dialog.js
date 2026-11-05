@@ -670,12 +670,12 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       button.addEventListener('click', () => mutate(model, model.actions.reservation));
       primary.append(button);
     }
-    if (model.media.liveModel && !model.media.livePreviewUrl) {
+    if (model.media.liveModel) {
       const button = document.createElement('button');
       button.className = 'button primary';
       button.type = 'button';
-      button.textContent = 'LIVE視聴';
-      button.addEventListener('click', () => play(model).catch(cause => { feedback.textContent = errorText(cause); }));
+      button.textContent = 'Live視聴';
+      button.addEventListener('click', () => openRecordingLiveOverlay(model.media.liveModel).catch(cause => { feedback.textContent = errorText(cause); }));
       primary.append(button);
     }
     if (model.media.playable) {

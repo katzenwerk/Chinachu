@@ -20,6 +20,7 @@
 ## Guide and WUI
 
 - Clear page search text when navigating away while preserving searches during updates within the same page.
+- Restore Live viewing in details for currently broadcasting programmes opened from the guide and programme list, using the existing live player.
 
 # Chinachu 0.10.7-thorn.33
 
