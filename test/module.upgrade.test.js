@@ -24,7 +24,6 @@ test('Upgrade reports verification failure without retaining old-runtime backups
 	const root = fixture(t);
 	fs.mkdirSync(path.join(root, 'common'));
 	fs.mkdirSync(path.join(root, 'lib'));
-	fs.copyFileSync(path.join(__dirname, '../lib/installer-profile.py'), path.join(root, 'lib/installer-profile.py'));
 	fs.writeFileSync(path.join(root, 'lib/service-setup.sh'), '');
 	fs.writeFileSync(path.join(root, 'package.json'), '{}');
 	fs.writeFileSync(path.join(root, 'common/package.json'), '{}');

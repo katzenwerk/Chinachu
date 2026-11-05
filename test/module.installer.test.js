@@ -16,7 +16,7 @@ function createLauncherFixture() {
 	fs.copyFileSync(launcherPath, path.join(temporaryDir, 'chinachu'));
 	fs.chmodSync(path.join(temporaryDir, 'chinachu'), 0o755);
 	fs.mkdirSync(path.join(temporaryDir, 'lib'));
-	for (const name of ['installer-nave.sh', 'installer-profile.py']) {
+	for (const name of ['installer-nave.sh']) {
 		fs.copyFileSync(path.join(repositoryRoot, 'lib', name), path.join(temporaryDir, 'lib', name));
 	}
 	fs.copyFileSync(path.join(repositoryRoot, 'config.sample.json'), path.join(temporaryDir, 'config.sample.json'));

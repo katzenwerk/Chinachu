@@ -65,7 +65,7 @@ TSの遅延はファイル全体をyieldなしで解析した値であり、録�
 
 公式バイナリ取得・展開を標準とし、取得／checksum／展開失敗でソースビルドへ進まない。installer node --allow-source-build、installer node-prepare 26.13.0 --allow-source-build、installer full --allow-source-build、upgrade --allow-source-buildでのみNaveの元のfallbackを許可する。Nave本体は改変せず、固定版のライブラリ関数を使う。
 
-段階ごとに[installer-profile]を1行出力する。経過時間、CPU時間、peak RSS、I/Oブロック数、nice、取得できたionice状態を記録する。CHINACHU_INSTALLER_PROFILE=0で無効化でき、Python未導入なら計測だけ省略する。計測失敗はコマンドの終了値へ置き換えない。取得・展開・依存導入はnice +10／ionice idle、許可したソースビルドは並列数1。hard quotaではなく、録画への無影響を保証しない。準備用一時ファイルや起動後の旧依存削除も低優先度で行う。
+取得・展開・依存導入はnice +10／ionice idle、許可したソースビルドは並列数1。hard quotaではなく、録画への無影響を保証しない。準備用一時ファイルや起動後の旧依存削除も低優先度で行う。
 
 隔離した実導入の実測（ネットワーク・ページキャッシュ依存、比較前に対する短縮率ではない）：
 

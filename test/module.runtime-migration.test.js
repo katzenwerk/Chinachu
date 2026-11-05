@@ -31,7 +31,7 @@ test('runtime diagnosis detects mixed live/saved/backup/startup targets without 
 	assert(diagnose(options).issues.some(issue=>issue.code==='target-version'));
 });
 
-test('Nave adapter never falls back to source without the explicit flag, and profiling preserves command errors',t=>{
+test('Nave adapter requires explicit source-build permission and limits build jobs',t=>{
 	const root=fs.mkdtempSync(path.join(os.tmpdir(),'chinachu-nave-policy-'));
 	t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
 	const nave=path.join(root,'nave.sh'),adapter=path.resolve(__dirname,'../lib/installer-nave.sh');
@@ -48,8 +48,6 @@ test('Nave adapter never falls back to source without the explicit flag, and pro
 	const allowed=cp.spawnSync('bash',[adapter,nave,'26.13.0','--allow-source-build'],{env,encoding:'utf8'});
 	assert.equal(allowed.status,0,allowed.stderr);
 	assert.equal(fs.readFileSync(path.join(root,'source-allowed'),'utf8').trim(),'1:1:-j1');
-	const profile=cp.spawnSync('python3',[path.resolve(__dirname,'../lib/installer-profile.py'),'failure-fixture','bash','-c','exit 7'],{encoding:'utf8'});
-	assert.equal(profile.status,7);assert.match(profile.stderr,/"status":7/);
 });
 
 test('TS analysis preserves CC/TEI/sync and owned pending bytes for all packet/chunk boundaries',()=>{

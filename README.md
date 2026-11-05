@@ -24,7 +24,7 @@ cd Chinachu
 
 Full installation builds dependencies and configures Local PM2/startup, requesting sudo for systemd changes. Existing Local/Root management is repaired in place. Individual installer commands remain available for custom service management.
 
-Node installation uses official binaries by default. Failed downloads or extraction never start a source build automatically. Explicitly opt in with `./chinachu installer node --allow-source-build` (also supported by full and upgrade). The `node-prepare 26.13.0` installer command prepares Node without switching links. Set `CHINACHU_INSTALLER_PROFILE=0` to disable stage resource metrics.
+Node installation uses official binaries by default. Failed downloads or extraction never start a source build automatically. Explicitly opt in with `./chinachu installer node --allow-source-build` (also supported by full and upgrade). The `node-prepare 26.13.0` installer command prepares Node without switching links.
 
 For a planned cutover, `./chinachu installer dependencies-prepare` builds locked dependencies in isolation using the target Node/npm without replacing live modules. Its stdout is the prepared directory; progress goes to stderr. After verifying recordings and stopping the selected Chinachu services, use `./chinachu installer dependencies-publish <prepared-dir>` to replace the old modules with the prepared tree. Old runtime/dependency backups are not generated. Changed manifests or an unknown/running service state block publication. Prepare Node first; publication errors stop the update. Preparation and publication do not start services.
 

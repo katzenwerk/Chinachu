@@ -210,16 +210,6 @@ chinachu_installer_pm2_service () {
   chinachu_installer_offer_pm2 "${1:-menu}"
 }
 
-chinachu_installer_profile () {
-  local label="$1"
-  shift
-  if [ "${CHINACHU_INSTALLER_PROFILE:-1}" != 0 ] && command -v python3 > /dev/null 2>&1; then
-    chinachu_installer_low_priority python3 "$CHINACHU_DIR/lib/installer-profile.py" "$label" "$@"
-  else
-    chinachu_installer_low_priority "$@"
-  fi
-}
-
 # Inherit these priorities in download, extraction and any Nave source build.
 chinachu_installer_priority_prefix () {
   priority=()
@@ -309,7 +299,7 @@ chinachu_installer_dependencies_prepare () {
   if ! ( cp -- package.json package-lock.json "$stage/" &&
          cp -a -- common "$stage/common" &&
          cd -- "$stage" &&
-         chinachu_installer_profile dependencies-ci env PATH="$(dirname -- "$NODE_PATH"):$PATH" "$NPM_PATH" ci >&2 &&
+         chinachu_installer_low_priority env PATH="$(dirname -- "$NODE_PATH"):$PATH" "$NPM_PATH" ci >&2 &&
          "$NODE_PATH" -p 'process.versions.modules' > node_modules/.chinachu-node-abi &&
          chinachu_installer_dependencies_ready ); then
     chinachu_installer_low_priority rm -rf -- "$stage"
@@ -357,7 +347,7 @@ chinachu_installer_dependencies_ready () {
   [ -r package.json ] && [ -r package-lock.json ] && [ -d node_modules ] || return 1
   [ -r node_modules/.chinachu-node-abi ] || return 1
   [ "$(cat node_modules/.chinachu-node-abi)" = "$("$NODE_PATH" -p 'process.versions.modules')" ] || return 1
-  chinachu_installer_profile dependencies-verify env PATH="$(dirname -- "$NODE_PATH"):$PATH" "$NPM_PATH" ls --all > /dev/null || return 1
+  chinachu_installer_low_priority env PATH="$(dirname -- "$NODE_PATH"):$PATH" "$NPM_PATH" ls --all > /dev/null || return 1
   "$NODE_PATH" -e '
     const fs = require("fs"), util = require("util");
     const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
@@ -1565,7 +1555,6 @@ runtime-check           Read-only Node/PM2/dump/backup/startup diagnosis (exit 2
 Node installation defaults to official binaries; source fallback requires --allow-source-build.
 Examples: installer node [--allow-source-build], installer node-prepare 26.13.0 [--allow-source-build].
 Dependencies: installer dependencies-prepare, then dependencies-publish <prepared-dir> after verified stops.
-Set CHINACHU_INSTALLER_PROFILE=0 to disable per-stage resource metrics.
 updater                 Alias of upgrade.
 service setup           Configure or review PM2 services.
 
