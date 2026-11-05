@@ -258,6 +258,7 @@ describe('WUI access model', function() {
 				path.join(libDir, 'recorded-thumbnail.js')
 			);
 			[
+				'channel-preview.js',
 				'ledger-cleaner-jobs.js',
 				'ledger-cleaner.js',
 				'log-history.js',
@@ -265,9 +266,11 @@ describe('WUI access model', function() {
 				'match-deletion-history.js',
 				'proglookup-store.js',
 				'proglookup-updater.js',
+				'recorded-maintenance-files.js',
 				'reservation-store.js',
 				'runtime-paths.js',
 				'rule-store.js',
+				'saved-ts-analysis.js',
 				'series-manual-store.js',
 				'series-projector.js',
 				'series-resolver.js',

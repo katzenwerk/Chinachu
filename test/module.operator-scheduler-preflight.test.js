@@ -182,6 +182,7 @@ function createOperatorLaunchFixture(store) {
 	const runtime = {
 		scheduler: null, schedulerStartedAt: 0, shutdownStarted: false,
 		matchLedgerProcess: null, pendingRecordedLedgerWrites: 0,
+		maintenanceBusy: false, recordedMaintenance: { isBusy: () => runtime.maintenanceBusy },
 		activeRecordingOutputs: new Set(), activeDurationProbes: new Set(), failedRecordingSaves: new Set(),
 		process: { platform: process.platform, exit: code => exits.push(code) },
 		operatorLog: message => logs.push(message),
@@ -367,10 +368,14 @@ describe('Operator EPG scheduler requests', function() {
 			request.runtime.failNext = true;
 			assert.strictEqual(request.coordinator.requestEpgCycle('parent-2', cleanSummary()), true);
 			request.runtime.shutdownStarted = true;
+			request.runtime.maintenanceBusy = true;
 			request.children[3].emit('error', new Error('spawn ./chinachu EACCES'));
 			request.children[3].emit('close', -1, null);
 			assert.strictEqual(request.runtime.scheduler, null);
 			assert.strictEqual(request.runtime.schedulerStartedAt, 0);
+			assert.deepStrictEqual(request.exits, [], 'Shutdown waits for recorded maintenance');
+			request.runtime.maintenanceBusy = false;
+			request.runtime.completeOperatorShutdown();
 			assert.deepStrictEqual(request.exits, [0], 'Shutdown completion must run only once');
 			assert.strictEqual(fixture.store.load().lastAppliedParentId, 'parent-1');
 			assert.ok(request.logs.some(message => /Scheduler process failed.*ENOENT/.test(message)));

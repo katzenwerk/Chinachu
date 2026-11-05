@@ -57,7 +57,7 @@ describe('Match v2 writer and migration', function () {
 		const future = { ...base, id: 'future', start: nowMs + 3600000, end: nowMs + 5400000 };
 		const missed = { ...base, id: 'missed', channel: { ...base.channel, id: 'channel-missed' } };
 		const skipped = { ...base, id: 'skipped', channel: { ...base.channel, id: 'channel-skip' }, isSkip: true };
-		const recorded = { ...base, recorded: '/fixture/a.m2ts' };
+		const recorded = { ...base, recorded: '/fixture/a.m2ts', recordedDurationSeconds: 1700, savedTsAnalysis: { schemaVersion: 1, status: 'complete' } };
 		const untracked = {
 			...base,
 			id: 'recorded-b',
@@ -76,17 +76,22 @@ describe('Match v2 writer and migration', function () {
 		const statuses = results.map(entry => entry.status).sort();
 
 		assert.deepStrictEqual(statuses, ['MISSED', 'RECORDED', 'RECORDED_UNTRACKED', 'RESERVED', 'SKIPPED_ONLY']);
-		results.forEach(entry => {
-			assert.deepStrictEqual(Object.keys(entry).sort(), [
-				'deletion', 'end', 'fullTitle', 'key', 'recording', 'ruleUid', 'schemaVersion', 'start', 'status'
-			]);
+		// The contract is the persisted JSON. Optional undefined metadata is omitted.
+		const persisted = JSON.parse(JSON.stringify(results));
+		persisted.forEach(entry => {
+			const fields = ['deletion', 'end', 'fullTitle', 'key', 'recording', 'ruleUid', 'schemaVersion', 'start', 'status'];
+			if (entry.recording?.recordedId === 'recorded-a') fields.push('recordedDurationSeconds', 'savedTsAnalysis');
+			assert.deepStrictEqual(Object.keys(entry).sort(), fields.sort());
 			assert.equal(entry.schemaVersion, 2);
 			assert.equal(entry.program, undefined);
 			assert.equal(entry.recordingResult, undefined);
 			assert.equal(entry.reservationMeta, undefined);
 			assert.equal(entry.matchMeta, undefined);
 		});
-		assert.equal(results.find(entry => entry.recording?.recordedId === 'recorded-a').ruleUid, 'rule-a');
+		const saved = persisted.find(entry => entry.recording?.recordedId === 'recorded-a');
+		assert.equal(saved.recordedDurationSeconds, recorded.recordedDurationSeconds);
+		assert.deepStrictEqual(saved.savedTsAnalysis, recorded.savedTsAnalysis);
+		assert.equal(saved.ruleUid, 'rule-a');
 		assert.equal(results.find(entry => entry.recording?.recordedId === 'recorded-b').ruleUid, 'rule-b');
 	});
 

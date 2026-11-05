@@ -46,11 +46,12 @@ test('timetable positions preserve duration and clip programmes at the broadcast
 	assert.strictEqual(model.programState(program, [{ id: 'other-program', isConflict: true }], []).key, 'none');
 });
 
-test('server WUI config validates timetable ranges and preserves other page settings atomically', function () {
+test('server WUI config validates timetable ranges and preserves other page settings atomically', async function () {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-wui-config-'));
 	const file = path.join(root, 'wui-config.json');
 	try {
-		assert.deepStrictEqual(wuiConfig.read(file).timetable, { channelWidth: 150, hourHeight: 180 });
+		assert.deepStrictEqual(wuiConfig.read(file).timetable, { channelWidth: 170, hourHeight: 180 });
+		assert.deepStrictEqual(wuiConfig.read(file).timetable, (await timetableModel()).TIMETABLE_DEFAULTS);
 		fs.writeFileSync(file, JSON.stringify({ version: 1, home: { layout: 'C' }, timetable: { channelWidth: 150, hourHeight: 180 } }));
 		const updated = wuiConfig.update(file, { timetable: { channelWidth: 220, hourHeight: 260 } });
 		assert.deepStrictEqual(updated.home, { layout: 'C' });
