@@ -742,6 +742,10 @@ function httpServerMain(req, res, query) {
 
 	// http request logging
 	var log = function (statusCode) {
+		// Successful status polling is quiet; explicit queries, operations and errors remain logged.
+		if (statusCode === 200 && transportMethod === 'GET' && req.method === 'GET' && [
+			'/api/diagnostics.json', '/api/service-control.json', '/api/storage.json', '/api/clock.json'
+		].includes(req.url)) return;
 		util.log([
 			statusCode,
 			req.method + ':' + req.url,

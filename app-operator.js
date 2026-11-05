@@ -1685,7 +1685,7 @@ function ensureRecordingDestinationHealthy(program, allowCreate, options) {
 	}
 
 	if (health.filesystemKey && health.capacityCheckedAt) {
-		handleStorageGroup(health, destination);
+		handleStorageGroup(health, options.recordingEvent);
 	} else {
 		persistStorageRuntimeState();
 	}
@@ -2978,7 +2978,7 @@ function doRecord(program, stream) {
 	const recPath = isResumedRecording ? program._operatorResumeRecordedPath : getRecordedPath(program);
 	// stream取得後、録画ファイルを作成する直前にfilesystem identityを必ず再確認する。
 	// 直前のprepareやStorage snapshotを録画許可の根拠にはしない。
-	if (!ensureRecordingDestinationHealthy(program, false, { force: true })) {
+	if (!ensureRecordingDestinationHealthy(program, false, { force: true, recordingEvent: 'recording-start' })) {
 		operatorLog('DROP RECORD: unsafe recording destination: ' + printProgram(program));
 		safeAbortStream(stream, 'unsafe recording destination');
 		removeRecording(program.id, 'STORAGE HEALTH BLOCK');
@@ -3464,6 +3464,7 @@ function stopRecordingsOnFilesystem(filesystemKey) {
 }
 
 const storageNotificationPending = {};
+const storageLoggedPhases = new Map();
 
 function getStorageSnapshotCompatibility() {
 	return {
@@ -3610,8 +3611,25 @@ function notifyStorageGroup(group) {
 	});
 }
 
-function handleStorageGroup(group) {
+function logStorageGroup(group, recordingEvent) {
+	const previous = storageLoggedPhases.get(group.filesystemKey);
+	const phase = group.phase || null;
+	storageLoggedPhases.set(group.filesystemKey, phase);
+	if (previous === phase && !recordingEvent) return;
+	const freeMB = group.availableBytes / 1024 / 1024;
+	const context = ' filesystem=' + group.filesystemKey + (recordingEvent ? ' event=' + recordingEvent : '');
+	if (phase === 'cleanup') {
+		operatorLog(`ALERT: Storage Low Space! (${freeMB} MB < ${storageLowSpaceThresholdMB} MB)` + context);
+	} else if (phase === 'warning') {
+		operatorLog(`WARNING: Storage Low Space! (${freeMB} MB < ${storageLowSpaceWarningThresholdMB} MB)` + context);
+	} else if (previous) {
+		operatorLog(`INFO: Storage Capacity Recovered! (${freeMB} MB)` + context);
+	}
+}
+
+function handleStorageGroup(group, recordingEvent) {
 	if (!group || !group.filesystemKey) return;
+	logStorageGroup(group, recordingEvent);
 	if (group._handledCapacityCheckedAt === group.capacityCheckedAt) {
 		persistStorageRuntimeState();
 		return;
@@ -3622,12 +3640,6 @@ function handleStorageGroup(group) {
 		writable: true,
 		value: group.capacityCheckedAt
 	});
-	const freeMB = group.availableBytes / 1024 / 1024;
-	if (group.phase === 'cleanup') {
-		operatorLog(`ALERT: Storage Low Space! (${freeMB} MB < ${storageLowSpaceThresholdMB} MB) filesystem=${group.filesystemKey}`);
-	} else if (group.phase === 'warning') {
-		operatorLog(`WARNING: Storage Low Space! (${freeMB} MB < ${storageLowSpaceWarningThresholdMB} MB) filesystem=${group.filesystemKey}`);
-	}
 	notifyStorageGroup(group);
 	if (group.phase !== 'cleanup') {
 		const previous = storageCleanupState[group.filesystemKey];
@@ -3685,7 +3697,7 @@ function checkActiveRecordingStorage() {
 			now: Date.now(),
 			refreshAfterMs: cleanupState && cleanupState.awaitingCapacityRefresh === true ? 1000 : undefined
 		});
-		if (group && group.capacityCheckedAt) handleStorageGroup(group, destination);
+		if (group && group.capacityCheckedAt) handleStorageGroup(group);
 		else persistStorageRuntimeState();
 	});
 }
@@ -3695,7 +3707,7 @@ function checkStorageAfterRecordingClose(program) {
 	const destination = storageHealth.findDestination(config, program);
 	if (!destination) return;
 	const group = storageMonitor.check(destination, { now: Date.now(), refreshAfterMs: 1000 });
-	if (group && group.capacityCheckedAt) handleStorageGroup(group, destination);
+	if (group && group.capacityCheckedAt) handleStorageGroup(group, 'recording-end');
 	else persistStorageRuntimeState();
 }
 

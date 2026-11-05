@@ -31,7 +31,31 @@ function withFixture(run) {
 }
 
 describe('log history reader', function() {
-	it('lists only allowed regular logs and reads bounded pages from the end', function() {
+	it('preserves operational access logs and reads bounded pages from allowed regular logs', function() {
+		const wui = fs.readFileSync(path.resolve(__dirname, '../app-wui.js'), 'utf8');
+		const logging = wui.slice(wui.indexOf('\tvar log = function (statusCode) {'), wui.indexOf('\t// serve static file'));
+		function access(url, statusCode = 200, method = 'GET', transportMethod = method) {
+			const lines = [];
+			vm.runInNewContext(logging + '\nlog(statusCode);', {
+				req: { url, method, headers: {} }, transportMethod, statusCode,
+				remoteAddress: '127.0.0.1', util: { log: line => lines.push(line) }
+			});
+			return lines;
+		}
+		for (const url of ['/api/diagnostics.json', '/api/service-control.json', '/api/storage.json', '/api/clock.json']) {
+			assert.deepStrictEqual(access(url), []);
+			for (const status of [200, 400, 401, 403, 500]) {
+				if (status !== 200) assert.strictEqual(access(url, status).length, 1);
+				assert.strictEqual(access(url, status, 'POST').length, 1);
+			}
+			assert.strictEqual(access(url, 200, 'GET', 'POST').length, 1);
+			assert.strictEqual(access(url, 200, 'HEAD').length, 1);
+			assert.strictEqual(access(url + '?refresh=1').length, 1);
+		}
+		for (const [url, method] of [
+			['/api/storage/refresh.json', 'POST'], ['/api/service-control/operator.json', 'POST'],
+			['/api/service-control/wui.json', 'POST'], ['/api/schedule.json', 'GET'], ['/', 'GET']
+		]) assert.strictEqual(access(url, 200, method).length, 1);
 		withFixture(({ root, logDir, options }) => {
 			const current = path.join(logDir, 'chinachu-operator.stdout.log');
 			fs.writeFileSync(current, Array.from({ length: 700 }, (_, index) => 'line-' + String(index + 1).padStart(4, '0')).join('\n') + '\n');

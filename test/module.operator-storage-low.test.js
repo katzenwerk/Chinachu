@@ -154,14 +154,58 @@ describe('Operator low-storage handling', function() {
 		assert.match(health.detail, /root filesystem protection/);
 	});
 
-	it('forces a fresh safety check before recording output creation', function() {
+	it('keeps fresh recording safety checks while logging capacity transitions and recording events', function() {
 		const source = fs.readFileSync(path.join(__dirname, '..', 'app-operator.js'), 'utf8');
 		const doRecord = source.slice(source.indexOf('function doRecord(program, stream)'));
-		const forcedCheck = doRecord.indexOf('ensureRecordingDestinationHealthy(program, false, { force: true })');
+		const forcedCheck = doRecord.indexOf("ensureRecordingDestinationHealthy(program, false, { force: true, recordingEvent: 'recording-start' })");
 		const outputCreation = doRecord.indexOf("fs.createWriteStream(recPath, { flags: 'a' })");
 		assert.ok(forcedCheck !== -1);
 		assert.ok(outputCreation !== -1);
 		assert.ok(forcedCheck < outputCreation);
+		assert.ok(source.includes('handleStorageGroup(health, options.recordingEvent)'));
+		assert.ok(source.includes("handleStorageGroup(group, 'recording-end')"));
+
+		const logs = [];
+		let notifications = 0;
+		let stops = 0;
+		const context = {
+			storageLoggedPhases: new Map(), storageCleanupState: {}, storageLow,
+			storageLowSpaceThresholdMB: 3000, storageLowSpaceWarningThresholdMB: 10000,
+			storageLowSpaceAction: 'stop', operatorLog: line => logs.push(line),
+			notifyStorageGroup: () => { notifications += 1; }, persistStorageRuntimeState() {},
+			stopRecordingsOnFilesystem: () => { stops += 1; }
+		};
+		vm.runInNewContext(source.slice(source.indexOf('function logStorageGroup('),
+			source.indexOf('function checkActiveRecordingStorage(')), context);
+		const group = (phase, time, filesystemKey = 'disk-a') => ({
+			phase, capacityCheckedAt: time, filesystemKey, availableBytes: 2000 * 1024 * 1024
+		});
+		context.handleStorageGroup(group(null, 1));
+		assert.strictEqual(logs.length, 0);
+		context.handleStorageGroup(group('warning', 2));
+		context.handleStorageGroup(group('warning', 3));
+		assert.strictEqual(logs.length, 1);
+		const cached = group('warning', 4);
+		context.handleStorageGroup(cached);
+		const notifiedBeforeEvents = notifications;
+		context.handleStorageGroup(cached, 'recording-start');
+		context.handleStorageGroup(cached, 'recording-end');
+		assert.strictEqual(notifications, notifiedBeforeEvents);
+		assert.strictEqual(logs.length, 3);
+		assert.match(logs[1], /event=recording-start/);
+		assert.match(logs[2], /event=recording-end/);
+		context.handleStorageGroup(group('warning', 4, 'disk-b'));
+		assert.match(logs[3], /WARNING: Storage Low Space!.*filesystem=disk-b/);
+		context.handleStorageGroup(group('cleanup', 5));
+		context.handleStorageGroup(group('cleanup', 6));
+		assert.strictEqual(logs.length, 5);
+		assert.match(logs[4], /ALERT: Storage Low Space!/);
+		assert.strictEqual(stops, 2); // Repeated Low checks still enforce recording protection.
+		context.handleStorageGroup(group(null, 7));
+		context.handleStorageGroup(group(null, 8));
+		context.handleStorageGroup(group('warning', 8, 'disk-b'));
+		assert.strictEqual(logs.length, 6);
+		assert.match(logs[5], /INFO: Storage Capacity Recovered!/);
 	});
 
 	it('keeps expectedMount active independently of root protection', function() {

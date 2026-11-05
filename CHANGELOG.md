@@ -22,6 +22,11 @@
 - Clear page search text when navigating away while preserving searches during updates within the same page.
 - Restore Live viewing in details for currently broadcasting programmes opened from the guide and programme list, using the existing live player.
 
+## Logging
+
+- Suppress successful routine status GET logs while retaining other accesses, errors and operation records.
+- Log low-space transitions, recording start/end checks and recovery without repeating unchanged capacity warnings.
+
 # Chinachu 0.10.7-thorn.33
 
 ## Recording History and Cleaner
