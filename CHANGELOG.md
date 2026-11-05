@@ -11,6 +11,10 @@
 
 - Remove fixed engine SHA requirements from CLI analysis, Operator analysis and external result registration while keeping historical saved results readable.
 
+## Performance
+
+- Speed up Cleaner reconciliation with per-plan path and identity indexes while preserving cleanup decisions.
+
 # Chinachu 0.10.7-thorn.33
 
 ## Recording History and Cleaner
