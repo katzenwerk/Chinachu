@@ -157,6 +157,53 @@ upgrade_pm2_persistence_report
 	assert.equal(result.status, 0, result.stdout + result.stderr);
 	assert.match(fs.readFileSync(path.join(root, 'persistence.stderr'), 'utf8'), /PM2 root saved: chinachu-operator is not pinned/);
 	assert.equal(fs.readFileSync(path.join(root, 'dump.pm2'), 'utf8'), dump);
+	// Keep authority checks independent of the pre-restart PID inventory.
+	const current = active.map(item => ({...item, pid: process.pid}));
+	fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({uid: 1000, gid: 2000}));
+	const identity = shell(root, String.raw`
+. "$4"
+current="$3"; UPGRADE_USER=fixture; mock_uid=1000; mock_gid=1000
+id() {
+ case "$1" in -u|-g) echo 1000;; -un) echo fixture;; *) return 91;; esac
+}
+getent() { [ "$1" = group ] && printf 'configured:x:%s:\n' "$2"; }
+awk() {
+ case "$2" in /proc/*/status)
+  case "$1" in *Uid:*) echo "$mock_uid";; *Gid:*) echo "$mock_gid";; *) return 92;; esac;;
+ *) command awk "$@";; esac
+}
+# A changed PID must not affect UID/GID validation, even with a stale inventory.
+SERVICE_SETUP_PROCESS_PIDS=999999
+upgrade_pm2_identity_valid "$current" 'chinachu-operator chinachu-wui' 1000 1000
+if upgrade_processes_match_state "$current"; then exit 71; fi
+for mismatch in uid gid; do
+ mock_uid=1000; mock_gid=1000
+ if [ "$mismatch" = uid ]; then mock_uid=1001; else mock_gid=1001; fi
+ if upgrade_pm2_identity_valid "$current" 'chinachu-operator chinachu-wui' 1000 1000; then exit 72; fi
+done
+mock_uid=1000; mock_gid=1000
+service_setup_find_pm2() { echo fixture-pm2; }
+upgrade_pm2_daemon_state_safe() { return 0; }
+service_setup_capture_state() {
+ SERVICE_SETUP_LOCAL_ACTIVE='[]'; SERVICE_SETUP_LOCAL_SAVED='[]'
+ SERVICE_SETUP_ROOT_ACTIVE='[]'; SERVICE_SETUP_ROOT_SAVED='[]'
+ if [ "$mode" = local ]; then SERVICE_SETUP_LOCAL_ACTIVE="$current"; else SERVICE_SETUP_ROOT_ACTIVE="$current"; fi
+ SERVICE_SETUP_PROCESS_PIDS=$(printf '%s' "$current" | "$BOOTSTRAP_NODE_COMMAND" -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(0,"utf8"))[0].pid))')
+}
+service_setup_all_pm2_state_known() { return 0; }
+mode=local; manager_prefix=''
+# sudo invocation and config.gid must not change Local PM2 expectations.
+SUDO_USER=someone-else
+upgrade_inspect_pm2_manager true
+[ "$manager_prefix:$manager_expected_uid:$manager_expected_gid" = LOCAL:1000:1000 ]
+mode=root; manager_prefix=''; mock_gid=2000
+upgrade_inspect_pm2_manager true
+[ "$manager_prefix:$manager_expected_uid:$manager_expected_gid" = ROOT:1000:2000 ]
+mock_gid=1000
+if upgrade_inspect_pm2_manager true; then exit 73; fi
+`, [JSON.stringify(current), path.join(__dirname, '../lib/service-setup.sh')]);
+	assert.equal(identity.status, 0, identity.stdout + identity.stderr);
+	assert.match(identity.stderr, /unexpected UID\/GID/);
 	const {patchProcesses,startupUnit}=require('../lib/pm2-runtime-migrate');
 	const unchanged=JSON.stringify(saved);
 	const foreign={name:'another-service',exec_interpreter:'/usr/bin/node',env:{PATH:'/usr/bin',KEEP:'value'}};
