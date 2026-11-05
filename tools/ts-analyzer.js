@@ -149,7 +149,10 @@ function makeFileAnalyzer(BaseAnalyzer, emit, opts) {
       this.emit = emit;
     }
 
-    _parsePacket(packet) {
+    _parsePacket(packet, offset = 0) {
+      // The engine supplies a chunk plus packet offset; this offline extension
+      // also supports engines that supplied an individual packet Buffer.
+      packet = packet.subarray(offset, offset + 188);
       this.currentOffset = this.analyzedBytes + this.syncDiscardedBytes;
       const pid = ((packet[1] & 0x1f) << 8) | packet[2];
       const cc = packet[3] & 15;
