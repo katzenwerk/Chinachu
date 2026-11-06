@@ -1,7 +1,7 @@
 export const DROP_DETECTION_MODES = [
   { value: 'mirakurun', label: 'Mirakurun監視（標準）', description: 'MirakurunからDROP情報を取得する。' },
-  { value: 'ts', label: 'TS解析（BETA）', description: '録画ストリームを解析し、CC不連続などを検出する。' },
-  { value: 'both', label: '両方（BETA）', description: 'Mirakurun監視とTS解析を併用する。' },
+  { value: 'file', label: 'TSファイル解析', description: '録画完了後に保存TSを低優先度で自動解析する。' },
+  { value: 'mirakurun-file', label: '両方', description: 'Mirakurun監視と録画後の保存TS解析を併用する。' },
   { value: 'off', label: '無効', description: 'DROP検出を行わない。' }
 ];
 
@@ -9,7 +9,7 @@ const KNOWN_KEYS = new Set([
   'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs',
   'recordedFormat', 'recordedCommand', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
   'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm',
-  'vaapiEnabled', 'vaapiDevice', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode',
+  'vaapiEnabled', 'vaapiDevice', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode', 'autoTsMaxRecordings',
   'recordedStorageWakeupBeforeSec', 'storageLowSpaceWarningThresholdMB',
   'storageLowSpaceWarningIntervalMinutes', 'storageLowSpaceThresholdMB', 'storageLowSpaceAction',
   'storageLowSpaceCriticalNotifyIntervalMinutes', 'notificationCommand', 'matchRetentionDays',
@@ -140,8 +140,12 @@ export function validateConfig(config) {
   const errors = [];
   if (typeof config.recordedDir !== 'string' || config.recordedDir.trim() === '') errors.push('デフォルト録画先は必須です。');
   if (config.dropDetectionMode !== undefined && config.dropDetectionMode !== null &&
-      !DROP_DETECTION_MODES.some(option => option.value === config.dropDetectionMode)) {
-    errors.push('DROP検出方式をmirakurun、ts、both、offのいずれかから選び直してください。');
+      !DROP_DETECTION_MODES.some(option => option.value === config.dropDetectionMode) &&
+      !['ts', 'both'].includes(config.dropDetectionMode)) {
+    errors.push('DROP検出方式の設定値が不正です。');
+  }
+  if (config.autoTsMaxRecordings !== undefined && (!Number.isInteger(config.autoTsMaxRecordings) || config.autoTsMaxRecordings < 0)) {
+    errors.push('自動TS解析の許可録画本数は0以上の整数で指定してください。');
   }
   if (config.normalizationForm !== undefined && !['NFC', 'NFD', 'NFKC', 'NFKD'].includes(config.normalizationForm)) {
     errors.push('予約ルールの文字正規化が不正です。');

@@ -3,6 +3,8 @@ import { MOBILE_QUERY } from './mobile-layout.js';
 
 const icon = (name, small = false) => `<svg class="icon${small ? ' icon-small' : ''}"><use href="#icon-${name}"></use></svg>`;
 
+import { requestAutoTsAction } from '../services/auto-ts-analysis-client.js';
+
 const sprite = `
   <svg class="symbol-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
     <symbol id="icon-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10H3zM9 21v-7h6v7"/></symbol>
@@ -95,6 +97,21 @@ export function createAppShell(root) {
         <button type="submit" class="header-program-search-button" aria-label="番組を検索" title="番組を検索">${icon('search', true)}</button>
       </form>
       <div class="header-common-actions">
+        <details class="header-auto-ts" hidden>
+          <summary>TS解析 <span class="header-auto-ts-counts">残--</span><a class="header-auto-ts-issues" href="#recorded?tsIssues=1">異常--</a></summary>
+          <div class="header-auto-ts-panel">
+            <strong>保存TSファイル解析</strong>
+            <p class="header-auto-ts-state"></p>
+            <p class="header-auto-ts-totals"></p>
+            <p class="header-auto-ts-current"></p>
+            <progress max="100" value="0" hidden></progress>
+            <p class="header-auto-ts-error" role="status"></p>
+            <div class="header-auto-ts-actions">
+              <a href="#recorded?tsIssues=1">DROP／TS異常の録画を表示</a>
+              <button class="button header-auto-ts-pause" type="button">一時停止</button>
+            </div>
+          </div>
+        </details>
         <button class="icon-button header-logout-button" id="header-logout" type="button" aria-label="ログアウト" title="ログアウト" hidden>${icon('log-out')}</button>
         <button class="icon-button" id="theme-toggle" type="button" aria-label="ダークテーマへ切替" title="テーマ切替">${icon('sun')}</button>
         <button class="icon-button notification-button" id="notification-button" type="button" aria-label="通知" title="通知" aria-controls="notification-panel" aria-expanded="false">${icon('bell')}<span class="notification-count" hidden></span></button>
@@ -170,6 +187,33 @@ export function createAppShell(root) {
   const headerActions = root.querySelector('#header-page-actions');
   const mobileHeaderActions = root.querySelector('.mobile-header-actions');
   const commonActions = root.querySelector('.header-common-actions');
+  const tsHeader = root.querySelector('.header-auto-ts');
+  const tsSummary = tsHeader.querySelector('.header-auto-ts-counts');
+  const tsIssuesLink = tsHeader.querySelector('.header-auto-ts-issues');
+  const tsState = tsHeader.querySelector('.header-auto-ts-state');
+  const tsTotals = tsHeader.querySelector('.header-auto-ts-totals');
+  const tsCurrent = tsHeader.querySelector('.header-auto-ts-current');
+  const tsProgress = tsHeader.querySelector('progress');
+  const tsError = tsHeader.querySelector('.header-auto-ts-error');
+  const tsPause = tsHeader.querySelector('.header-auto-ts-pause');
+  const fineHover = window.matchMedia('(hover: hover) and (pointer: fine)');
+  tsHeader.addEventListener('mouseenter', () => { if (fineHover.matches) tsHeader.open = true; });
+  tsHeader.addEventListener('mouseleave', () => { if (fineHover.matches) tsHeader.open = false; });
+  tsHeader.querySelectorAll('a').forEach(link => link.addEventListener('click', event => {
+    event.stopPropagation();
+    tsHeader.open = false;
+  }));
+  let tsRuntime = null;
+  let tsActionPending = false;
+  tsPause.addEventListener('click', async () => {
+    if (tsActionPending || !tsRuntime?.enabled) return;
+    tsActionPending = true;
+    tsPause.disabled = true;
+    tsError.textContent = '';
+    try { await requestAutoTsAction(tsRuntime.paused ? 'auto-resume' : 'auto-pause'); }
+    catch (error) { tsError.textContent = error.message; }
+    finally { tsActionPending = false; tsPause.disabled = false; }
+  });
   const mobileToolbar = root.querySelector('.mobile-page-toolbar');
   const menuToggle = root.querySelector('.mobile-menu-toggle');
   const drawerBackdrop = root.querySelector('.mobile-drawer-backdrop');
@@ -816,6 +860,38 @@ export function createAppShell(root) {
         void notificationButton.offsetWidth;
         notificationButton.classList.add('is-alerting');
       }
+    },
+    setAutoTsStatus(status) {
+      tsRuntime = status;
+      tsHeader.hidden = status?.enabled !== true;
+      if (tsHeader.hidden) { tsHeader.open = false; return; }
+      const counts = status.counts || {};
+      tsSummary.textContent = `残${counts.remaining ?? '-'}`;
+      tsIssuesLink.textContent = `異常${counts.suspect ?? '-'}`;
+      const labels = {
+        running: status.paused ? '現在のファイルを完了後に停止' : '解析中',
+        paused: '一時停止中',
+        'recording-limit': '録画本数・予約のため待機中',
+        'recording-transition': '録画切替のため待機中',
+        'manual-running': '手動メンテナンス中',
+        complete: '解析対象なし',
+        idle: '実行待機中'
+      };
+      tsState.textContent = `状態：${labels[status.state] || '待機中'}`;
+      const total = (counts.completed || 0) + (counts.remaining || 0) + (counts.failed || 0);
+      tsTotals.textContent = `解析済み${counts.completed ?? 0} / 対象${total}件 / 異常${counts.suspect ?? 0}件 / 失敗${counts.failed ?? 0}件`;
+      const current = status.current;
+      tsCurrent.textContent = current ? `${current.title || current.id || '解析中'}${current.stage === 'file' ? '（ファイル確認中）' : ''}` : '';
+      const size = current?.size;
+      const bytes = Math.min(Number(current?.bytesRead) || 0, Number(size) || 0);
+      tsProgress.hidden = !Number.isFinite(size) || size <= 0 || current.stage !== 'running';
+      if (!tsProgress.hidden) {
+        tsProgress.value = 100 * bytes / size;
+        tsCurrent.textContent += `：${(bytes / 1048576).toFixed(0)} / ${(size / 1048576).toFixed(0)} MiB（${Math.floor(tsProgress.value)}%）`;
+      }
+      tsPause.textContent = status.paused ? '再開' : '一時停止';
+      tsPause.disabled = tsActionPending;
+      tsError.textContent = status.error || '';
     },
     setRecordingCount(count) {
       const badge = root.querySelector('#recording-count-badge');

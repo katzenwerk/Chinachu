@@ -99,6 +99,8 @@ function warning(key, label, description, kind = 'confirmed', tone = 'warning') 
 export function savedTsResultInfo(saved) {
   const result = saved?.result;
   if (!result) return { label: '未解析', findings: false, description: '' };
+  if (result.status === 'ERROR') return { label: '解析失敗', findings: false, description: result.error || '' };
+  if (result.completed !== true) return { label: '解析未完了', findings: false, description: result.stopReason || '' };
   const parts = [], notes = [];
   if (Number.isFinite(result.ccErrorEvents) && result.ccErrorEvents > 0) {
     parts.push(`CC ${result.ccErrorEvents.toLocaleString('ja-JP')}`);
@@ -112,8 +114,6 @@ export function savedTsResultInfo(saved) {
   }
   if (parts.length) return { label: parts.join(' / '), findings: true, description: notes.join('\n') };
   if (result.status === 'SUSPECT') return { label: '異常検出', findings: true, description: '保存TS解析で異常を検出しました。解析詳細で内容を確認できます。' };
-  if (result.status === 'ERROR') return { label: '解析失敗', findings: false, description: result.error || '' };
-  if (result.completed !== true) return { label: '解析未完了', findings: false, description: result.stopReason || '' };
   return { label: result.status === 'NO_FINDINGS' ? '異常未検出' : '解析結果なし', findings: false, description: '' };
 }
 

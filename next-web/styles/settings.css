@@ -186,3 +186,7 @@ textarea.settings-input { min-height: 86px; resize: vertical; font-family: ui-mo
   .settings-clock-channel-controls { align-items: stretch; flex-direction: column; }
   .settings-clock-channel-controls .settings-input,.settings-clock-channel-controls .button { width: 100%; flex-basis: auto; }
 }
+
+.settings-auto-ts-controls { display: grid; gap: 9px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); justify-items: start; }
+.settings-auto-ts-controls[hidden] { display: none; }
+.settings-auto-ts-controls > p { margin: 0; }

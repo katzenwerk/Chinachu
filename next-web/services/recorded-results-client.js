@@ -10,6 +10,7 @@ async function loadRecordedResultsPageRaw(options = {}) {
 	if (options.status) params.set('status', options.status);
 	if (Array.isArray(options.results)) params.set('results', options.results.join(','));
 	if (options.ruleUid) params.set('ruleUid', options.ruleUid);
+	if (options.tsIssues) params.set('tsIssues', '1');
 
   const response = await fetch(`/api/match.json?${params}`, {
     method: 'GET',

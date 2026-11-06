@@ -17,6 +17,9 @@
   .app-header .icon-button { width: 44px; height: 44px; flex: 0 0 44px; }
   .mobile-menu-toggle { display: grid; place-items: center; }
   .header-common-actions { margin-left: 0; }
+  .header-auto-ts > summary { padding: 7px 4px; font-size: 10px; }
+  .header-auto-ts > summary .header-auto-ts-counts { display: none; }
+  .header-auto-ts-panel { position: fixed; top: calc(var(--header-height) + 6px); right: 8px; }
   .mobile-header-actions { display: flex; align-items: center; gap: 2px; }
   .mobile-page-action { position: relative; }
   .mobile-page-action.is-active,.mobile-page-action[aria-expanded="true"] { background: rgba(255,255,255,.24); }

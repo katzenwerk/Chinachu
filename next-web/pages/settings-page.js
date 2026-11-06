@@ -7,6 +7,7 @@ import {
   loadAuthSettings,
   updateAuthEnabled
 } from '../services/auth-client.js';
+import { getAutoTsStatus, subscribeAutoTsStatus, requestAutoTsAction } from '../services/auto-ts-analysis-client.js';
 import {
   DROP_DETECTION_MODES,
   cloneConfig,
@@ -42,6 +43,7 @@ const FIELD = {
   conflictedPriority: { label: '競合録画の優先度', type: 'number', integer: true },
   handoffPrepSeconds: { label: 'チューナー引継ぎ準備時間', type: 'number', min: 0 },
   dropDetectionMode: { label: 'DROP検出方式', type: 'text', select: DROP_DETECTION_MODES },
+  autoTsMaxRecordings: { label: '解析を許可する同時録画数', type: 'number', integer: true, min: 0 },
   recordedStorageWakeupBeforeSec: { label: '録画先HDDの事前起動', type: 'number', integer: true, min: 0 },
   storageLowSpaceWarningThresholdMB: { label: '容量警告の空き容量', type: 'number', min: 0 },
   storageLowSpaceWarningIntervalMinutes: { label: '容量警告の通知間隔', type: 'number', exclusiveMin: 0 },
@@ -164,6 +166,12 @@ export function renderSettingsPage(container) {
   let broadcastClockChannelsRequest = null;
   const fieldErrors = new Map();
   const dependentUpdates = [];
+  let autoTsRuntime = getAutoTsStatus();
+  let updateAutoTsDisplay = () => {};
+  const unsubscribeAutoTs = subscribeAutoTsStatus(value => {
+    autoTsRuntime = value;
+    updateAutoTsDisplay();
+  });
 
   container.innerHTML = '<section class="panel settings-loading">設定を読み込んでいます…</section>';
 
@@ -414,11 +422,17 @@ export function renderSettingsPage(container) {
     dependentUpdates.push(() => { map.input.disabled = draft.recordedNameReplaceEnclosingCharacters !== true; map.wrap.classList.toggle('is-disabled', map.input.disabled); });
     naming.body.append(format.wrap, replace.wrap, map.wrap);
 
-    const drop = card('録画中のDROP検出', '変更はOperatorの再起動後に反映されます。保存しても自動では再起動しません。');
+    const drop = card('DROP検出・保存TS解析', '検出方式と許可録画本数はOperator再起動後に反映されます。一時停止・再開は即時反映されます。');
     drop.section.classList.add('settings-drop');
-    const dropMode = bindValueField('dropDetectionMode', '録画中のDROP検出方式を選択します。TS解析はBETA機能で、録画中のCPU負荷が増加する場合があります。', { wide: true });
+    const dropMode = bindValueField('dropDetectionMode', 'MirakurunのDROP監視、保存TSファイルの録画後解析、または両方を選択します。', { wide: true });
     if (draft.dropDetectionMode === undefined || draft.dropDetectionMode === null) {
       dropMode.input.value = 'mirakurun';
+    } else if (['ts', 'both'].includes(draft.dropDetectionMode)) {
+      const legacy = document.createElement('option');
+      legacy.value = draft.dropDetectionMode;
+      legacy.textContent = draft.dropDetectionMode === 'ts' ? '現在の設定：旧TSストリーム解析' : '現在の設定：旧Mirakurun＋ストリーム解析';
+      dropMode.input.prepend(legacy);
+      dropMode.input.value = draft.dropDetectionMode;
     } else if (!DROP_DETECTION_MODES.some(option => option.value === draft.dropDetectionMode)) {
       const current = document.createElement('option');
       current.value = '';
@@ -431,10 +445,47 @@ export function renderSettingsPage(container) {
     dropDescription.className = 'settings-muted';
     dependentUpdates.push(() => {
       dropDescription.textContent = DROP_DETECTION_MODES.find(option => option.value === dropMode.input.value)?.description ||
-        '保存するにはDROP検出方式を選び直してください。現在の設定値は自動では変更しません。';
+        (['ts', 'both'].includes(dropMode.input.value) ? '既存のストリーム解析設定を維持しています。新方式への変更は明示的に選択してください。' :
+          '保存するにはDROP検出方式を選び直してください。現在の設定値は自動では変更しません。');
     });
     dropMode.wrap.append(dropDescription);
-    drop.body.append(dropMode.wrap);
+    const autoControls = document.createElement('div');
+    autoControls.className = 'settings-auto-ts-controls';
+    const maxRecordings = bindValueField('autoTsMaxRecordings', '現在と今後5分の同時録画数がこの値以下のとき、自動解析を開始します。既定は0本です。', { compact: true });
+    if (draft.autoTsMaxRecordings === undefined) maxRecordings.input.value = '0';
+    const runtimeLine = document.createElement('p');
+    runtimeLine.className = 'settings-muted';
+    const pauseButton = document.createElement('button');
+    pauseButton.type = 'button';
+    pauseButton.className = 'button';
+    const runtimeNotice = document.createElement('p');
+    runtimeNotice.className = 'settings-muted';
+    updateAutoTsDisplay = () => {
+      const enabled = autoTsRuntime?.enabled === true;
+      const running = autoTsRuntime?.state === 'running';
+      const paused = autoTsRuntime?.paused === true;
+      const counts = autoTsRuntime?.counts;
+      runtimeLine.textContent = enabled && counts
+        ? `稼働状態：${paused ? running ? '停止要求中' : '一時停止中' : running ? '解析中' : '待機中'} / 残り${counts.remaining}件・失敗${counts.failed}件`
+        : 'Operatorで自動解析が有効になっていません。';
+      pauseButton.textContent = paused ? '自動解析を再開' : '自動解析を一時停止';
+      pauseButton.disabled = !enabled || runtimeNotice.dataset.busy === 'true';
+    };
+    pauseButton.addEventListener('click', async () => {
+      runtimeNotice.dataset.busy = 'true';
+      runtimeNotice.textContent = '';
+      updateAutoTsDisplay();
+      try { await requestAutoTsAction(autoTsRuntime?.paused ? 'auto-resume' : 'auto-pause'); }
+      catch (error) { runtimeNotice.textContent = error.message; }
+      finally { runtimeNotice.dataset.busy = 'false'; updateAutoTsDisplay(); }
+    });
+    autoControls.append(maxRecordings.wrap, runtimeLine, pauseButton, runtimeNotice);
+    const updateAutoControls = () => {
+      autoControls.hidden = !['file', 'mirakurun-file'].includes(dropMode.input.value);
+      updateAutoTsDisplay();
+    };
+    dependentUpdates.push(updateAutoControls);
+    drop.body.append(dropMode.wrap, autoControls);
 
     const commands = card('録画後処理と予約照合', '録画終了後の処理と、予約ルールの照合方法を設定します。変更した内容はOperatorの再起動後に反映されます。');
     const fields = document.createElement('div');
@@ -1216,6 +1267,7 @@ export function renderSettingsPage(container) {
 
   return () => {
     disposed = true;
+    unsubscribeAutoTs();
     controller.abort();
     document.querySelectorAll('.settings-save-dialog').forEach(dialog => dialog.close());
   };

@@ -1,4 +1,5 @@
 import { listLogFiles, loadLogChunk, loadRecentLog, openLogStream } from '../services/log-client.js';
+import { renderPostprocessPage } from './postprocess-page.js';
 import { classifyLogLine } from '../services/log-level.js';
 import { loadServiceControl, requestServiceRestart } from '../services/service-control-client.js';
 import { mirakurunIndicatorModel, restartButtonModel, serviceGeneration, serviceGenerationChanged, serviceIndicatorModel } from '../services/service-restart-model.js';
@@ -6,7 +7,7 @@ import { checkWuiConnectionNow, getWuiConnectionState, subscribeWuiConnection } 
 import { completePendingRestart, getPendingRestart, setPendingRestart, subscribePendingRestart } from '../services/service-restart-store.js';
 
 const MAX_BROWSER_LINES = 5000;
-const SOURCE_LABELS = { operator: 'Operator', scheduler: 'Scheduler', wui: 'WUI', mirakurun: 'Mirakurun' };
+const SOURCE_LABELS = { operator: 'Operator', scheduler: 'Scheduler', wui: 'WUI', mirakurun: 'Mirakurun', task: 'Task' };
 const LEVEL_LABELS = { all: '全件', error: 'ERROR', warning: 'WARNING', info: 'INFO' };
 const SERVICE_REFRESH_MS = 5000;
 const MIRAKURUN_HEALTH_REFRESH_MS = 5000;
@@ -77,7 +78,7 @@ async function copyText(text) {
 
 export function renderLogPage(container, query = new URLSearchParams()) {
   let active = true;
-  let source = 'operator';
+  let source = query.get('tab') === 'task' ? 'task' : 'operator';
   let mode = 'realtime';
   let level = 'all';
   let search = query.get('search') || '';
@@ -88,6 +89,7 @@ export function renderLogPage(container, query = new URLSearchParams()) {
   let historyHasMore = false;
   let autoFollow = true;
   let stopStream = null;
+  let disposeTask = null;
   let requestController = null;
   let catalogController = null;
   let generation = 0;
@@ -109,9 +111,9 @@ export function renderLogPage(container, query = new URLSearchParams()) {
   const page = document.createElement('div');
   page.className = 'log-page';
   page.innerHTML = `
-    <section class="panel log-page-panel" aria-label="システムログ">
+    <section class="panel log-page-panel" aria-label="サービスとログ">
       <div class="log-service-row">
-        <div class="log-source-tabs" role="tablist" aria-label="ログ種別">
+        <div class="log-source-tabs" role="tablist" aria-label="表示切替">
           ${Object.entries(SOURCE_LABELS).map(([value, label]) => `<button type="button" role="tab" data-source="${value}" aria-selected="${value === source}">${value === 'operator' || value === 'wui' || value === 'mirakurun' ? '<span class="log-service-dot" aria-hidden="true"></span>' : ''}<span>${label}</span></button>`).join('')}
         </div>
         <div class="log-service-action" hidden>
@@ -134,6 +136,7 @@ export function renderLogPage(container, query = new URLSearchParams()) {
         <div class="log-lines" role="log" aria-live="off"></div>
       </div>
       <button class="button log-follow" type="button" hidden>最新ログへ戻る</button>
+      <div class="log-task" hidden></div>
       <dialog class="log-restart-dialog">
         <form method="dialog">
           <h2></h2>
@@ -147,6 +150,7 @@ export function renderLogPage(container, query = new URLSearchParams()) {
     </section>`;
   container.replaceChildren(page);
 
+  const taskHost = page.querySelector('.log-task');
   const consoleElement = page.querySelector('.log-console');
   const linesElement = page.querySelector('.log-lines');
   const logSelection = page.querySelector('.log-selection select');
@@ -167,6 +171,11 @@ export function renderLogPage(container, query = new URLSearchParams()) {
   const restartDialogText = restartDialog.querySelector('p');
 
   function renderServiceAction() {
+    if (source === 'task') {
+      serviceAction.hidden = true;
+      renderServiceIndicators();
+      return;
+    }
     const model = restartButtonModel(source, serviceFetchFailed ? null : serviceReport, pendingRestart);
     serviceAction.hidden = !model.visible;
     if (model.visible) {
@@ -184,11 +193,11 @@ export function renderLogPage(container, query = new URLSearchParams()) {
 
   function renderServiceIndicators() {
     page.querySelectorAll('[data-source]').forEach(button => {
+      const dot = button.querySelector('.log-service-dot');
+      if (!dot) return;
       const indicator = button.dataset.source === 'mirakurun'
         ? mirakurunIndicatorModel(diagnosticsReport, diagnosticsFetchState)
         : serviceIndicatorModel(button.dataset.source, serviceReport, pendingRestart, serviceFetchFailed);
-      const dot = button.querySelector('.log-service-dot');
-      if (!dot) return;
       dot.dataset.state = indicator.state;
       button.title = indicator.label;
       button.setAttribute('aria-label', indicator.label);
@@ -406,6 +415,9 @@ export function renderLogPage(container, query = new URLSearchParams()) {
   }
 
   function updateControls() {
+    const taskMode = source === 'task';
+    page.classList.toggle('is-task', taskMode);
+    taskHost.hidden = !taskMode;
     page.querySelectorAll('[data-source]').forEach(button => {
       const selected = button.dataset.source === source;
       button.setAttribute('aria-selected', String(selected));
@@ -550,6 +562,11 @@ export function renderLogPage(container, query = new URLSearchParams()) {
     generation += 1;
     const token = generation;
     updateControls();
+    if (source === 'task') {
+      if (!disposeTask) disposeTask = renderPostprocessPage(taskHost);
+      return;
+    }
+    if (disposeTask) { disposeTask(); disposeTask = null; }
     if (mode === 'realtime') startRealtime(token); else startHistory(token);
     if (refreshCatalog) loadLogOptions(token);
   }
@@ -566,6 +583,9 @@ export function renderLogPage(container, query = new URLSearchParams()) {
     const button = event.target.closest('[data-source]');
     if (!button || button.dataset.source === source) return;
     source = button.dataset.source;
+    const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    if (source === 'task') params.set('tab', 'task'); else params.delete('tab');
+    history.replaceState(null, '', `#log${params.size ? '?' + params : ''}`);
     mode = 'realtime';
     files = [];
     selectedFileId = '';
@@ -648,6 +668,7 @@ export function renderLogPage(container, query = new URLSearchParams()) {
     active = false;
     generation += 1;
     stopAllRequests();
+    if (disposeTask) { disposeTask(); disposeTask = null; }
     serviceRequestController?.abort();
     serviceRequestController = null;
     clearTimeout(serviceRefreshTimer);

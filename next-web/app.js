@@ -15,8 +15,9 @@ import { renderSettingsPage } from './pages/settings-page.js';
 import { renderRulesPage } from './pages/rules-page.js';
 import { renderSeriesPage } from './pages/series-page.js';
 import { loadResource } from './services/api-client.js';
-import { subscribeMatchNotifications, subscribeRealtimeConnection, subscribeReservationNotifications } from './services/realtime-client.js';
+import { subscribeMatchNotifications, subscribeRealtimeConnection, subscribeReservationNotifications, subscribeRecordedNotifications } from './services/realtime-client.js';
 import { subscribeRecordingData } from './services/recording-store.js';
+import { loadAutoTsStatus, subscribeAutoTsStatus } from './services/auto-ts-analysis-client.js';
 import { loadRecordedResultsCounts } from './services/recorded-results-client.js';
 import { pushSystemActivity, subscribeNotificationCenter } from './services/notification-store.js';
 import {
@@ -38,6 +39,27 @@ const authentication = await initializeAuthentication(appRoot);
 const shell = createAppShell(appRoot);
 shell.setAuthentication(authentication.enabled === true, logout);
 const unsubscribeBroadcastClock = subscribeBroadcastClock(state => shell.setServerClockState(state));
+const unsubscribeAutoTsStatus = subscribeAutoTsStatus(status => shell.setAutoTsStatus(status));
+let autoTsPollTimer = null;
+let autoTsPolling = false;
+let autoTsActive = true;
+async function refreshAutoTsStatus() {
+  if (!autoTsActive || autoTsPolling) return;
+  clearTimeout(autoTsPollTimer);
+  autoTsPolling = true;
+  let nextDelay = 60000;
+  try {
+    const status = await loadAutoTsStatus();
+    nextDelay = status.enabled ? status.state === 'running' ? 3000 : 30000 : 120000;
+  } catch (_) {
+    // An older Operator may not implement this feature yet.
+  } finally {
+    autoTsPolling = false;
+    if (autoTsActive) autoTsPollTimer = setTimeout(refreshAutoTsStatus, nextDelay);
+  }
+}
+void refreshAutoTsStatus();
+const unsubscribeAutoTsRecorded = subscribeRecordedNotifications(() => { void refreshAutoTsStatus(); });
 window.addEventListener('chinachu-auth-state', event => shell.setAuthentication(event.detail?.enabled === true, logout));
 const uninstallProgramDetailDialogLinks = installProgramDetailDialogLinks();
 setWuiConnectionSocketSubscriber(subscribeRealtimeConnection);
@@ -205,7 +227,13 @@ const unsubscribeWuiConnection = subscribeWuiConnection(connectionState => {
   if ((event.kind === 'started' || event.kind === 'reconnected') && pendingRestartState?.target === 'wui') {
     completePendingRestart(true, event.kind === 'started' ? 'WUIの起動を確認しました' : 'WUIへの再接続を確認しました');
   }
-  if (routeReady && (event.kind === 'started' || event.kind === 'reconnected')) route();
+  // A new WUI process may serve updated client code and version metadata.
+  // Re-rendering the route alone keeps the old JavaScript modules in memory.
+  if (event.kind === 'started') {
+    window.location.reload();
+    return;
+  }
+  if (routeReady && event.kind === 'reconnected') route();
 });
 
 let currentPageName = null;
@@ -293,6 +321,14 @@ async function route() {
     disposeCurrentPage = renderLogPage(page, query);
     return;
   }
+  // Keep existing #postprocess bookmarks working after moving Task into the log screen.
+  if (name === 'postprocess') {
+    history.replaceState(null, '', '#log?tab=task');
+    shell.setActiveRoute('log');
+    shell.title.textContent = routeTitles.log;
+    disposeCurrentPage = renderLogPage(page, new URLSearchParams('tab=task'));
+    return;
+  }
   if (name === 'program') {
     disposeCurrentPage = renderProgramDetailPage(page, query);
     return;
@@ -317,6 +353,10 @@ window.addEventListener('pagehide', event => {
   }
   if (disposeCurrentPage !== null) disposeCurrentPage();
   unsubscribeRecordingCount();
+  autoTsActive = false;
+  clearTimeout(autoTsPollTimer);
+  unsubscribeAutoTsRecorded();
+  unsubscribeAutoTsStatus();
   unsubscribeReservationCount();
   unsubscribeRecordedCount();
   unsubscribeRecordedCountReconnect();

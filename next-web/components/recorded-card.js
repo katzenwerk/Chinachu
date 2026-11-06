@@ -67,15 +67,18 @@ function cardState(item) {
 
 function savedTsCardSummary(saved) {
   const result = saved?.result;
-  if (result?.completed !== true || !['NO_FINDINGS', 'SUSPECT'].includes(result.status)) return null;
+  if (!result) return null;
   const info = savedTsResultInfo(saved);
   const parts = [];
   for (const [key, label] of [['ccErrorEvents', 'CC異常'], ['pcrGapEvents', '時間飛び'],
     ['teiPackets', 'TEI'], ['syncErrorEvents', '同期異常'], ['invalidHeaderPackets', 'ヘッダー異常'], ['pcrBackwards', 'PCR逆行']]) {
     if (Number.isFinite(result[key]) && result[key] > 0) parts.push(`${label} ${result[key].toLocaleString('ja-JP')}件`);
   }
-  return { label: `TS解析：${parts.length ? parts.join(' / ') : info.label}`, findings: info.findings,
-    description: info.description || '保存済みのTS解析結果です。' };
+  const labels = { NO_FINDINGS: '解析:OK', SUSPECT: '解析:異常', ERROR: '解析:失敗' };
+  const label = result.completed === false && result.status !== 'ERROR' ? '解析:未完了' : labels[result.status];
+  if (!label) return null;
+  return { label, findings: info.findings || result.status === 'ERROR' || result.completed === false,
+    description: `TS解析：${parts.length ? parts.join(' / ') : info.label}${info.description ? '\n' + info.description : ''}` };
 }
 
 function toRecordedCardModel(item, index, options = {}) {

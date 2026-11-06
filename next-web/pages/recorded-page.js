@@ -98,6 +98,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   let selectedResults = readSelectedResults(query);
   let viewMode = readStoredView();
   let warningsOnly = false;
+  let tsIssuesOnly = query.get('tsIssues') === '1';
   let filteredCache = null;
   let items = [];
   let seriesTitleIndex = new Map();
@@ -140,6 +141,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
                 ${RESULT_OPTIONS.map(([value, label]) => `<label><input type="checkbox" data-recorded-result value="${value}"><span>${label}</span></label>`).join('')}
                 <div class="recorded-results-warning-divider" role="separator"></div>
                 <label class="recorded-results-warning-option"><input type="checkbox" value="attention"><span>⚠ 注意ありのみ</span></label>
+                <label class="recorded-results-ts-option"><input type="checkbox" value="tsIssues"><span>DROP／TS異常ありのみ</span></label>
               </div>
             </div>
             <button class="button recorded-results-csv" type="button">CSV出力</button>
@@ -187,6 +189,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   const filterPanel = filter.querySelector('.recorded-results-filter-menu');
   const filterInputs = Array.from(filter.querySelectorAll('input[data-recorded-result]'));
   const attentionInput = filter.querySelector('.recorded-results-warning-option input');
+  const tsIssuesInput = filter.querySelector('.recorded-results-ts-option input');
   const attentionOption = filter.querySelector('.recorded-results-warning-option');
   const filterLabel = filterTrigger.querySelector('span');
   attentionOption.title = ATTENTION_DESCRIPTION;
@@ -246,7 +249,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   }
 
   function resultValues() {
-    return warningsOnly ? ATTENTION_RESULTS.slice() : selectedResultValues();
+    return warningsOnly || tsIssuesOnly ? ATTENTION_RESULTS.slice() : selectedResultValues();
   }
 
   function invalidateFilteredCache() {
@@ -261,6 +264,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   }
 
   async function loadResults(options) {
+    options = { ...options, tsIssues: tsIssuesOnly };
     if (!warningsOnly && !channelId && storageToken === null) return loadRecordedResultsPage(options);
     if (storageToken !== null && storageData === null) {
       const data = await loadResource('storage');
@@ -269,7 +273,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
       if (isActive()) updateScopedFilters();
     }
     const key = JSON.stringify({ search: options.search || '', ruleUid: options.ruleUid || '',
-      results: options.results || [], channelId, warningsOnly, storageToken });
+      results: options.results || [], channelId, warningsOnly, tsIssuesOnly, storageToken });
     if (filteredCache === null || filteredCache.key !== key) {
       const loadAll = storageToken === null ? loadAllRecordedResults : loadRecordedResultsWithStoragePaths;
       const promise = loadAll({
@@ -348,19 +352,21 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   }
 
   function updateFilterControl() {
-    filterInputs.forEach(input => { input.checked = warningsOnly
+    filterInputs.forEach(input => { input.checked = warningsOnly || tsIssuesOnly
       ? ATTENTION_RESULTS.includes(input.value) : selectedResults.has(input.value); });
     attentionInput.checked = warningsOnly;
-    filter.classList.toggle('is-warning-only', warningsOnly);
+    tsIssuesInput.checked = tsIssuesOnly;
+    filter.classList.toggle('is-warning-only', warningsOnly || tsIssuesOnly);
     const selectedLabels = RESULT_OPTIONS
       .filter(([value]) => selectedResults.has(value))
       .map(([, label]) => label);
-    filterLabel.textContent = warningsOnly ? '⚠ 注意あり' : '対象';
-    filterSummary.hidden = warningsOnly;
-    filterSummary.textContent = warningsOnly ? '' : `${selectedLabels.length}/${RESULT_OPTIONS.length}`;
-    filterTrigger.title = warningsOnly ? ATTENTION_DESCRIPTION : '';
+    filterLabel.textContent = warningsOnly ? '⚠ 注意あり' : tsIssuesOnly ? 'DROP／TS異常' : '対象';
+    filterSummary.hidden = warningsOnly || tsIssuesOnly;
+    filterSummary.textContent = warningsOnly || tsIssuesOnly ? '' : `${selectedLabels.length}/${RESULT_OPTIONS.length}`;
+    filterTrigger.title = warningsOnly ? ATTENTION_DESCRIPTION : tsIssuesOnly ? 'Mirakurun DROPまたはTS解析で異常を検出した録画のみ表示します。解析失敗は含めません。' : '';
     filterTrigger.setAttribute('aria-label', warningsOnly
       ? '対象フィルター: 注意ありのみ（スキップ以外の分類から抽出）'
+      : tsIssuesOnly ? '対象フィルター: DROP／TS異常ありのみ'
       : `対象フィルター: ${selectedLabels.length === 0 ? '選択なし' : selectedLabels.join('、')}`);
   }
 
@@ -375,6 +381,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     if (ruleUid !== null) params.set('ruleUid', ruleUid);
     if (channelId !== null) params.set('channelId', channelId);
     if (storageToken !== null) params.set('storage', storageToken);
+    if (tsIssuesOnly) params.set('tsIssues', '1');
     // Preserve the user's manual selection in the URL while attention mode is temporary.
     const values = selectedResultValues();
     if (values.join(',') !== DEFAULT_RESULTS.join(',')) params.set('results', values.join(','));
@@ -614,6 +621,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
           search,
           ruleUid,
           results: resultValues(),
+          tsIssues: tsIssuesOnly,
           signal: controller.signal
         }),
         loadMatchRecordingPaths({ signal: controller.signal })
@@ -662,6 +670,8 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
       if (!item.ruleUid) return;
       ruleUid = item.ruleUid;
     } else if (action === 'filter-clear') {
+      tsIssuesOnly = false;
+      warningsOnly = false;
       ruleUid = null;
       channelId = null;
       storageToken = null;
@@ -825,6 +835,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   filterInputs.forEach(input => input.addEventListener('change', () => {
     // A manual category edit leaves attention mode and starts from the displayed 3/4.
     warningsOnly = false;
+    tsIssuesOnly = false;
     selectedResults = new Set(filterInputs.filter(item => item.checked).map(item => item.value));
     storePreference(RESULTS_STORAGE_KEY, JSON.stringify(Array.from(selectedResults)));
     onResultsFilterChanged();
@@ -832,6 +843,12 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   attentionInput.addEventListener('change', () => {
     // Do not overwrite the user's saved categories. Turning this off restores them.
     warningsOnly = attentionInput.checked;
+    if (warningsOnly) tsIssuesOnly = false;
+    onResultsFilterChanged();
+  });
+  tsIssuesInput.addEventListener('change', () => {
+    tsIssuesOnly = tsIssuesInput.checked;
+    if (tsIssuesOnly) warningsOnly = false;
     onResultsFilterChanged();
   });
   viewButtons.forEach(button => button.addEventListener('click', () => {

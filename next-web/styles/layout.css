@@ -39,6 +39,23 @@
 }
 .header-common-actions { display: flex; align-items: center; flex: 0 0 auto; gap: var(--space-3); }
 .header-common-actions .icon-button { flex: 0 0 38px; }
+.header-auto-ts { position: relative; flex: 0 0 auto; order: -1; }
+.header-auto-ts[hidden] { display: none; }
+.header-auto-ts > summary { list-style: none; padding: 8px 10px; border-radius: 7px; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.header-auto-ts > summary::-webkit-details-marker { display: none; }
+.header-auto-ts-issues { margin-left: 6px; color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+.header-auto-ts > summary:hover,.header-auto-ts[open] > summary { background: rgba(255,255,255,.16); }
+.header-auto-ts-panel { position: absolute; top: calc(100% + 9px); right: 0; z-index: 80; display: none; width: min(355px,calc(100vw - 24px)); padding: 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); color: var(--text); box-shadow: var(--shadow); font-size: 12px; }
+.header-auto-ts[open] .header-auto-ts-panel,.header-auto-ts:hover .header-auto-ts-panel { display: grid; gap: 9px; }
+.header-auto-ts-panel strong { font-size: 13px; }
+.header-auto-ts-panel p { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.header-auto-ts-panel progress { width: 100%; height: 8px; }
+.header-auto-ts-panel progress[hidden] { display: none; }
+.header-auto-ts-error { color: var(--danger); }
+.header-auto-ts-error:empty,.header-auto-ts-current:empty { display: none; }
+.header-auto-ts-actions { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.header-auto-ts-actions a { color: var(--brand-strong); text-decoration: underline; }
+.header-auto-ts-actions .button { flex: 0 0 auto; }
 .notification-count { position: absolute; top: 2px; right: 1px; display: block; width: 9px; height: 9px; border: 1px solid #fff; border-radius: 50%; pointer-events: none; }
 .notification-count.is-error { background: var(--danger); }
 .notification-count.is-warning { background: #e5b33f; }
