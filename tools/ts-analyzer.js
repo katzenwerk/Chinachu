@@ -41,11 +41,12 @@ PCR gaps are candidates for missing timeline data, not proof of dropped video.`)
 
 function parseArgs(argv) {
   const opts = { analyzer: null, dirs: [], files: [],
-    summary: false, events: false, json: false, gapThresholdMs: 2000, pcrPid: null };
+    summary: false, events: false, json: false, progress: false, gapThresholdMs: 2000, pcrPid: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') return { help: true };
     if (arg === '--json') { opts.json = true; continue; }
+    if (arg === '--progress') { opts.progress = true; continue; }
     if (arg === '--summary') { opts.summary = true; continue; }
     if (arg === '--events' || arg === '--verbose') { opts.events = true; continue; }
     if (['--analyzer', '--dir', '--pcr-gap-ms', '--pcr-pid'].includes(arg)) {
@@ -299,9 +300,19 @@ async function inspectFile(filename, BaseAnalyzer, opts, displayMode) {
   const analyzer = new Analyzer();
   const start = performance.now();
   const stream = fs.createReadStream(filename, { highWaterMark: READ_CHUNK_BYTES });
+  let reportedBytes = 0;
+  let reportedAt = 0;
+  let readBytes = 0;
   try {
     for await (const chunk of stream) {
       analyzer.push(chunk);
+      readBytes += chunk.length;
+      const now = performance.now();
+      if (opts.progress && readBytes - reportedBytes >= 32 * 1024 * 1024 && now - reportedAt >= 1000) {
+        process.stderr.write(`TS_PROGRESS ${readBytes}\n`);
+        reportedBytes = readBytes;
+        reportedAt = now;
+      }
       if (eventBuffer.length) {
         const lines = [];
         for (const event of eventBuffer) {
@@ -320,6 +331,7 @@ async function inspectFile(filename, BaseAnalyzer, opts, displayMode) {
   if (displayMode === 'timeline' && !timelineState.eventCount) {
     console.log('  表示対象の異常イベントなし');
   }
+  if (opts.progress) process.stderr.write(`TS_PROGRESS ${readBytes}\n`);
   const parsed = analyzer.finish();
   const elapsedMs = performance.now() - start;
   const pidSummary = analyzer.pidOrder.map(pid => ({

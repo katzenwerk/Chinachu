@@ -150,7 +150,8 @@
 					search: request.query && request.query.search,
 					status: request.query && request.query.status,
 					results: request.query && request.query.results,
-					ruleUid: request.query && request.query.ruleUid
+					ruleUid: request.query && request.query.ruleUid,
+					tsIssues: request.query && request.query.tsIssues
 				});
 				response.head(200);
 				response.end(JSON.stringify(emptyPage));
@@ -274,7 +275,8 @@
 				search: request.query && request.query.search,
 				status: request.query && request.query.status,
 				results: request.query && request.query.results,
-				ruleUid: request.query && request.query.ruleUid
+				ruleUid: request.query && request.query.ruleUid,
+				tsIssues: request.query && request.query.tsIssues
 			});
 			response.head(200);
 			response.end(JSON.stringify(pageResult));

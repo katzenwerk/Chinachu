@@ -73,16 +73,20 @@ async function checkMaintenanceState() {
 	// Read the actual status callback and serializer without running Operator or any jobs.
 	const operator = fs.readFileSync(path.join(__dirname, '../app-operator.js'), 'utf8');
 	const backend = vm.createContext({ shutdownStarted: false, recording: [], activeRecordingOutputs: new Set(),
-		guard: 0, recordedMaintenance: { isBusy: () => false }, matchLedgerProcess: null,
+		guard: 0, postProcessingDelay: () => backend.guard,
+		recordedMaintenance: { isBusy: () => false }, matchLedgerProcess: null,
 		activeDurationProbes: new Set(), pendingRecordedLedgerWrites: 0,
 		recordedThumbnailGenerator: { getState: () => ({ active: null }) } });
-	vm.runInContext('options = { delay: () => guard, ' + section(operator, '\twaitReason(ts)', '\tprobe:') + '};', backend);
+	vm.runInContext('options = { ' + section(operator, '\tdelay: ts => {', '\tprobe:') + '};', backend);
 	assert.strictEqual(backend.options.waitReason(true), null);
 	backend.recording.push({});
-	assert.strictEqual(backend.options.waitReason(true), 'recording');
+	assert.strictEqual(backend.options.delay(true), 0);
+	assert.strictEqual(backend.options.waitReason(true), null);
 	assert.strictEqual(backend.options.waitReason(false), null);
 	backend.recording.length = 0; backend.guard = 1000;
-	assert.strictEqual(backend.options.waitReason(true), 'recording-transition');
+	assert.strictEqual(backend.options.delay(false), 1000);
+	assert.strictEqual(backend.options.waitReason(true), null);
+	assert.strictEqual(backend.options.waitReason(false), 'recording-transition');
 	backend.guard = 0; backend.matchLedgerProcess = {};
 	assert.strictEqual(backend.options.waitReason(true), 'post-processing');
 	Object.assign(backend, { saved: () => ({}), thumb: () => ({ getStatus: () => ({}) }), files: { roots: () => [] } });

@@ -79,6 +79,7 @@ const storageRefreshIpc = require('./lib/storage-refresh-ipc');
 const storageManualRefresh = require('./lib/storage-manual-refresh');
 const recordedThumbnail = require('./lib/recorded-thumbnail');
 const recordedMaintenanceModule = require('./lib/recorded-maintenance');
+const recordedAutoAnalysis = require('./lib/recorded-auto-analysis');
 const matchOutput = require('./lib/match-output');
 const runtimePrivileges = require('./lib/runtime-privileges');
 const runtimePathsModule = require('./lib/runtime-paths');
@@ -135,8 +136,11 @@ const sendNotification = notification.createNotificationQueue(
 const recordedStorageWakeupBeforeSec = getRecordedStorageWakeupBeforeSec();// 録画開始前HDD起動秒数。0/null/未指定は無効
 const recordedStorageWakeupBeforeTime = recordedStorageWakeupBeforeSec * 1000;
 const dropDetectionMode = getDropDetectionMode();// 未指定時は既存Mirakurun方式
-const mirakurunDropDetectionEnabled = dropDetectionMode === 'mirakurun' || dropDetectionMode === 'both';
+const mirakurunDropDetectionEnabled = ['mirakurun', 'both', 'mirakurun-file'].includes(dropDetectionMode);
 const tsDropDetectionEnabled = dropDetectionMode === 'ts' || dropDetectionMode === 'both';
+const autoTsAnalysisEnabled = dropDetectionMode === 'file' || dropDetectionMode === 'mirakurun-file';
+const autoTsMaxRecordings = Number.isInteger(config.autoTsMaxRecordings) && config.autoTsMaxRecordings >= 0
+	? config.autoTsMaxRecordings : 0;
 const mirakurunDropCheckIntervalTime = getMirakurunDropCheckIntervalTime();// 録画中drop監視間隔。0以下で無効
 const reserveCheckIntervalTime = getReserveCheckIntervalTime();// 通常時の予約チェック間隔
 const prepReserveCheckIntervalTime = getPrepReserveCheckIntervalTime();// 準備期間内の予約チェック間隔。通常間隔以上なら高速化なし
@@ -228,7 +232,7 @@ function getDropDetectionMode() {
 	}
 
 	const mode = typeof config.dropDetectionMode === 'string' ? config.dropDetectionMode.trim().toLowerCase() : '';
-	if (['mirakurun', 'ts', 'both', 'off'].includes(mode)) return mode;
+	if (['mirakurun', 'ts', 'both', 'off', 'file', 'mirakurun-file'].includes(mode)) return mode;
 
 	operatorLog('WARNING: invalid dropDetectionMode=' + JSON.stringify(config.dropDetectionMode) +
 		'; fallback to mirakurun');
@@ -428,6 +432,22 @@ let pendingRecordedLedgerWrites = 0;
 const failedRecordingSaves = new Set();
 let lastRecordingTransitionAt = 0;
 let recordedMaintenance = null;
+let autoTsReviewTimer = null;
+// Dashboard-only, bounded in-memory history; never writes to recording ledgers.
+const recentPostProcessing = [];
+const thumbnailProcessingStarts = new Map();
+function rememberPostProcessing(type, title, status, startedAt, id = null, detail = '') {
+	const finishedAt = Date.now();
+	recentPostProcessing.unshift({ type, title: String(title || ''), status,
+		startedAt: Number(startedAt) || finishedAt, finishedAt,
+		durationMs: Math.max(0, finishedAt - (Number(startedAt) || finishedAt)),
+		id: id === null ? null : String(id), detail: String(detail || '') });
+	recentPostProcessing.length = Math.min(recentPostProcessing.length, 5);
+}
+function recordedTitleForId(id) {
+	const row = recorded.find(item => item && String(item.id) === String(id));
+	return row && (row.title || row.fullTitle) || String(id);
+}
 const recordedThumbnailGenerator = recordedThumbnail.createGenerator({
 	outputDir: RECORDED_THUMBNAIL_DIR,
 	log: operatorLog,
@@ -445,26 +465,41 @@ const recordedThumbnailGenerator = recordedThumbnail.createGenerator({
 		return postProcessingDelay();
 	},
 	onIdle: () => wakePostProcessing(),
-	onStatus: (id, state) => { if (recordedMaintenance) recordedMaintenance.thumbnailStatus(id, state); }
+	onStatus: (id, state) => {
+		if (recordedMaintenance) recordedMaintenance.thumbnailStatus(id, state);
+		const key = String(id);
+		if (state.status === 'processing') thumbnailProcessingStarts.set(key, Date.now());
+		else if (thumbnailProcessingStarts.has(key) && ['complete', 'failed'].includes(state.status)) {
+			rememberPostProcessing('thumbnail', recordedTitleForId(id), state.status === 'complete' ? 'complete' : 'failed',
+				thumbnailProcessingStarts.get(key), key, state.reason || '');
+			thumbnailProcessingStarts.delete(key);
+		} else if (state.status === 'source-missing') thumbnailProcessingStarts.delete(key);
+	}
 });
 recordedMaintenance = recordedMaintenanceModule.createMaintenance({
 	root: __dirname, config, thumbnail: recordedThumbnailGenerator,
+	autoEnabled: autoTsAnalysisEnabled,
+	getAutoSummary: () => recordedAutoAnalysis.summarize(recorded),
+	autoAllowed: () => autoTsAnalysisEnabled && postProcessingDelay() === 0 &&
+		Math.max(activeRecordingOutputs.size,
+			recordedAutoAnalysis.peakRecordings(recording, reserves, isRecordedForReserve)) <= autoTsMaxRecordings,
+	autoWaitReason: () => {
+		if (postProcessingDelay() > 0) return 'recording-transition';
+		if (recordedAutoAnalysis.peakRecordings(recording, reserves, isRecordedForReserve) > autoTsMaxRecordings) return 'recording-limit';
+		return recordedAutoAnalysis.summarize(recorded).counts.remaining > 0 ? 'idle' : 'complete';
+	},
+	log: operatorLog,
+	onCompleted: event => rememberPostProcessing('ts', event.title || recordedTitleForId(event.id),
+		event.status, event.startedAt, event.id, event.mode === 'manual' ? '手動解析' : '自動解析'),
 	canStart: () => !shutdownStarted && !matchLedgerProcess && activeDurationProbes.size === 0 &&
 		pendingRecordedLedgerWrites === 0 && !recordedThumbnailGenerator.getState().active,
 	wake: () => { wakePostProcessing(); completeOperatorShutdown(); },
 	delay: ts => {
 		if (shutdownStarted) return Infinity;
-		const guard = postProcessingDelay();
-		if (!ts) return guard;
-		if (recording.length || activeRecordingOutputs.size) return Math.max(1000, guard);
-		// End the analyzer before the existing 15-second transition guard begins.
-		const approaching = reserves.some(program => program && !program.isSkip && !program.isConflict &&
-			!isRecordedForReserve(program) && Number(program.start) > Date.now() && Number(program.start) - Date.now() <= 20000);
-		return approaching ? Math.max(1000, guard) : guard;
+		return ts ? 0 : postProcessingDelay();
 	},
 	waitReason(ts) {
 		if (shutdownStarted) return null;
-		if (ts && (recording.length || activeRecordingOutputs.size)) return 'recording';
 		if (this.delay(ts) > 0) return 'recording-transition';
 		if (recordedMaintenance.isBusy() || matchLedgerProcess || activeDurationProbes.size ||
 			pendingRecordedLedgerWrites || recordedThumbnailGenerator.getState().active) return 'post-processing';
@@ -472,7 +507,9 @@ recordedMaintenance = recordedMaintenanceModule.createMaintenance({
 	},
 	probe: filePath => new Promise(resolve => startDurationProbe({ filePath, queuedAt: Date.now(), maintenance: true,
 		callback: duration => resolve(duration) })),
-	onChanged: () => { try { recorded = reservationStore.readArray(RECORDED_DATA_FILE); } catch (error) {
+	onChanged: () => { if (pendingRecordedLedgerWrites !== 0) return; try {
+		recorded = reservationStore.readArray(RECORDED_DATA_FILE);
+	} catch (error) {
 		operatorLog('WARNING: maintenance ledger reload failed: ' + error.message);
 	} }
 });
@@ -621,6 +658,7 @@ operatorInterval = setInterval(() => {
 	}
 
 	checkActiveRecordingStorage();
+	stopAutoIfRecordingLimitExceeded();
 
 	if (clock - recordingChecked > 1000 * 30) {
 		recordingStaleChecker();
@@ -936,6 +974,10 @@ function shutdownOperator(signal) {
 		clearInterval(operatorInterval);
 		operatorInterval = null;
 	}
+	if (autoTsReviewTimer !== null) {
+		clearTimeout(autoTsReviewTimer);
+		autoTsReviewTimer = null;
+	}
 	stopBroadcastClockMonitor();
 	if (storageRefreshServer) {
 		storageRefreshServer.close();
@@ -1018,6 +1060,7 @@ function lowerPostProcessingPriority(child, label) {
 }
 
 function startDurationProbe(job) {
+	const startedAt = Date.now();
 	const configuredCommand = typeof config.ffprobeCommand === 'string' ? config.ffprobeCommand.trim() : '';
 	let probe = null;
 	let completed = false;
@@ -1025,6 +1068,8 @@ function startDurationProbe(job) {
 		if (completed) return;
 		completed = true;
 		if (probe) activeDurationProbes.delete(probe);
+		if (!shutdownStarted) rememberPostProcessing('ffprobe', path.basename(job.filePath),
+			duration === null ? 'failed' : 'complete', startedAt);
 		try {
 			if (!shutdownStarted || job.maintenance === true) job.callback(duration, job.queuedAt);
 		} finally {
@@ -1340,6 +1385,32 @@ function postProcessingDelay() {
 	return readyAt - now;
 }
 
+// The automatic queue is a view of recorded.json, not a separately persisted list.
+// Only the candidate currently being written is excluded; other recordings can
+// still be analyzed up to the configured concurrent-recording limit.
+function nextAutoTsCandidate() {
+	const openFiles = new Set(Array.from(activeRecordingOutputs, output => String(output.path || '')));
+	return recordedAutoAnalysis.summarize(recorded, Date.now(), entry => openFiles.has(path.resolve(__dirname, entry.recorded))).candidate;
+}
+
+function stopAutoIfRecordingLimitExceeded() {
+	if (!autoTsAnalysisEnabled) return;
+	const actual = recording.filter(program => program && !program.operatorRecordingEnd &&
+		!program.operatorResumePending && !program._operatorManualRemovalPending).length;
+	if (Math.max(actual, activeRecordingOutputs.size) > autoTsMaxRecordings) {
+		recordedMaintenance.interruptAuto('録画本数が許可上限を超えたため自動TS解析を中断しました。');
+	}
+}
+
+function scheduleAutoTsReview() {
+	if (!autoTsAnalysisEnabled || shutdownStarted) return;
+	autoTsReviewTimer = setTimeout(() => {
+		autoTsReviewTimer = null;
+		wakePostProcessing();
+		scheduleAutoTsReview();
+	}, recordedAutoAnalysis.nextReviewDelay());
+}
+
 function wakePostProcessing(delay = 0) {
 	if (shutdownStarted) return;
 	delay = Math.max(0, Math.min(delay, 0x7fffffff));
@@ -1407,7 +1478,18 @@ function runPostProcessing() {
 		return;
 	}
 	if (matchLedgerUpdateReason && scheduler === null) wakePostProcessing(Math.max(0, matchLedgerReadyAt - now));
-	else { recordedThumbnailGenerator.resume(); recordedMaintenance.runNext(); }
+	else {
+		recordedThumbnailGenerator.resume();
+		recordedMaintenance.runNext();
+		// Optional full-file reads run only after existing post-processing work.
+		if (autoTsAnalysisEnabled && !recordedMaintenance.isBusy() &&
+			!recordedThumbnailGenerator.getState().pending && !recordedThumbnailGenerator.getState().active &&
+			!durationProbeQueue.length && !matchLedgerUpdateReason && scheduler === null &&
+			!Number.isFinite(recordedMaintenance.nextRequestedAt())) {
+			const candidate = nextAutoTsCandidate();
+			if (candidate) recordedMaintenance.startAuto(candidate);
+		}
+	}
 }
 
 function scheduleMatchLedgerUpdate(reason, sourceAt) {
@@ -1534,6 +1616,8 @@ function updateMatchLedger(reason) {
 		if (settled) return;
 		settled = true;
 		matchLedgerProcess = null;
+		if (!shutdownStarted) rememberPostProcessing('match', reason || 'match更新',
+			spawnError || code !== 0 || signal ? 'failed' : 'complete', startedAt);
 		emitMatchProcessOutput({ stdout, stderr });
 		operatorLog('MATCH EXIT: pid=' + (child && child.pid || '-') +
 			' elapsed_ms=' + (Date.now() - startedAt) + ' code=' + code + ' signal=' + (signal || '-'));
@@ -2969,6 +3053,7 @@ function prepRecord(program) {
 		});
 
 	recording.push(program);
+	stopAutoIfRecordingLimitExceeded();
 	writeRecordingData();
 }
 
@@ -3847,7 +3932,61 @@ function getRecordedThumbnailDuration(entry) {
 	return null;
 }
 
+// Read-only snapshot. All queue data are already in Operator memory; do not stat TS files.
+function postProcessingMonitorStatus() {
+	const auto = recordedMaintenance.request({ action: 'auto-status' });
+	const manual = recordedMaintenance.monitorState();
+	const thumbnail = recordedThumbnailGenerator.getState();
+	const thumbnailPending = recordedThumbnailGenerator.getPendingJobs();
+	const matchPending = Boolean(matchLedgerUpdateReason);
+	const queued = [];
+	if (matchPending) queued.push({ type: 'match', title: matchLedgerUpdateReason,
+		queuedAt: matchLedgerPendingAt });
+	for (const job of durationProbeQueue) queued.push({ type: 'ffprobe', title: path.basename(job.filePath),
+		queuedAt: job.queuedAt });
+	for (const job of thumbnailPending) queued.push({ type: 'thumbnail',
+		title: recordedTitleForId(job.id), id: job.id, queuedAt: job.requestedAt || job.queuedAt });
+	for (const job of manual.pendingJobs) queued.push({ ...job,
+		title: recordedTitleForId(job.id) });
+	queued.sort((a, b) => (Number(a.queuedAt) || 0) - (Number(b.queuedAt) || 0));
+	const counts = { match: matchPending ? 1 : 0,
+		ffprobe: durationProbeQueue.length + manual.pendingCounts.ffprobe,
+		thumbnail: thumbnail.pending + manual.pendingCounts.thumbnail,
+		ts: manual.pendingCounts.ts };
+	const recentTs = [];
+	for (const entry of recorded) {
+		const analysis = entry?.savedTsAnalysis;
+		const result = analysis?.result;
+		const checkedAt = Number(analysis?.checkedAt);
+		if (!result || !['NO_FINDINGS', 'SUSPECT', 'ERROR'].includes(result.status) ||
+			!Number.isFinite(checkedAt) || checkedAt <= 0) continue;
+		recentTs.push({ id: String(entry.id), title: entry.title || entry.fullTitle || String(entry.id),
+			checkedAt, status: result.status, ccErrorEvents: Number(result.ccErrorEvents) || 0,
+			pcrGapEvents: Number(result.pcrGapEvents) || 0, error: String(result.error || '') });
+		recentTs.sort((a, b) => b.checkedAt - a.checkedAt);
+		if (recentTs.length > 5) recentTs.pop();
+	}
+	return {
+		monitorVersion: 1, updatedAt: Date.now(),
+		queues: [
+			{ type: 'match', active: Boolean(matchLedgerProcess), pending: counts.match },
+			{ type: 'ffprobe', active: activeDurationProbes.size > 0 || manual.active?.type === 'ffprobe', pending: counts.ffprobe },
+			{ type: 'thumbnail', active: Boolean(thumbnail.active) || manual.active?.type === 'thumbnail', pending: counts.thumbnail },
+			{ type: 'ts', active: Boolean(auto.current) || manual.active?.type === 'ts', pending: counts.ts,
+				remaining: auto.counts?.remaining || 0 }
+		],
+		queuedTotal: counts.match + counts.ffprobe + counts.thumbnail + counts.ts,
+		waiting: queued.slice(0, 5),
+		completed: recentPostProcessing.slice(),
+		recentTs,
+		auto,
+		currentTs: auto.current ? { ...auto.current, mode: 'auto' } :
+			manual.active?.type === 'ts' ? { ...manual.active, title: recordedTitleForId(manual.active.id), mode: 'manual' } : null
+	};
+}
+
 function handleRecordedThumbnailRequest(request) {
+	if (request && request.maintenance === true && request.maintenanceAction === 'monitor-status') return postProcessingMonitorStatus();
 	if (request && request.maintenance === true) return recordedMaintenance.request(Object.assign({}, request, { action: request.maintenanceAction }));
 	const id = request && String(request.id || '');
 	const outputPath = recordedThumbnail.resolveOutputPath(RECORDED_THUMBNAIL_DIR, id);
@@ -3959,6 +4098,7 @@ chinachu.jsonWatcher(
 
 		if (pendingRecordedLedgerWrites === 0) recorded = data;
 		operatorLog(mes);
+		if (autoTsAnalysisEnabled) wakePostProcessing();
 	},
 	{ create: [], now: true }
 );
@@ -3985,3 +4125,5 @@ chinachu.jsonWatcher(
 recoverRecordingHistory();
 reserveCheckLoop();
 startBroadcastClockMonitor();
+scheduleAutoTsReview();
+if (autoTsAnalysisEnabled) wakePostProcessing();
