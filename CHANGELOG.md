@@ -1,3 +1,21 @@
+# Chinachu 0.10.7-thorn.36
+
+## Automatic Saved TS Analysis
+
+- Add optional automatic analysis of completed TS files, selecting recent unanalyzed recordings from the recorded ledger without a separate persistent queue.
+- Defer or interrupt automatic analysis for recording activity and upcoming recordings, with a configurable recording-count limit (default: 0) and pause/resume controls.
+- Store completed and failed analysis results. Keep manual and automatic TS analysis jobs serialized, while allowing manual analysis during recording independently of automatic-analysis limits.
+
+## Post-processing Monitor
+
+- Add a Task tab to Services and Logs to show match, ffprobe, thumbnail, and TS analysis states, pending work, recent completions, and TS results.
+- Display current TS analysis progress and remaining unanalyzed recordings.
+
+## Web UI
+
+- Add automatic TS analysis settings, compact analysis status on recording cards, and a recorded-results filter for DROP and TS anomalies.
+- Reload the browser when a new WUI process is detected, refreshing the displayed version and client assets.
+
 # Chinachu 0.10.7-thorn.35
 
 ## Thorn34 CHANGELOG entries

@@ -496,6 +496,12 @@ describe('WUI access model', function() {
 			assert.strictEqual(diagnostics.recording.data.count, 0);
 			assert.ok(Object.hasOwn(diagnostics.notMeasured, 'matchingSuccess'));
 
+			// There is no Operator IPC in this fixture: the monitor route must return
+			// a JSON service error, not be captured by the /:id recorded route (404).
+			const taskApi = await request(openPort, '/api/recorded/auto-analysis.json?monitor=1');
+			assert.strictEqual(taskApi.statusCode, 503);
+			assert.strictEqual(typeof JSON.parse(taskApi.body.toString()).message, 'string');
+
 			const stream = await request(openPort, '/api/recorded/smoke/file.m2ts');
 			assert.strictEqual(stream.statusCode, 200);
 			assert.strictEqual(stream.body.toString(), 'chinachu-stream-smoke');

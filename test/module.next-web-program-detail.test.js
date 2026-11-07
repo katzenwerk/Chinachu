@@ -96,6 +96,26 @@ async function checkMaintenanceState() {
 	assert.strictEqual(backend.snapshot(target, { ...queued.job, target }).job.waitReason, 'post-processing');
 	assert.strictEqual(backend.snapshot(target, { ...failed.job, target }).job.waitReason, null);
 
+	// Automatic TS selection and five-minute recording-limit calculation use
+	// ledger metadata only; no actual recording files are opened.
+	const auto = require('../lib/recorded-auto-analysis');
+	const now = Date.UTC(2026, 10, 7);
+	const available = [
+		{ id: 'older', recorded: '/recordings/older.ts', end: now - 2000 },
+		{ id: 'newer', recorded: '/recordings/newer.ts', end: now - 1000 },
+		{ id: 'done', recorded: '/recordings/done.ts', end: now - 3000,
+			savedTsAnalysis: { result: { status: 'NO_FINDINGS', completed: true } } }
+	];
+	const automatic = auto.summarize(available, now);
+	assert.deepStrictEqual(automatic.counts, { completed: 1, remaining: 2, failed: 0, suspect: 0 });
+	assert.strictEqual(automatic.candidate.id, 'newer');
+	assert.strictEqual(auto.summarize(available, now, entry => entry.id === 'newer').candidate.id, 'older');
+	const active = [{ id: 'active', end: now + 120000 }];
+	assert.strictEqual(auto.peakRecordings(active,
+		[{ id: 'next', start: now + 120000, end: now + 240000 }], () => false, now), 1);
+	assert.strictEqual(auto.peakRecordings(active,
+		[{ id: 'next', start: now + 60000, end: now + 240000 }], () => false, now), 2);
+
 	// Render saved JSON into a minimal DOM; no API requests or media access.
 	const warningSource = fs.readFileSync(path.join(__dirname, '../next-web/services/recorded-result-warnings.js'), 'utf8');
 	const { savedTsResultInfo } = await import('data:text/javascript;base64,' + Buffer.from(warningSource).toString('base64'));
