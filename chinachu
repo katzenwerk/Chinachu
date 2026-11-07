@@ -68,6 +68,7 @@ main () {
   NPM_PATH=${NAVE_DIR}/installed/${NODE_VER}/bin/npm
   USR_DIR=${CHINACHU_DIR}/usr
 
+  CHINACHU_LOCAL_PATH=$PATH
   export PATH=${NAVE_DIR}:${NAVE_DIR}/installed/${NODE_VER}/bin:$USR_DIR/bin:$PATH
   export LD_LIBRARY_PATH=$USR_DIR/lib:$LD_LIBRARY_PATH
   export PKG_CONFIG_PATH=$USR_DIR/lib/pkgconfig
@@ -627,6 +628,52 @@ upgrade_error () {
   return 1
 }
 
+
+upgrade_print_environment () {
+  local ffmpeg_version="${FFMPEG_VERSION#ffmpeg version }" ffprobe_version="${FFPROBE_VERSION#ffprobe version }"
+  local atomic_version='未検出' local_node='未検出' chinachu_node='未検出' npm_version='未検出' local_node_path=''
+  ffmpeg_version="${ffmpeg_version%% *}"
+  ffprobe_version="${ffprobe_version%% *}"
+  [ -n "$ffmpeg_version" ] || ffmpeg_version='未検出'
+  [ -n "$ffprobe_version" ] || ffprobe_version='未検出'
+  if command -v dpkg-query > /dev/null 2>&1; then
+    atomic_version=$(dpkg-query -W -f='${Version}' libatomic1 2>/dev/null) || atomic_version='未検出'
+  fi
+  local_node_path=$(PATH="${CHINACHU_LOCAL_PATH:-$PATH}" command -v node 2>/dev/null) || local_node_path=''
+  if [ -n "$local_node_path" ] && [ -x "$local_node_path" ]; then
+    local_node=$("$local_node_path" --version 2>/dev/null) || local_node='取得失敗'
+  fi
+  if [ -x "$NAVE_DIR/node" ]; then
+    chinachu_node=$("$NAVE_DIR/node" --version 2>/dev/null) || chinachu_node='取得失敗'
+  fi
+  if [ -x "$NAVE_DIR/npm" ]; then
+    npm_version=$(PATH="$NAVE_DIR:$PATH" "$NAVE_DIR/npm" --version 2>/dev/null) || npm_version='取得失敗'
+  fi
+  local_node="${local_node#v}"
+  chinachu_node="${chinachu_node#v}"
+  UPGRADE_RUNTIME_NODE_VERSION="$chinachu_node"
+  printf '\n実行環境の確認\n─────────────────────────────────────────────────────────\n'
+  printf '%-20s%s\n' 'FFmpeg' "$ffmpeg_version" 'FFprobe' "$ffprobe_version" \
+    'libatomic1' "$atomic_version" 'Node.js' "${local_node}（Local）" \
+    'Node.js' "${chinachu_node}（Chinachu）" 'npm' "${npm_version}（Chinachu）"
+}
+
+upgrade_package_version () {
+  sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+}
+
+upgrade_confirm_local_changes () {
+  local answer
+  printf '\nGit管理ファイルにローカル変更があります。\n'
+  printf '%s\n' "$1" | head -n 10
+  printf '\n[1] ローカル変更を破棄して最新版に更新（Git管理ファイルのみ）\n'
+  printf '[2] 中止して変更内容を確認\n'
+  printf '※ ご自身でファイルを変更した場合は [2] を選択してください。\n'
+  [ -t 0 ] || { upgrade_error "ローカル変更があるため、非対話環境では更新を中止します。"; return 1; }
+  read -r -p '選択 [2]: ' answer || return 1
+  [ "$answer" = 1 ] || { printf 'Upgrade was not applied.\n'; return 1; }
+}
+
 upgrade_as_user () {
   local user_home
   if [ "$(id -un)" = "$UPGRADE_USER" ]; then
@@ -966,6 +1013,7 @@ upgrade_show_runtime_notice () {
   else
     printf '\nNode.js 26の実行環境を更新します。\n'
   fi
+  printf 'Chinachu専用環境（.nave）を更新します。OS側のNode.jsは変更しません。\n'
   if [ -n "$manager_prefix" ]; then
     printf '必要に応じてPM2を入れ直し、Chinachuと同じPM2で管理するサービスを一時停止・再起動します。\n'
     printf '更新中は対象サービスを一時的に利用できません。\n'
@@ -1066,7 +1114,8 @@ upgrade_pm2_persistence_report () {
 chinachu_upgrade () {
   local status branch upstream remote changed_files upstream_launcher upstream_node_version
   local dependencies_needed=false node_needed=false restart_needed=false
-  local runtime_approved=false runtime_notice=false
+  local runtime_approved=false runtime_notice=false git_changes_confirmed=false
+  local current_manifest upstream_manifest current_version upstream_version
   local manager_prefix='' manager_user='' manager_active='[]' manager_saved='[]'
   local manager_expected_uid='' manager_expected_gid='' online_names='' operator_status='' wui_status='' file
   local source_build="${1:-}"
@@ -1127,7 +1176,42 @@ chinachu_upgrade () {
     upgrade_error "FFmpeg/ffprobe is not in the supported runtime state. Run ./chinachu installer ffmpeg first."
     return 1
   fi
-  print_ffmpeg_commands "Runtime"
+  upgrade_print_environment
+
+  branch=$(upgrade_git branch --show-current) || return 1
+  [ -n "$branch" ] || { upgrade_error "Detached HEAD is not supported by Upgrade."; return 1; }
+  upstream=$(upgrade_git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || {
+    upgrade_error "The current branch has no upstream tracking branch."
+    return 1
+  }
+  remote=$(upgrade_git config --get "branch.${branch}.remote") || return 1
+  [ -n "$remote" ] && [ "$remote" != . ] || { upgrade_error "A remote tracking branch is required."; return 1; }
+  upgrade_git fetch -- "$remote" || { upgrade_error "git fetch failed; no update was applied."; return 1; }
+  upgrade_git merge-base --is-ancestor HEAD "$upstream" || {
+    upgrade_error "The tracking branch cannot be applied as a fast-forward."
+    return 1
+  }
+  current_manifest=$(upgrade_git show HEAD:package.json) || { upgrade_error "Could not read the current version."; return 1; }
+  upstream_manifest=$(upgrade_git show "$upstream:package.json") || { upgrade_error "Could not read the target version."; return 1; }
+  current_version=$(printf '%s\n' "$current_manifest" | upgrade_package_version)
+  upstream_version=$(printf '%s\n' "$upstream_manifest" | upgrade_package_version)
+  [ -n "$current_version" ] && [ -n "$upstream_version" ] || { upgrade_error "Could not determine the Chinachu version."; return 1; }
+  printf '\nGit更新の確認\n──────────────────────────────────────────\n'
+  printf '現在のバージョン : %s\n更新先バージョン : %s\n' "$current_version" "$upstream_version"
+  printf 'Git: %s -> %s (%s)\n' "$branch" "$upstream" "$remote"
+
+  # Untracked files are preserved. Git itself rejects incoming-file conflicts.
+  status=$(upgrade_git status --porcelain --untracked-files=no) || return 1
+  if [ -n "$status" ]; then
+    upgrade_confirm_local_changes "$status" || return 1
+    upgrade_git restore --source=HEAD --staged --worktree -- . || {
+      upgrade_error "Could not discard the selected tracked changes."
+      return 1
+    }
+    status=$(upgrade_git status --porcelain --untracked-files=no) || return 1
+    [ -z "$status" ] || { upgrade_error "Tracked changes remain after restore."; return 1; }
+    git_changes_confirmed=true
+  fi
 
   # Runtime repair is independent of whether Git can update this working tree.
   if [ -n "$manager_prefix" ]; then
@@ -1149,27 +1233,8 @@ chinachu_upgrade () {
     upgrade_as_user "$CHINACHU_DIR/chinachu" installer verify || { upgrade_failed "runtime verification"; return 1; }
     upgrade_as_user "$NODE_PATH" "$CHINACHU_DIR/lib/pm2-runtime-migrate.js" "$CHINACHU_DIR" '' '' prune || { upgrade_failed "Node 24 removal"; return 1; }
   fi
-  status=$(upgrade_git status --porcelain --untracked-files=all) || return 1
-  if [ -n "$status" ]; then
-    printf 'Runtime verified/repaired. Source update skipped: the working tree has tracked or untracked changes.\n'
-    return 0
-  fi
-  branch=$(upgrade_git branch --show-current) || return 1
-  [ -n "$branch" ] || { upgrade_error "Detached HEAD is not supported by Upgrade."; return 1; }
-  upstream=$(upgrade_git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || {
-    upgrade_error "The current branch has no upstream tracking branch."
-    return 1
-  }
-  remote=$(upgrade_git config --get "branch.${branch}.remote") || return 1
-  [ -n "$remote" ] && [ "$remote" != . ] || { upgrade_error "A remote tracking branch is required."; return 1; }
-  printf 'Git: %s -> %s (%s)\n' "$branch" "$upstream" "$remote"
-  upgrade_git fetch -- "$remote" || { upgrade_error "git fetch failed; no update was applied."; return 1; }
-  status=$(upgrade_git status --porcelain --untracked-files=all) || return 1
-  [ -z "$status" ] || { upgrade_error "The working tree changed during preflight."; return 1; }
-  upgrade_git merge-base --is-ancestor HEAD "$upstream" || {
-    upgrade_error "The tracking branch cannot be applied as a fast-forward."
-    return 1
-  }
+  status=$(upgrade_git status --porcelain --untracked-files=no) || return 1
+  [ -z "$status" ] || { upgrade_error "The working tree changed during runtime preflight."; return 1; }
 
   changed_files=$(upgrade_git diff --name-only HEAD "$upstream") || return 1
   if [ -z "$changed_files" ]; then
@@ -1207,6 +1272,10 @@ chinachu_upgrade () {
 
   printf 'Changed files: %s\n' "$(printf '%s\n' "$changed_files" | wc -l)"
   printf 'Node.js repair: %s\nDependencies repair: %s\nService restart: %s\n' "$node_needed" "$dependencies_needed" "$restart_needed"
+  if [ "$node_needed" = true ]; then
+    printf 'Chinachu専用Node.js : %s -> %s\n' "$UPGRADE_RUNTIME_NODE_VERSION" "$upstream_node_version"
+    printf 'OS側のNode.jsは変更しません。\n'
+  fi
   if [ -n "$manager_prefix" ]; then
     printf 'PM2 manager: %s (%s), currently online: %s\n' "$manager_prefix" "$manager_user" "${online_names:-none}"
   else
@@ -1223,7 +1292,7 @@ chinachu_upgrade () {
   fi
 
   # Runtime migration was already approved before PM2/Node changes began.
-  if [ "$runtime_approved" != true ] || [ "$recording_count" -gt 0 ]; then
+  if { [ "$runtime_approved" != true ] && [ "$git_changes_confirmed" != true ]; } || [ "$recording_count" -gt 0 ]; then
     if [ "$runtime_approved" != true ] && [ "$node_needed" = true ] &&
        compgen -G "$NAVE_DIR/installed/24.*" > /dev/null; then
       runtime_notice=true

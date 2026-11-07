@@ -52,7 +52,9 @@ upgrade_git() {
  case "$1" in
  status|fetch|merge-base) return 0;; branch) echo thorn;;
  rev-parse) if [ "$2" = HEAD ]; then echo previous-revision; else echo origin/thorn; fi;;
- config) echo origin;; diff) echo chinachu;; show) echo "NODE_VER=$TARGET";; merge) echo merge >> calls;; *) return 80;;
+ config) echo origin;; diff) echo chinachu;;
+ show) case "$2" in *:package.json) printf '{\n  "version": "0.10.7-thorn.37"\n}\n';; *:chinachu) echo "NODE_VER=$TARGET";; esac;;
+ merge) echo merge >> calls;; *) return 80;;
  esac
 }
 upgrade_as_user() {
@@ -85,7 +87,7 @@ if chinachu_upgrade --allow-source-build; then exit 71; fi
 		fs.mkdirSync(path.join(root, '.nave/installed/24.20.0'), {recursive: true});
 		const unmanaged = shell(root, String.raw`
 NODE_VER=$("$2" -p 'process.versions.node'); NODE_PATH="$2"
-dirty="$3"; fail_verify="$4"
+runtime_dirty="$3"; git_dirty="$3"; fail_verify="$4"
 : > unmanaged-calls
 upgrade_verify_repository_owner() { return 0; }
 resolve_bootstrap_node() { return 0; }
@@ -95,8 +97,8 @@ service_setup_runtime_repair() { echo 'unexpected PM2 repair' >&2; return 85; }
 inspect_repository_ffmpeg() { FFMPEG_LOCAL_STATE=none; }
 verify_runtime_ffmpeg() { return 0; }
 print_ffmpeg_commands() { return 0; }
-chinachu_installer_node_ready() { [ "$dirty" != yes ]; }
-chinachu_installer_dependencies_ready() { [ "$dirty" != yes ]; }
+chinachu_installer_node_ready() { [ "$runtime_dirty" != yes ]; }
+chinachu_installer_dependencies_ready() { [ "$runtime_dirty" != yes ]; }
 upgrade_as_user() {
  if [ "$1" != "$CHINACHU_DIR/chinachu" ]; then "$@"; return $?; fi
  echo "$3:$4:$5" >> unmanaged-calls
@@ -104,10 +106,12 @@ upgrade_as_user() {
 }
 upgrade_git() {
  echo "git:$1" >> unmanaged-calls
- case "$1" in status) [ "$dirty" != yes ] || echo ' M local-file';;
+ case "$1" in status) [ "$git_dirty" != yes ] || echo ' M local-file';;
+ restore) git_dirty=no;;
  branch) echo thorn;; rev-parse) echo origin/thorn;; config) echo origin;;
- fetch|merge-base|diff) return 0;; *) return 86;; esac
+ fetch|merge-base|diff) return 0;; show) printf '{\n  "version": "0.10.7-thorn.36"\n}\n';; *) return 86;; esac
 }
+upgrade_confirm_local_changes() { return 0; }
 chinachu_upgrade --allow-source-build
 `, [dirty, failVerify]);
 		const calls = fs.readFileSync(path.join(root, 'unmanaged-calls'), 'utf8');
@@ -116,10 +120,11 @@ chinachu_upgrade --allow-source-build
 		if (failVerify === 'yes') {
 			assert.notEqual(unmanaged.status, 0);
 			assert.doesNotMatch(unmanaged.stdout, /Runtime verified|Already up to date/);
-			assert(!calls.includes('git:status'));
+			assert(calls.includes('git:status'));
+			assert.doesNotMatch(calls, /^git:merge$/m);
 		} else {
 			assert.equal(unmanaged.status, 0, unmanaged.stderr);
-			assert(calls.indexOf('verify::') < calls.indexOf('git:status'));
+			assert(calls.indexOf('git:status') < calls.indexOf('verify::'));
 			assert.equal(fs.existsSync(path.join(root, '.nave/installed/24.20.0')), false);
 			if (dirty === 'yes') assert.match(calls, /node:--allow-source-build:/);
 			else assert.doesNotMatch(calls, /^node:|^dependencies:/m);
