@@ -212,13 +212,47 @@ const officialRequests = seriesUseSyobocal ? syobocalChannelCatalogModule.create
 }) : null;
 let dictionaryManager;
 const progLookupStore = progLookupStoreModule.createProgLookupStore({ path: SERIES_PROGLOOKUP_CACHE_FILE });
+// シリーズ確定結果の小さな索引だけを既存IPCでOperatorへ渡す。送信は世代順。
+let organizerIndexDelivery = Promise.resolve();
+function publishOrganizerIndex(generation, identities) {
+	if (config.recordedFolderOrganizeEnabled !== true) return;
+	organizerIndexDelivery = organizerIndexDelivery.catch(() => {}).then(async () => {
+		const isCurrent = () => seriesService.getSnapshot().generation === generation;
+		if (!isCurrent()) return;
+		let entries = [];
+		let bytes = 0;
+		let reset = true;
+		const send = async () => {
+			if (!isCurrent()) return false;
+			const result = await storageRefreshIpc.request({ socketPath: RECORDED_THUMBNAIL_SOCKET, timeoutMs: 5000 },
+				{ organizerIndex: true, generation, reset, entries });
+			if (!result?.accepted) return false;
+			reset = false;
+			entries = [];
+			bytes = 0;
+			return true;
+		};
+		for (const entry of identities || []) {
+			const size = Buffer.byteLength(JSON.stringify(entry), 'utf8') + 2;
+			if (size > 48 * 1024) continue;
+			if (bytes + size > 48 * 1024 && !await send()) return;
+			entries.push(entry);
+			bytes += size;
+		}
+		await send();
+	}).catch(error => util.log('WARNING: recorded organizer series IPC: ' + error.message));
+}
 const seriesService = seriesServiceModule.createSeriesService({
 	enabled: seriesUseSyobocal,
+	recordedFolderOrganizeEnabled: config.recordedFolderOrganizeEnabled === true,
 	dictionaryPath: SERIES_DICTIONARY_FILE,
 	getDictionaryStatus: () => dictionaryManager && dictionaryManager.getStatus(),
 	channelMapPath: SERIES_CHANNEL_MAP_FILE,
 	progLookupPath: SERIES_PROGLOOKUP_CACHE_FILE,
-	onPublished: generation => ios.emit('notify-series', { generation }),
+	onPublished: (generation, identities) => {
+		ios.emit('notify-series', { generation });
+		publishOrganizerIndex(generation, identities);
+	},
 	onStatus: () => ios.emit('notify-series-status'),
 	log: util.log,
 	progLookupStore,

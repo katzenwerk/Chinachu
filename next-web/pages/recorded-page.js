@@ -5,7 +5,6 @@ import { createHoverPopupController } from '../components/hover-popup-controller
 import {
   loadAllRecordedResults,
   loadRecordedResultsWithStoragePaths,
-  loadMatchRecordingPaths,
   loadRecordedResultsPage
 } from '../services/recorded-results-client.js';
 import { buildRecordedResultModels } from '../services/recorded-result-model.js';
@@ -616,24 +615,15 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
         if (!Array.isArray(data?.storages)) throw new Error('Storage API response is invalid');
         storageData = data;
       }
-      const [allItems, recordingPaths] = await Promise.all([
-        loadAllRecordedResults({
-          search,
-          ruleUid,
-          results: resultValues(),
-          tsIssues: tsIssuesOnly,
-          signal: controller.signal
-        }),
-        loadMatchRecordingPaths({ signal: controller.signal })
-      ]);
+      const allItems = await loadAllRecordedResults({
+        search,
+        ruleUid,
+        results: resultValues(),
+        tsIssues: tsIssuesOnly,
+        signal: controller.signal
+      });
       if (!isActive()) return;
-      const exportItems = allItems.map(item => ({ ...item,
-        storageRecordingPath: item.recordingPath || recordingPaths.get(item.key) || null
-      })).filter(matchesScopedResult)
-        .map(item => ({
-          ...item,
-          recordingPath: recordingPaths.get(item?.key) || item?.recordingPath || ''
-        }));
+      const exportItems = allItems.filter(matchesScopedResult);
       downloadCsv(buildRecordedResultsCsv(exportItems), recordedResultsCsvFilename());
       exportFeedback.textContent = `${exportItems.length}件をCSVへ出力しました`;
       exportFeedback.hidden = false;

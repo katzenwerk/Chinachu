@@ -19,6 +19,9 @@
     }
   ],
   "recordedFormat": "[<date:yymmdd-HHMM>][<type><channel>][<channel-name>]<title>.m2ts",
+  "recordingFilenamePrefixEnabled": false,
+  "recordedFolderOrganizeEnabled": false,
+  "recordedFolderOrganizeOrder": "filename",
   "recordedCommand": "",
   "ffprobeCommand": "ffprobe",
   "recordedDurationProbeTimeoutMs": 8000,

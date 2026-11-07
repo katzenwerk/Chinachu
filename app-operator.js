@@ -785,6 +785,9 @@ function inheritInterruptedRecording(program, interrupted) {
 	if (interrupted.operatorResumedAt) {
 		program.operatorResumedAt = interrupted.operatorResumedAt;
 	}
+	if (interrupted._operatorFilenamePrefixApplied === true) {
+		program._operatorFilenamePrefixApplied = true;
+	}
 
 	Object.defineProperty(program, '_operatorResumeRecordedPath', {
 		enumerable: false,
@@ -1173,7 +1176,7 @@ function reportRecordingSaveFailure(program, error) {
 		'; recording.json retained. Resolve the storage/lock error and restart Operator to recover.');
 }
 
-function saveCompletedRecording(program, recovering) {
+function saveCompletedRecording(program, recovering, originalRecordedPath = program.recorded) {
 	const replayingPendingSave = recovering && program._operatorHistoryPending === true;
 	program._operatorHistoryPending = true;
 	try {
@@ -1185,6 +1188,8 @@ function saveCompletedRecording(program, recovering) {
 	}
 	let completedProgram = JSON.parse(JSON.stringify(program));
 	delete completedProgram._operatorHistoryPending;
+	delete completedProgram._operatorFilenameFinalTarget;
+	if (completedProgram.operatorResumePending !== true) delete completedProgram._operatorFilenamePrefixApplied;
 	operatorLog('FIN SAVE PENDING: ' + printProgram(program));
 	return queueRecordedLedgerUpdate('recorded finalize', current => {
 		// A crash can occur after recorded was saved but before recording was
@@ -1201,7 +1206,7 @@ function saveCompletedRecording(program, recovering) {
 			return current;
 		}
 		const previous = current.find(entry => entry.id === completedProgram.id);
-		if (previous && previous.recorded !== completedProgram.recorded) {
+		if (previous && previous.recorded !== completedProgram.recorded && previous.recorded !== originalRecordedPath) {
 			previous.id = getUniqueRecordedCollisionId(previous, current);
 		}
 		return current.filter(entry => entry.id !== completedProgram.id).concat(completedProgram);
@@ -1283,11 +1288,14 @@ function recoverRecordingHistory() {
 			discardRecordingAfterManualRemoval(program);
 			continue;
 		}
+		const originalRecordedPath = program.recorded;
+		// Only pending prefix renames need file access during recovery.
+		if (program._operatorFilenameFinalTarget && !finalizeRecordingFilename(program, true)) continue;
 		if (!program._operatorHistoryPending && !program.operatorRecordingEnd) {
 			// Actual crash/end time is unknown: do not invent a measured duration.
 			markRecordingInterruptedForResume(program);
 		}
-		saveCompletedRecording(program, true);
+		saveCompletedRecording(program, true, originalRecordedPath);
 	}
 }
 
@@ -1718,15 +1726,101 @@ function getRecordedDir(program) {
 	return normalizeRecordedDir(config.recordedDir);
 }
 
+const RECORDING_FILENAME_PREFIX = '【録画中】';
+
 // 録画保存先パスを取得する
-function getRecordedPath(program) {
-	const recordedName = chinachu.formatRecordedName(program, program.recordedFormat || config.recordedFormat, {
+function getRecordedPath(program, useRecordingPrefix = true) {
+	let recordedName = chinachu.formatRecordedName(program, program.recordedFormat || config.recordedFormat, {
 		replaceEnclosingCharacters: config.recordedNameReplaceEnclosingCharacters === true ||
 			config.needToReplaceEnclosingCharacters === true,
 		enclosingCharacterMap: config.recordedNameEnclosingCharacterMap || null
 	});
 
+	if (useRecordingPrefix && config.recordingFilenamePrefixEnabled === true) {
+		const name = path.basename(recordedName);
+		if (!name.startsWith(RECORDING_FILENAME_PREFIX)) {
+			recordedName = recordedName.slice(0, -name.length) + RECORDING_FILENAME_PREFIX + name;
+		}
+	}
 	return joinRecordedPath(getRecordedDir(program), recordedName);
+}
+
+// ファイル名確定は、その予定をrecording.jsonに記録してから行う。
+// 再起動時は旧名・新名のどちらが残ったかを確認して確定できる。
+function finalizeRecordingFilename(program, recovering = false) {
+	const source = program.recorded;
+	const target = program._operatorFilenameFinalTarget;
+	if (!target) return true;
+	if (fs.existsSync(source)) {
+		if (fs.existsSync(target)) {
+			operatorLog('WARNING: recording rename target exists: ' + target);
+		} else {
+			try {
+				fs.renameSync(source, target);
+				operatorLog('RENAME: ' + source + ' -> ' + target);
+				program.recorded = target;
+			} catch (error) {
+				operatorLog('WARNING: recording rename failed: ' + source + ' (' + error.message + ')');
+			}
+		}
+	} else if (recovering && fs.existsSync(target)) {
+		program.recorded = target;
+	} else if (recovering) {
+		operatorLog('ERROR: pending recording rename paths missing: ' + source + ' / ' + target);
+		return false;
+	}
+	delete program._operatorFilenameFinalTarget;
+	return true;
+}
+
+function recordingFinalName(recordedPath) {
+	const name = path.basename(recordedPath);
+	if (!name.startsWith(RECORDING_FILENAME_PREFIX) || name === RECORDING_FILENAME_PREFIX) return null;
+	return recordedPath.slice(0, -name.length) + name.slice(RECORDING_FILENAME_PREFIX.length);
+}
+
+// WUIのシリーズ管理Workerが公開した確定TID。新しい台帳は作らない。
+const recordedFolderOrganizer = require('./lib/recorded-folder-organizer');
+let recordedSeriesIndex = new Map();
+let recordedSeriesGeneration = '';
+
+function completedRecordedPath(program) {
+	const source = program.recorded;
+	const withoutPrefix = program._operatorFilenamePrefixApplied === true ? recordingFinalName(source) || source : source;
+	if (config.recordedFolderOrganizeEnabled !== true) return withoutPrefix === source ? null : withoutPrefix;
+	const root = path.resolve(getRecordedDir(program));
+	if (path.dirname(path.resolve(source)) !== root) return withoutPrefix === source ? null : withoutPrefix;
+	try {
+		const selection = recordedFolderOrganizer.chooseRecordedFolder({
+			program, sourcePath: withoutPrefix, root,
+			folderNames: recordedFolderOrganizer.listExistingFolders(root),
+			recorded, series: recordedSeriesIndex.get(String(program.id)) || null,
+			seriesByRecordedId: recordedSeriesIndex,
+			order: config.recordedFolderOrganizeOrder || 'filename'
+		});
+		if (selection) return path.join(selection.directoryPath, path.basename(withoutPrefix));
+	} catch (error) {
+		operatorLog('WARNING: recorded folder selection failed: ' + error.message);
+	}
+	return withoutPrefix === source ? null : withoutPrefix;
+}
+
+// 既存のOperator Unix socket経由で、小さな単位の確定TID索引を受け取る。
+function updateRecordedSeriesIndex(message) {
+	if (config.recordedFolderOrganizeEnabled !== true) return { accepted: false };
+	if (typeof message.generation !== 'string' || !message.generation ||
+		!Array.isArray(message.entries) || message.entries.length > 512) return { accepted: false };
+	if (message.reset === true) {
+		recordedSeriesIndex = new Map();
+		recordedSeriesGeneration = message.generation;
+	}
+	if (recordedSeriesGeneration !== message.generation) return { accepted: false };
+	for (const row of message.entries) {
+		if (!Array.isArray(row) || row.length !== 3 || typeof row[0] !== 'string' ||
+			!row[0] || !Number.isSafeInteger(row[1]) || row[1] <= 0 || typeof row[2] !== 'string') continue;
+		recordedSeriesIndex.set(row[0], { tid: row[1], title: row[2] });
+	}
+	return { accepted: true };
 }
 
 // expectedMount / root filesystem guardと、Low対象filesystemの録画開始guardを適用する。
@@ -3106,6 +3200,10 @@ function doRecord(program, stream) {
 		operatorLog('WARNING: RESUME RECORDING FILE NOT FOUND, recreate at same path: ' + recPath);
 	}
 	program.recorded = recPath;
+	if (!isResumedRecording && config.recordingFilenamePrefixEnabled === true &&
+		recPath !== getRecordedPath(program, false)) {
+		program._operatorFilenamePrefixApplied = true;
+	}
 	if (isResumedRecording) {
 		program.operatorResumePending = false;
 		program.operatorResumedAt = Date.now();
@@ -3129,6 +3227,7 @@ function doRecord(program, stream) {
 	let inputEnded = false;
 	let probeDurationAfterClose = false;
 	let generateThumbnailAfterClose = false;
+	let finalizeFilenameAfterClose = false;
 	let historySave = Promise.resolve(false);
 	const tsDropAnalyzer = tsDropDetectionEnabled ? new TsDropAnalyzer() : null;
 	let tsDropLogTimer = null;
@@ -3268,17 +3367,33 @@ function doRecord(program, stream) {
 		if (!shutdownStarted) {
 			checkStorageAfterRecordingClose(program);
 		}
+		if (finalizeFilenameAfterClose) {
+			finalizeRecordingFilename(program);
+			for (let i = 0, l = recorded.length; i < l; i++) {
+				if (recorded[i].id === program.id) {
+					if (recorded[i].recorded === program.recorded || recorded[i].recorded === recPath) {
+						recorded.splice(i, 1);
+					} else {
+						recorded[i].id = getUniqueRecordedCollisionId(recorded[i], recorded);
+					}
+					break;
+				}
+			}
+			recorded.push(program);
+			historySave = saveCompletedRecording(program, false, recPath);
+		}
+		const finalPath = program.recorded;
 		historySave.then(saved => {
 			if (saved && probeDurationAfterClose && !shutdownStarted) {
-				probeRecordedDuration(recPath, (duration, requestedAt) => {
+				probeRecordedDuration(finalPath, (duration, requestedAt) => {
 					if (duration !== null) {
-						persistRecordedDuration(program.id, recPath, duration, requestedAt);
-						updateBitrateStatsAfterClose(program, recPath, duration);
+						persistRecordedDuration(program.id, finalPath, duration, requestedAt);
+						updateBitrateStatsAfterClose(program, finalPath, duration);
 					}
 					if (generateThumbnailAfterClose && !shutdownStarted) {
 						recordedThumbnailGenerator.enqueue({
 							id: program.id,
-							inputPath: recPath,
+							inputPath: finalPath,
 							requestedAt: requestedAt,
 							durationSeconds: duration !== null ? duration : program.operatorActualSeconds
 						});
@@ -3352,28 +3467,43 @@ function doRecord(program, stream) {
 			program.operatorResumePending === true &&
 			program.operatorAbort !== true &&
 			program.operatorEndLack !== true;
+		const finalName = !isNgRecording && !isResumePending ? completedRecordedPath(program) : null;
+		if (finalName && !fs.existsSync(finalName)) {
+			program._operatorHistoryPending = true;
+			program._operatorFilenameFinalTarget = finalName;
+			try {
+				writeRecordingData();
+				finalizeFilenameAfterClose = true;
+			} catch (error) {
+				delete program._operatorFilenameFinalTarget;
+				operatorLog('WARNING: recording rename deferred (snapshot failed): ' + error.message);
+			}
+		} else if (finalName) {
+			operatorLog('WARNING: recording rename target exists: ' + finalName);
+		}
 		probeDurationAfterClose = !isNgRecording && !isResumePending;
 		// 録画開始後に確定した短縮録画も recorded.json の録画結果として扱う。
 		// ファイルが残る限り、通常終了と同じ保存済みサムネイル生成経路を利用する。
 		generateThumbnailAfterClose = probeDurationAfterClose;
-		if (!isNgRecording) {
-			for (let i = 0, l = recorded.length; i < l; i++) {
-				if (recorded[i].id === program.id) {
-					if (recorded[i].recorded === program.recorded) {
-						recorded.splice(i, 1);
-					} else {
-						recorded[i].id = getUniqueRecordedCollisionId(recorded[i], recorded);
+		if (!finalizeFilenameAfterClose) {
+			if (!isNgRecording) {
+				for (let i = 0, l = recorded.length; i < l; i++) {
+					if (recorded[i].id === program.id) {
+						if (recorded[i].recorded === program.recorded) {
+							recorded.splice(i, 1);
+						} else {
+							recorded[i].id = getUniqueRecordedCollisionId(recorded[i], recorded);
+						}
+						break;
 					}
-					break;
 				}
+				recorded.push(program);
+				historySave = saveCompletedRecording(program, false);
+			} else {
+				operatorLog(program._operatorNg + ': ' + printProgram(program));
+				if (!isResumedRecording && program.isManualReserved) discardRecordingAfterManualRemoval(program);
+				else finishPendingRecording(program);
 			}
-			recorded.push(program);
-			historySave = saveCompletedRecording(program, false);
-		} else {
-			operatorLog(program._operatorNg + ': ' + printProgram(program));
-			// A failed resume must leave its manual reservation available.
-			if (!isResumedRecording && program.isManualReserved) discardRecordingAfterManualRemoval(program);
-			else finishPendingRecording(program);
 		}
 	}
 
@@ -4028,6 +4158,7 @@ function postProcessingMonitorStatus() {
 }
 
 function handleRecordedThumbnailRequest(request) {
+	if (request && request.organizerIndex === true) return updateRecordedSeriesIndex(request);
 	if (request && request.maintenance === true && request.maintenanceAction === 'monitor-status') return postProcessingMonitorStatus();
 	if (request && request.maintenance === true) return recordedMaintenance.request(Object.assign({}, request, { action: request.maintenanceAction }));
 	const id = request && String(request.id || '');

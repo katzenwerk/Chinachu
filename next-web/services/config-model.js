@@ -8,6 +8,7 @@ export const DROP_DETECTION_MODES = [
 const KNOWN_KEYS = new Set([
   'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs',
   'recordedFormat', 'recordedCommand', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
+  'recordingFilenamePrefixEnabled', 'recordedFolderOrganizeEnabled', 'recordedFolderOrganizeOrder',
   'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm',
   'vaapiEnabled', 'vaapiDevice', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode', 'autoTsMaxRecordings',
   'recordedStorageWakeupBeforeSec', 'storageLowSpaceWarningThresholdMB',
@@ -158,6 +159,12 @@ export function validateConfig(config) {
   }
   if (config.seriesUseSyobocal !== undefined && typeof config.seriesUseSyobocal !== 'boolean') {
     errors.push('seriesUseSyobocalは真偽値で指定してください。');
+  }
+  if (config.recordedFolderOrganizeEnabled !== undefined && typeof config.recordedFolderOrganizeEnabled !== 'boolean') {
+    errors.push('recordedFolderOrganizeEnabledは真偽値で指定してください。');
+  }
+  if (config.recordedFolderOrganizeOrder !== undefined && !['filename', 'title', 'history'].includes(config.recordedFolderOrganizeOrder)) {
+    errors.push('録画フォルダ振り分けの優先順位が不正です。');
   }
   if (config.broadcastClockIntervalHours !== undefined && ![3, 6, 12, 24].includes(config.broadcastClockIntervalHours)) {
     errors.push('broadcastClockIntervalHoursは3、6、12、24のいずれかで指定してください。');

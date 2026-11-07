@@ -34,6 +34,11 @@ const FIELD = {
   vaapiDevice: { label: 'VA-APIデバイス', type: 'text', empty: 'string' },
   recordedDir: { label: 'デフォルト録画先', type: 'text', required: true },
   recordedFormat: { label: '録画ファイル名フォーマット', type: 'text', required: true },
+  recordedFolderOrganizeOrder: { label: '振り分け判定の優先順位', type: 'text', select: [
+    { value: 'filename', label: 'ファイル名 → 作品名 → 過去実績' },
+    { value: 'title', label: '作品名 → ファイル名 → 過去実績' },
+    { value: 'history', label: '過去実績 → ファイル名 → 作品名' }
+  ] },
   recordedNameEnclosingCharacterMap: { label: '囲み文字の置換ルール', type: 'json', jsonType: 'object' },
   recordedCommand: { label: '録画後コマンド', type: 'text', empty: 'string' },
   ffprobeCommand: { label: 'ffprobeコマンド', type: 'text', empty: 'string' },
@@ -417,10 +422,17 @@ export function renderSettingsPage(container) {
 
     const naming = card('録画ファイル名', '録画ファイルの名前と、放送属性を表す囲み文字の扱いを設定します。');
     const format = bindValueField('recordedFormat', '録画ファイルの名前を決める設定です。番組名、放送日時、チャンネル名などを組み合わせて指定できます。', { wide: true });
+    const prefix = bindBoolean('recordingFilenamePrefixEnabled', '録画中ファイル名に【録画中】を付与', '録画中だけファイル名の先頭に付け、終了後に除去します。録画後コマンドで同様の処理をしている場合は併用しないでください。');
     const replace = bindBoolean('recordedNameReplaceEnclosingCharacters', '囲み文字の置換', '録画ファイル名に含まれる「🈟」「🈞」「🈑」などを「[新]」「[再]」「[字]」へ置き換えます。番組表の表示は変更されません。');
     const map = bindValueField('recordedNameEnclosingCharacterMap', '囲み文字をどの文字列へ置き換えるかをJSON形式で指定します。通常は標準の置換ルールを使用します。', { multiline: true, placeholder: '例: {"🈟":"[新]","🈞":"[再]"}' });
     dependentUpdates.push(() => { map.input.disabled = draft.recordedNameReplaceEnclosingCharacters !== true; map.wrap.classList.toggle('is-disabled', map.input.disabled); });
-    naming.body.append(format.wrap, replace.wrap, map.wrap);
+    naming.body.append(format.wrap, prefix.wrap, replace.wrap, map.wrap);
+
+    const organizing = card('録画フォルダ振り分け', '録画終了後に既存サブフォルダへ振り分けます。OperatorとWUIの再起動後に反映されます。');
+    const organizeEnabled = bindBoolean('recordedFolderOrganizeEnabled', '録画終了後に自動振り分け', '録画先直下の既存フォルダだけを使用します。別の録画先への移動やフォルダ作成はしません。');
+    const organizeOrder = bindValueField('recordedFolderOrganizeOrder', '自動振り分けOFF時も手動の振り分けで使用する順序です。', { wide: true });
+    if (draft.recordedFolderOrganizeOrder === undefined) organizeOrder.input.value = 'filename';
+    organizing.body.append(organizeEnabled.wrap, organizeOrder.wrap);
 
     const drop = card('DROP検出・保存TS解析', '検出方式と許可録画本数はOperator再起動後に反映されます。一時停止・再開は即時反映されます。');
     drop.section.classList.add('settings-drop');
@@ -506,7 +518,7 @@ export function renderSettingsPage(container) {
       fields.append(bindValueField(key, descriptions[key], { compact: true }).wrap);
     });
     commands.body.append(fields, recordedCommand.wrap);
-    tab.append(destination.section, naming.section, drop.section, commands.section);
+    tab.append(destination.section, naming.section, organizing.section, drop.section, commands.section);
     return tab;
   }
 
