@@ -235,7 +235,7 @@ function publishOrganizerIndex(generation, identities) {
 		for (const entry of identities || []) {
 			const size = Buffer.byteLength(JSON.stringify(entry), 'utf8') + 2;
 			if (size > 48 * 1024) continue;
-			if (bytes + size > 48 * 1024 && !await send()) return;
+			if ((entries.length >= 512 || bytes + size > 48 * 1024) && !await send()) return;
 			entries.push(entry);
 			bytes += size;
 		}
