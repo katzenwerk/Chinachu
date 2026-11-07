@@ -426,6 +426,7 @@ let broadcastClockState = null;
 let broadcastClockStateWritable = true;
 const activeRecordingOutputs = new Set();
 const activeDurationProbes = new Set();
+const activeDurationProbeJobs = new Map();
 const durationProbeQueue = [];
 let recordedLedgerWrites = Promise.resolve();
 let pendingRecordedLedgerWrites = 0;
@@ -442,11 +443,14 @@ function rememberPostProcessing(type, title, status, startedAt, id = null, detai
 		startedAt: Number(startedAt) || finishedAt, finishedAt,
 		durationMs: Math.max(0, finishedAt - (Number(startedAt) || finishedAt)),
 		id: id === null ? null : String(id), detail: String(detail || '') });
-	recentPostProcessing.length = Math.min(recentPostProcessing.length, 5);
+	recentPostProcessing.length = Math.min(recentPostProcessing.length, 20);
 }
 function recordedTitleForId(id) {
 	const row = recorded.find(item => item && String(item.id) === String(id));
 	return row && (row.title || row.fullTitle) || String(id);
+}
+function recordedForPath(filePath) {
+	return recorded.find(item => item && item.recorded === filePath) || null;
 }
 const recordedThumbnailGenerator = recordedThumbnail.createGenerator({
 	outputDir: RECORDED_THUMBNAIL_DIR,
@@ -1067,9 +1071,10 @@ function startDurationProbe(job) {
 	function complete(duration) {
 		if (completed) return;
 		completed = true;
-		if (probe) activeDurationProbes.delete(probe);
-		if (!shutdownStarted) rememberPostProcessing('ffprobe', path.basename(job.filePath),
-			duration === null ? 'failed' : 'complete', startedAt);
+		if (probe) { activeDurationProbes.delete(probe); activeDurationProbeJobs.delete(probe); }
+		const recordedRow = recordedForPath(job.filePath);
+		if (!shutdownStarted) rememberPostProcessing('ffprobe', recordedRow?.title || path.basename(job.filePath),
+			duration === null ? 'failed' : 'complete', startedAt, recordedRow?.id ?? null);
 		try {
 			if (!shutdownStarted || job.maintenance === true) job.callback(duration, job.queuedAt);
 		} finally {
@@ -1098,6 +1103,7 @@ function startDurationProbe(job) {
 			complete(Math.round(duration * 1000000) / 1000000);
 		});
 		activeDurationProbes.add(probe);
+		activeDurationProbeJobs.set(probe, { filePath: job.filePath, startedAt });
 		lowerPostProcessingPriority(probe, 'ffprobe');
 	} catch (error) {
 		operatorLog('WARNING: ffprobe start failed: ' + job.filePath + ' (' + error.message + ')');
@@ -3942,17 +3948,32 @@ function postProcessingMonitorStatus() {
 	const queued = [];
 	if (matchPending) queued.push({ type: 'match', title: matchLedgerUpdateReason,
 		queuedAt: matchLedgerPendingAt });
-	for (const job of durationProbeQueue) queued.push({ type: 'ffprobe', title: path.basename(job.filePath),
-		queuedAt: job.queuedAt });
+	for (const job of durationProbeQueue) {
+		const row = recordedForPath(job.filePath);
+		queued.push({ type: 'ffprobe', title: row?.title || path.basename(job.filePath),
+			id: row?.id ?? null, queuedAt: job.queuedAt });
+	}
 	for (const job of thumbnailPending) queued.push({ type: 'thumbnail',
 		title: recordedTitleForId(job.id), id: job.id, queuedAt: job.requestedAt || job.queuedAt });
-	for (const job of manual.pendingJobs) queued.push({ ...job,
-		title: recordedTitleForId(job.id) });
+	for (const job of manual.pendingJobs) queued.push({ ...job, title: recordedTitleForId(job.id) });
 	queued.sort((a, b) => (Number(a.queuedAt) || 0) - (Number(b.queuedAt) || 0));
 	const counts = { match: matchPending ? 1 : 0,
 		ffprobe: durationProbeQueue.length + manual.pendingCounts.ffprobe,
 		thumbnail: thumbnail.pending + manual.pendingCounts.thumbnail,
 		ts: manual.pendingCounts.ts };
+	const running = [];
+	if (matchLedgerProcess) running.push({ type: 'match', title: 'match更新' });
+	for (const job of activeDurationProbeJobs.values()) {
+		const row = recordedForPath(job.filePath);
+		running.push({ type: 'ffprobe', title: row?.title || path.basename(job.filePath),
+			id: row?.id ?? null, startedAt: job.startedAt });
+	}
+	if (thumbnail.active) running.push({ type: 'thumbnail', id: thumbnail.active,
+		title: recordedTitleForId(thumbnail.active) });
+	if (manual.active?.type === 'ts') running.push({ type: 'ts', id: manual.active.id,
+		title: recordedTitleForId(manual.active.id), startedAt: manual.active.startedAt });
+	if (auto.current) running.push({ type: 'ts', id: auto.current.id,
+		title: auto.current.title || recordedTitleForId(auto.current.id) });
 	const recentTs = [];
 	for (const entry of recorded) {
 		const analysis = entry?.savedTsAnalysis;
@@ -3966,6 +3987,26 @@ function postProcessingMonitorStatus() {
 		recentTs.sort((a, b) => b.checkedAt - a.checkedAt);
 		if (recentTs.length > 5) recentTs.pop();
 	}
+	const currentTs = auto.current ? { ...auto.current, mode: 'auto' } :
+		manual.active?.type === 'ts' ? { ...manual.active, title: recordedTitleForId(manual.active.id), mode: 'manual' } : null;
+	if (currentTs) {
+		const row = recorded.find(entry => entry && String(entry.id) === String(currentTs.id));
+		currentTs.recordedPath = row?.recorded || '';
+	}
+	// Use the already loaded ledger for HOVER; do not access TS files.
+	const ids = new Set([...queued.slice(0, 5), ...running, ...recentPostProcessing, ...recentTs, currentTs]
+		.filter(item => item?.id !== null && item?.id !== undefined)
+		.map(item => String(item.id)));
+	const programs = {};
+	for (const entry of recorded) {
+		if (!entry || !ids.has(String(entry.id))) continue;
+		const channel = entry.channel || {};
+		programs[String(entry.id)] = {
+			title: entry.title, fullTitle: entry.fullTitle, start: entry.start, end: entry.end,
+			description: entry.description, detail: entry.detail, category: entry.category,
+			channel: { id: channel.id, name: channel.name, type: channel.type, hasLogoData: channel.hasLogoData }
+		};
+	}
 	return {
 		monitorVersion: 1, updatedAt: Date.now(),
 		queues: [
@@ -3975,13 +4016,14 @@ function postProcessingMonitorStatus() {
 			{ type: 'ts', active: Boolean(auto.current) || manual.active?.type === 'ts', pending: counts.ts,
 				remaining: auto.counts?.remaining || 0 }
 		],
+		running,
 		queuedTotal: counts.match + counts.ffprobe + counts.thumbnail + counts.ts,
 		waiting: queued.slice(0, 5),
 		completed: recentPostProcessing.slice(),
 		recentTs,
+		programs,
 		auto,
-		currentTs: auto.current ? { ...auto.current, mode: 'auto' } :
-			manual.active?.type === 'ts' ? { ...manual.active, title: recordedTitleForId(manual.active.id), mode: 'manual' } : null
+		currentTs
 	};
 }
 

@@ -1,10 +1,15 @@
-/* Read-only post-processing dashboard. Sections are independent grid children. */
+/* Read-only post-processing dashboard. */
 .postprocess-page { display: grid; gap: 14px; padding: 18px 22px 28px; }
 .postprocess-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .postprocess-heading h2 { margin: 0; font-size: 20px; color: var(--text); }
-.postprocess-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.postprocess-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "tasks completed" "waiting completed" "current results"; gap: 14px; align-items: stretch; }
 .postprocess-section { min-width: 0; padding: 15px 16px; }
-.postprocess-section[data-section="current"],.postprocess-section[data-section="results"] { grid-column: 1 / -1; }
+.postprocess-section[data-section="tasks"] { grid-area: tasks; }
+.postprocess-section[data-section="waiting"] { grid-area: waiting; }
+.postprocess-section[data-section="completed"] { grid-area: completed; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.postprocess-section[data-section="completed"] .postprocess-section-body { flex: 1 1 0; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
+.postprocess-section[data-section="current"] { grid-area: current; }
+.postprocess-section[data-section="results"] { grid-area: results; }
 .postprocess-section-heading { margin: 0 0 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); font-size: 16px; font-weight: 700; color: var(--text); }
 .postprocess-section-body { min-width: 0; }
 .postprocess-table-scroll { max-width: 100%; overflow-x: auto; }
@@ -24,6 +29,13 @@
 .postprocess-current { display: grid; gap: 12px; }
 .postprocess-current-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .postprocess-current-heading .postprocess-clip { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.postprocess-path { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.postprocess-result-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.postprocess-result-text { overflow-wrap: anywhere; }
+.postprocess-section[data-section="results"] .postprocess-table { table-layout: fixed; }
+.postprocess-section[data-section="results"] .postprocess-table th:first-child { width: 55px; }
+.postprocess-section[data-section="results"] .postprocess-table td:nth-child(2),
+.postprocess-section[data-section="results"] .postprocess-table td:last-child { white-space: normal; overflow-wrap: anywhere; }
 .postprocess-percent { font-variant-numeric: tabular-nums; font-size: 19px; }
 .postprocess-progress { display: block; width: 100%; height: 10px; accent-color: #148b52; }
 .postprocess-muted,.postprocess-empty { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
@@ -32,8 +44,8 @@
 .postprocess-note { margin-top: 0; }
 @media (max-width: 950px) {
   .postprocess-page { padding: 12px; }
-  .postprocess-grid { grid-template-columns: minmax(0, 1fr); }
-  .postprocess-section[data-section="current"],.postprocess-section[data-section="results"] { grid-column: auto; }
+  .postprocess-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "tasks" "waiting" "completed" "current" "results"; }
+  .postprocess-section[data-section="completed"] .postprocess-section-body { flex: 0 1 auto; max-height: 430px; }
 }
 
 /* The Task tab reuses the post-processing view inside the existing log panel. */
