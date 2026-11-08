@@ -18,7 +18,7 @@ export function createSavedTsSummary(value) {
   if (!value) return null;
   const section = document.createElement('section');
   section.className = 'program-saved-ts-summary';
-  const heading = document.createElement('h4'); heading.textContent = '保存TS解析';
+  const heading = document.createElement('h4'); heading.textContent = 'TS解析';
   const list = document.createElement('dl'); list.className = 'program-saved-ts-facts';
   const result = value.result || {};
   const present = value => value !== undefined && value !== null && value !== '' && value !== '-';
@@ -58,7 +58,7 @@ export function createSavedTsSummary(value) {
     return name;
   }
   summaryFact('結果', savedTsLabel(value), 'is-wide is-result');
-  summaryFact('CC異常合計', count(result.ccErrorEvents));
+  summaryFact('CC異常', count(result.ccErrorEvents));
   summaryFact('GAP候補', count(result.pcrGapEvents));
   summaryFact('その他の異常', `TEI ${count(result.teiPackets)} / 同期 ${count(result.syncErrorEvents)} / ヘッダー ${count(result.invalidHeaderPackets)}`, 'is-wide');
   if (!result.completed) summaryFact('未完了・失敗理由', result.stopReason || result.error || '不明', 'is-wide');
@@ -66,43 +66,72 @@ export function createSavedTsSummary(value) {
   if (value.lastAttempt) summaryFact('直近の再解析', `${value.lastAttempt.status}: ${value.lastAttempt.reason || ''}（前回の完了結果を保持）`, 'is-wide');
   section.append(heading, list);
   const gaps = Array.isArray(result.pcrGapSamples) ? result.pcrGapSamples : [];
-  if (gaps.length) {
-    table(section, sampleLabel('GAP候補の発生箇所', gaps, result.pcrGapEvents, result.pcrGapSamplesTruncated), gaps, [
-      ['PCR観測時刻（開始）', 'fromPcr'], ['時間差', 'deltaMs', value => Number.isFinite(value) ? `${(value / 1000).toFixed(2)}秒` : '不明'],
-      ['通常区間比', 'rateRatio', value => Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '不明'],
-      ['データ量低下', 'lowData', value => value === true ? '疑いあり' : value === false ? '記録なし' : '不明']
-    ]);
-    note(section, 'PCR観測時刻は厳密な再生位置ではありません。GAPは時間飛び候補で、欠落の確定ではありません。');
-  } else if (result.pcrGapEvents > 0) {
-    note(section, `GAP候補の発生位置は未保存です（全${result.pcrGapEvents}件中、詳細0件）。`);
+  const cc = Array.isArray(result.ccSamples) ? result.ccSamples : [];
+  function ccContent(sample) {
+    const change = `${sample.previousCc}→${sample.actualCc}`;
+    if (sample.kind === 'repeat-changed') return `${change}（内容変化）`;
+    if (sample.kind === 'repeat-excess') return `${change}（繰り返し過多）`;
+    if (!Number.isInteger(sample.expectedCc) || !Number.isInteger(sample.actualCc)) return change;
+    const difference = (sample.actualCc - sample.expectedCc + 16) % 16;
+    return `${change}（期待${sample.expectedCc}・差${difference}）`;
   }
-  if (result.pcrLowDataGapEvents > 0) note(section, `GAP候補の補足：低データ量の疑い ${count(result.pcrLowDataGapEvents)}`);
+  const events = [
+    ...gaps.map(sample => ({ type: 'gap', sample, byteOffset: sample.fromOffset })),
+    ...cc.map(sample => ({ type: 'cc', sample, byteOffset: sample.byteOffset }))
+  ].sort((a, b) => (Number.isFinite(a.byteOffset) ? a.byteOffset : Number.MAX_SAFE_INTEGER) -
+    (Number.isFinite(b.byteOffset) ? b.byteOffset : Number.MAX_SAFE_INTEGER));
+  if (events.length) {
+    const rows = events.map(({ type, sample }) => ({
+      start: type === 'gap' ? sample.fromPcr : sample.pcr,
+      tot: sample.tot,
+      type: type === 'gap' ? 'GAP' : `PID ${pid(sample.pid)}`,
+      content: type === 'gap'
+        ? `${Number.isFinite(sample.deltaMs) ? (sample.deltaMs / 1000).toFixed(2) + '秒' : '不明'}${sample.lowData === true ? '（低データ量疑い）' : ''}`
+        : ccContent(sample)
+    }));
+    table(section, sampleLabel('異常発生一覧', rows,
+      (result.ccErrorEvents || 0) + (result.pcrGapEvents || 0), result.ccSamplesTruncated || result.pcrGapSamplesTruncated), rows, [
+      ['開始時間', 'start'], ['放送時刻（TOT）', 'tot'],
+      ['種別', 'type'], ['欠落候補・内容', 'content']
+    ]);
+    note(section, 'PCR観測時刻は厳密な再生位置ではありません。GAPは時間飛び候補で、欠落の確定ではありません。CC差は実際の欠落パケット数を示すものではありません。');
+  } else if ((result.ccErrorEvents || 0) + (result.pcrGapEvents || 0) > 0) {
+    note(section, '異常の発生位置は保存されていません。');
+  }
   const details = document.createElement('details');
-  const summary = document.createElement('summary'); summary.textContent = '技術詳細'; details.append(summary);
+  const summary = document.createElement('summary'); summary.textContent = '異常詳細'; details.append(summary);
+  const pids = Object.entries(result.ccErrorsByPid || {}).filter(([, count]) => Number.isFinite(count) && count > 0)
+    .map(([key, count]) => ({ pid: /^\d+$/.test(key) ? Number(key) : key, count }));
+  if (pids.length) table(details, 'CC異常・PID別件数', pids, [['PID', 'pid', pid], ['件数', 'count', count]]);
+  if (result.pidResultsTruncated) note(details, 'PID別内訳は保存上限までの表示です。');
+  if (result.pcrLowDataGapEvents > 0) note(details, `GAP補足：低データ量の疑い ${count(result.pcrLowDataGapEvents)}`);
+  if (gaps.length) table(details, 'GAP補足', gaps, [
+    ['開始時間', 'fromPcr'],
+    ['時間差', 'deltaMs', value => Number.isFinite(value) ? `${(value / 1000).toFixed(2)}秒` : '不明'],
+    ['通常区間比', 'rateRatio', value => Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '不明'],
+    ['データ量低下', 'lowData', value => value === true ? '疑いあり' : value === false ? '記録なし' : '不明']
+  ]);
+  const technical = document.createElement('details');
+  const technicalSummary = document.createElement('summary'); technicalSummary.textContent = '技術詳細'; technical.append(technicalSummary);
   const stats = document.createElement('dl');
   if (Number.isFinite(value.file?.size)) fact(stats, '対象ファイルサイズ', `${value.file.size} bytes`);
   for (const [key, label] of [['pcrPid', 'PCR PID'], ['pcrSamples', 'PCRサンプル数'], ['totValidSections', '有効TOT数'],
     ['pcrBackwards', 'PCR逆行候補'], ['pcrResets', 'PCR時計切替']]) {
     if (present(result[key])) fact(stats, label, key === 'pcrPid' ? pid(result[key]) : result[key]);
   }
-  details.append(stats);
-  const pids = Object.entries(result.ccErrorsByPid || {}).filter(([, count]) => Number.isFinite(count) && count > 0)
-    .map(([key, count]) => ({ pid: /^\d+$/.test(key) ? Number(key) : key, count }));
-  if (pids.length) table(details, 'CC異常・PID別件数', pids, [['PID', 'pid', pid], ['件数', 'count', count]]);
-  if (result.pidResultsTruncated) note(details, 'PID別内訳は保存上限までの表示です。');
-  const cc = Array.isArray(result.ccSamples) ? result.ccSamples : [];
-  if (cc.length) table(details, sampleLabel('CC異常の発生箇所', cc, result.ccErrorEvents, result.ccSamplesTruncated), cc, [
+  technical.append(stats);
+  if (cc.length) table(technical, sampleLabel('CC異常の発生箇所', cc, result.ccErrorEvents, result.ccSamplesTruncated), cc, [
     ['PID', 'pid', pid], ['種別', 'kind', value => ({ 'counter-jump': 'CC不連続', 'repeat-changed': '同一CCで内容変更', 'repeat-excess': '同一CCの繰り返し過多' })[value] || value],
     ['バイト位置', 'byteOffset', offset], ['PID内の検出順', 'occurrence'], ['直前CC', 'previousCc'],
     ['期待CC', 'expectedCc'], ['実測CC', 'actualCc'], ['PCR観測値', 'pcr'], ['直近TOT', 'tot']
   ]);
-  else if (result.ccErrorEvents > 0) note(details, `CC異常の発生位置は未保存です（全${result.ccErrorEvents}件中、詳細0件）。`);
-  if (gaps.length) table(details, 'GAP候補・技術情報（上の一覧と同じ順序）', gaps, [
+  else if (result.ccErrorEvents > 0) note(technical, `CC異常の発生位置は未保存です（全${result.ccErrorEvents}件中、詳細0件）。`);
+  if (gaps.length) table(technical, 'GAP候補・技術情報', gaps, [
     ['PCR PID', 'pid', pid], ['PCR区間', 'segment'], ['開始バイト位置', 'fromOffset', offset], ['終了バイト位置', 'toOffset', offset],
     ['終了PCR観測値', 'toPcr'], ['区間データ量', 'bytesBetween', value => Number.isFinite(value) ? `${value.toLocaleString('ja-JP')} bytes` : '不明'], ['直近TOT', 'tot']
   ]);
   if ([result.teiPackets, result.syncErrorEvents, result.invalidHeaderPackets].some(value => value > 0)) {
-    note(details, 'TEI・同期異常・ヘッダー異常は件数のみが保存されており、個別の発生位置は保存されていません。');
+    note(technical, 'TEI・同期異常・ヘッダー異常は件数のみが保存されており、個別の発生位置は保存されていません。');
   }
   const shown = new Set(['file', 'ccErrorEvents', 'pcrGapEvents', 'teiPackets', 'syncErrorEvents', 'invalidHeaderPackets',
     'pcrBackwards', 'pcrResets', 'pcrPid', 'pcrSamples', 'totValidSections', 'ccErrorsByPid']);
@@ -111,8 +140,9 @@ export function createSavedTsSummary(value) {
   if (Object.keys(extra).length) {
     const raw = document.createElement('details'); const title = document.createElement('summary'); title.textContent = 'その他の解析統計（JSON）';
     const pre = document.createElement('pre'); pre.textContent = JSON.stringify(extra, null, 2);
-    raw.append(title, pre); details.append(raw);
+    raw.append(title, pre); technical.append(raw);
   }
+  details.append(technical);
   section.append(details);
   return section;
 }
@@ -321,7 +351,7 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
     const hasAnalysisDetails = !!analysis || !!failures.ts;
     const tsAction = button(analysis || failures.ts ? '再解析' : '解析する', () => runTask('ts', !!analysis), !canProcess);
     tsAction.title = '保存TS全量を読み込みます。録画優先で待機・中断し、待機期限は10分です。';
-    row('ts', '保存TS解析', analysisText, tsAction, { warning: analysisInfo.findings || !!failures.ts,
+    row('ts', 'TS解析', analysisText, tsAction, { warning: analysisInfo.findings || !!failures.ts,
       expanded: analysisOpen, toggle: hasAnalysisDetails ? () => { analysisOpen = !analysisOpen; render(); } : null });
     if (hasAnalysisDetails) {
       const details = document.createElement('section'); details.id = 'recorded-maintenance-ts-details'; details.className = 'recorded-maintenance-inline-details recorded-maintenance-analysis-details'; details.hidden = !analysisOpen;

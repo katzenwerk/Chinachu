@@ -44,6 +44,9 @@ const FIELD = {
   ffprobeCommand: { label: 'ffprobeコマンド', type: 'text', empty: 'string' },
   recordedDurationProbeTimeoutMs: { label: 'ffprobeタイムアウト', type: 'number', min: 1 },
   normalizationForm: { label: '予約ルールの文字正規化', type: 'text' },
+  recordingBoundaryPolicy: { label: '録画境界の優先方針', type: 'text', select: [
+    { value: 'end', label: '終了優先（末尾を守る）' }, { value: 'start', label: '開始優先（先頭を守る）' }
+  ] },
   recordingPriority: { label: '通常録画の優先度', type: 'number', integer: true },
   conflictedPriority: { label: '競合録画の優先度', type: 'number', integer: true },
   handoffPrepSeconds: { label: 'チューナー引継ぎ準備時間', type: 'number', min: 0 },
@@ -509,6 +512,9 @@ export function renderSettingsPage(container) {
       select: [{ value: '', label: '未指定（正規化なし）' }, { value: 'NFC', label: 'NFC' }, { value: 'NFD', label: 'NFD' }, { value: 'NFKC', label: 'NFKC' }, { value: 'NFKD', label: 'NFKD' }]
     });
     fields.append(ffprobe.wrap, timeout.wrap, normalization.wrap);
+    const boundary = bindValueField('recordingBoundaryPolicy', 'チューナー不足で録画を切り替えるとき、先行録画の末尾と後続録画の先頭のどちらを優先するかを選びます。未指定時は終了優先です。ルールの個別指定がある場合はそちらを優先します。変更はOperator再起動後に反映されます。', { compact: true });
+    if (draft.recordingBoundaryPolicy === undefined) boundary.input.value = 'end';
+    fields.append(boundary.wrap);
     ['recordingPriority', 'conflictedPriority', 'handoffPrepSeconds'].forEach(key => {
       const descriptions = {
         recordingPriority: 'Mirakurunに通常録画を要求する際の優先度です。値が大きい要求が優先され、0を指定すると既定値の2が使われます。',

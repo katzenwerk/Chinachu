@@ -10,7 +10,7 @@ const KNOWN_KEYS = new Set([
   'ruleUid', 'name', 'isDisabled', 'sid', 'category', 'types', 'categories', 'channels', 'ignore_channels',
   'reserve_flags', 'ignore_flags', 'hour', 'duration', 'reserve_titles', 'reserve_titles_mode',
   'ignore_titles', 'reserve_descriptions', 'ignore_descriptions', 'recordedDirId',
-  'recorded_format', 'allowEndLack'
+  'recorded_format', 'allowEndLack', 'recordingBoundaryPolicy'
 ]);
 const FLAG_TITLES = Object.freeze({
   '新': '新番組', '終': '最終回', '再': '再放送', '字': '字幕放送', 'デ': 'データ放送',
@@ -116,7 +116,8 @@ function buildPayload(form, original) {
   if (recordedDirId) payload.recordedDirId = recordedDirId; else delete payload.recordedDirId;
   const recordedFormat = text(form.elements.recorded_format.value);
   if (recordedFormat) payload.recorded_format = recordedFormat; else delete payload.recorded_format;
-  payload.allowEndLack = form.elements.allowEndLack.checked;
+  payload.recordingBoundaryPolicy = form.elements.recordingBoundaryPolicy.value;
+  delete payload.allowEndLack;
   return payload;
 }
 
@@ -377,8 +378,19 @@ export function openRuleEditorDialog({ row = null, initialRule = null, title = n
     const outputGrid = document.createElement('div'); outputGrid.className = 'rule-form-columns';
     const format = document.createElement('label'); format.textContent = 'ファイル名書式';
     const formatInput = document.createElement('input'); formatInput.type = 'text'; formatInput.name = 'recorded_format'; formatInput.value = text(original.recorded_format); formatInput.placeholder = 'デフォルトの書式を使用'; format.append(formatInput);
-    const endLack = document.createElement('div'); endLack.className = 'rule-end-lack'; endLack.innerHTML = `<label class="rule-switch"><input type="checkbox" name="allowEndLack"${original.allowEndLack === true ? ' checked' : ''}><span>チューナー切替時の録画末尾切れを許可</span></label><p>次の録画でチューナーが不足した場合、この番組の録画を予定より早く終了し、次の録画を優先することを許可します。</p>`;
-    outputGrid.append(format); output.append(outputGrid, endLack); advanced.append(output);
+    const boundary = document.createElement('label'); boundary.textContent = '録画の優先方針';
+    const boundarySelect = document.createElement('select'); boundarySelect.name = 'recordingBoundaryPolicy';
+    [['default', '共通設定に従う'], ['start', '開始優先（末尾切れを許可）'], ['end', '終了優先（開始遅れを許可）']]
+      .forEach(([value, label]) => {
+        const option = document.createElement('option'); option.value = value; option.textContent = label;
+        boundarySelect.append(option);
+      });
+    boundarySelect.value = ['default', 'start', 'end'].includes(original.recordingBoundaryPolicy)
+      ? original.recordingBoundaryPolicy : original.allowEndLack === true ? 'start' : 'default';
+    boundary.append(boundarySelect);
+    const boundaryNote = document.createElement('p'); boundaryNote.className = 'rule-field-note';
+    boundaryNote.textContent = '共通設定に従う場合は録画設定の方針を使用します。個別指定は共通設定を変更しても維持されます。';
+    outputGrid.append(format, boundary); output.append(outputGrid, boundaryNote); advanced.append(output);
 
     const compatibility = Object.keys(original).filter(key => !KNOWN_KEYS.has(key));
     if (compatibility.length || original.sid !== undefined || original.category !== undefined) {

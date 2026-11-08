@@ -857,6 +857,7 @@ function recordingUpdater(program) {
 		'recordedDir',
 		'recordedDirId',
 		'allowEndLack',
+		'recordingBoundaryPolicy',
 		'priority'
 	];
 
@@ -2121,9 +2122,22 @@ function safeAbortStream(stream, reason) {
 	}
 }
 
-// 末尾切れ許可を確認する
-function isEndLackAllowed(program) {
-	return program && program.allowEndLack === true;
+// 旧allowEndLackは「この録画が末尾を譲る許可」だけを表す。
+// 新しいstart/endは、録画開始側と終了側の両方で評価する。
+function boundaryOverride(program) {
+	if (program?.recordingBoundaryPolicy === 'start' || program?.recordingBoundaryPolicy === 'end') {
+		return program.recordingBoundaryPolicy;
+	}
+	return program?.allowEndLack === true ? 'legacy-start' : 'default';
+}
+
+function mayHandoffEndEarly(current, next) {
+	const currentMode = boundaryOverride(current);
+	const nextMode = boundaryOverride(next);
+	// 明示的な終了優先は末尾短縮を拒否する。開始優先は共通設定を上書きできる。
+	if (currentMode === 'end' || nextMode === 'end') return false;
+	return currentMode === 'start' || currentMode === 'legacy-start' ||
+		nextMode === 'start' || config.recordingBoundaryPolicy === 'start';
 }
 
 // 同一チャンネルの予約か確認する
@@ -2140,7 +2154,7 @@ function isSameChannelProgram(a, b) {
 }
 
 // チャンネル切替のため末尾切れ候補になる録画を探す
-// stream取得失敗後だけ呼び出し、終了直前の allowEndLack 録画だけを対象にする。
+// stream取得失敗後だけ呼び出し、終了直前で録画境界の優先方針が末尾短縮を許す録画だけを対象にする。
 function findHandoffEndLackCandidate(nextProgram) {
 	return getHandoffEndLackCandidateInfo(nextProgram).candidate;
 }
@@ -2175,7 +2189,7 @@ function getHandoffEndLackCandidateInfo(nextProgram, tuners = null) {
 			continue;
 		}
 
-		if (!isEndLackAllowed(current)) {
+		if (!mayHandoffEndEarly(current, nextProgram)) {
 			continue;
 		}
 

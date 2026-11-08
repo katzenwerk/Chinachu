@@ -10,7 +10,7 @@ const KNOWN_KEYS = new Set([
   'recordedFormat', 'recordedCommand', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
   'recordingFilenamePrefixEnabled', 'recordedFolderOrganizeEnabled', 'recordedFolderOrganizeOrder',
   'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm',
-  'vaapiEnabled', 'vaapiDevice', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode', 'autoTsMaxRecordings',
+  'vaapiEnabled', 'vaapiDevice', 'recordingBoundaryPolicy', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode', 'autoTsMaxRecordings',
   'recordedStorageWakeupBeforeSec', 'storageLowSpaceWarningThresholdMB',
   'storageLowSpaceWarningIntervalMinutes', 'storageLowSpaceThresholdMB', 'storageLowSpaceAction',
   'storageLowSpaceCriticalNotifyIntervalMinutes', 'notificationCommand', 'matchRetentionDays',
@@ -140,6 +140,9 @@ export function normalizeRecordedDirs(rows) {
 export function validateConfig(config) {
   const errors = [];
   if (typeof config.recordedDir !== 'string' || config.recordedDir.trim() === '') errors.push('デフォルト録画先は必須です。');
+  if (config.recordingBoundaryPolicy !== undefined && !['start', 'end'].includes(config.recordingBoundaryPolicy)) {
+    errors.push('録画境界の優先方針が不正です。');
+  }
   if (config.dropDetectionMode !== undefined && config.dropDetectionMode !== null &&
       !DROP_DETECTION_MODES.some(option => option.value === config.dropDetectionMode) &&
       !['ts', 'both'].includes(config.dropDetectionMode)) {

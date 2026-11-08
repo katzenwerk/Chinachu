@@ -197,10 +197,28 @@ export function createAppShell(root) {
   const tsError = tsHeader.querySelector('.header-auto-ts-error');
   const tsPause = tsHeader.querySelector('.header-auto-ts-pause');
   const fineHover = window.matchMedia('(hover: hover) and (pointer: fine)');
-  tsHeader.addEventListener('mouseenter', () => { if (fineHover.matches) tsHeader.open = true; });
-  tsHeader.addEventListener('mouseleave', () => { if (fineHover.matches) tsHeader.open = false; });
+  let tsCloseTimer = null;
+  const cancelTsClose = () => {
+    if (tsCloseTimer === null) return;
+    clearTimeout(tsCloseTimer);
+    tsCloseTimer = null;
+  };
+  tsHeader.addEventListener('mouseenter', () => {
+    if (!fineHover.matches) return;
+    cancelTsClose();
+    tsHeader.open = true;
+  });
+  tsHeader.addEventListener('mouseleave', () => {
+    if (!fineHover.matches || !tsHeader.open) return;
+    cancelTsClose();
+    tsCloseTimer = setTimeout(() => {
+      tsCloseTimer = null;
+      tsHeader.open = false;
+    }, 10000);
+  });
   tsHeader.querySelectorAll('a').forEach(link => link.addEventListener('click', event => {
     event.stopPropagation();
+    cancelTsClose();
     tsHeader.open = false;
   }));
   let tsRuntime = null;
@@ -864,7 +882,7 @@ export function createAppShell(root) {
     setAutoTsStatus(status) {
       tsRuntime = status;
       tsHeader.hidden = status?.enabled !== true;
-      if (tsHeader.hidden) { tsHeader.open = false; return; }
+      if (tsHeader.hidden) { cancelTsClose(); tsHeader.open = false; return; }
       const counts = status.counts || {};
       tsSummary.textContent = `残${counts.remaining ?? '-'}`;
       tsIssuesLink.textContent = `異常${counts.suspect ?? '-'}`;
