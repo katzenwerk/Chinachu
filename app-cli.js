@@ -709,7 +709,7 @@ async function chinachuUnskip() {
 }
 
 // 録画中止
-function chinachuStop() {
+async function chinachuStop() {
 	var target = chinachu.getProgramById(opts.get('id'), recording);
 
 	if (target === null) {
@@ -723,21 +723,29 @@ function chinachuStop() {
 		console.log('[simulation] stop:');
 		console.log(JSON.stringify(target, null, '  '));
 	} else {
-		console.log('stop:');
-		console.log(JSON.stringify(target, null, '  '));
-
+		// ルール予約のスキップ保存を完了させてからOperatorへ直接中止を伝える。
+		// recording.jsonをCLIで書き換えるとOperatorの予約更新に上書きされる。
 		if (!target.isManualReserved) {
-			updateReserves(function (currentReserves) {
+			await updateReserves(function (currentReserves) {
 				const rp = chinachu.getProgramById(target.id, currentReserves);
-				if (rp) {
-					rp.isSkip = true;
-				}
-			});
+				if (rp) rp.isSkip = true;
+			}, null, target.id);
 		}
 
-		fs.writeFileSync(RECORDING_DATA_FILE, JSON.stringify(recording));
+		try {
+			const paths = require('./lib/runtime-paths').resolveRuntimePaths(__dirname);
+			const result = await require('./lib/storage-refresh-ipc').request({
+				socketPath: paths.recordedThumbnailSocket,
+				timeoutMs: 5000
+			}, { action: 'stop-recording', id: '', recordingId: target.id });
+			if (!result || result.accepted !== true) throw new Error('Operatorが録画中止を受け付けませんでした。');
+		} catch (error) {
+			exitReservationError(error);
+		}
 
-		console.log('録画を停止しました。 ');
+		console.log('stop:');
+		console.log(JSON.stringify(target, null, '  '));
+		console.log('Operatorが録画中止要求を受け付けました。');
 	}
 
 	process.exit(0);

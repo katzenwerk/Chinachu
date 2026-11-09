@@ -4172,6 +4172,22 @@ function postProcessingMonitorStatus() {
 }
 
 function handleRecordedThumbnailRequest(request) {
+	// CLI/WUIは録画中止をファイル更新競合ではなくOperatorへ直接届ける。
+	if (request && request.action === 'stop-recording') {
+		const id = typeof request.recordingId === 'string' ? request.recordingId : '';
+		if (!/^[a-z0-9]+$/i.test(id)) {
+			throw recordedThumbnailRequestError('invalid_recording_id', 400, '録画IDが不正です。');
+		}
+		const program = recording.find(item => item.id === id);
+		if (!program) {
+			throw recordedThumbnailRequestError('recording_not_found', 404, '指定された番組は録画中ではありません。');
+		}
+		if (program._operatorHistoryPending || program._operatorManualRemovalPending) {
+			return { accepted: true, status: 'finishing' };
+		}
+		stopRecording(id, 'ABORT RECORDING');
+		return { accepted: true, status: 'stopping' };
+	}
 	if (request && request.organizerIndex === true) return updateRecordedSeriesIndex(request);
 	if (request && request.maintenance === true && request.maintenanceAction === 'monitor-status') return postProcessingMonitorStatus();
 	if (request && request.maintenance === true) return recordedMaintenance.request(Object.assign({}, request, { action: request.maintenanceAction }));
