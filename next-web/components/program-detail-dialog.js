@@ -93,6 +93,7 @@ function createDescription(model) {
       button.className = 'button';
       button.textContent = `${item.title} · ${item.channel} · ${item.dateTime}`;
       button.disabled = !item.id;
+      button.dataset.programId = item.id || '';
       button.addEventListener('click', () => openProgramDetailDialog({ id: item.id }));
       entry.append(button);
       list.append(entry);
@@ -259,6 +260,14 @@ function createThumbnail(model, onPlay, { onError = null, cacheKey = null, liveU
   return frame;
 }
 
+function thumbnailSourceKey(media) {
+  return JSON.stringify([
+    media?.kind, media?.recordedId, media?.livePreviewUrl,
+    media?.previewUrl?.split('&_n=')[0], media?.thumbnailUrl,
+    media?.visible, media?.playable
+  ]);
+}
+
 export function openProgramDetailDialog({ key = null, id = null, onChanged, initialAction = null } = {}) {
   activeDialog?.close();
   const dialog = document.createElement('dialog');
@@ -273,6 +282,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   let logo = null;
   let busy = false;
   let stopRequested = false;
+  let lastFooterSignature = null;
   let latestDetail = null;
   let latestSeriesContext = null;
   let latestSeriesError = null;
@@ -336,7 +346,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     const { model, host } = thumbnailView;
     host.replaceChildren();
     if (model.media.livePreviewUrl) {
-      host.append(createThumbnail(model, () => play(model).catch(() => {}), {
+      host.append(createThumbnail(model, () => play(thumbnailView?.model || model).catch(() => {}), {
         liveUrl: livePreviewUrl,
         onError: () => {
           if (disposed || thumbnailView?.host !== host) return;
@@ -374,7 +384,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       return;
     }
     if (model.media.kind === 'recording' || model.media.thumbnailUrl && !thumbnailMissing) {
-      const image = createThumbnail(model, () => play(model).catch(() => {}), {
+      const image = createThumbnail(model, () => play(thumbnailView?.model || model).catch(() => {}), {
         cacheKey: thumbnailState?.status === 'complete' ? thumbnailState.updatedAt || Date.now() : null,
         onError: model.media.kind === 'recorded' ? () => {
           if (thumbnailView?.host !== host || disposed) return;
@@ -610,12 +620,17 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   }
 
   async function render(model, seriesContext = null, seriesError = null) {
-    logo?.dispose();
+    const oldArticle = dialog.querySelector('article');
+    const oldBody = oldArticle.querySelector(':scope > .program-modal-body');
+    const oldRight = oldBody?.querySelector(':scope > .program-modal-right');
+    const oldThumbnailView = thumbnailView;
+    const oldThumbnailKey = oldThumbnailView ? thumbnailSourceKey(oldThumbnailView.model.media) : null;
+    const previousLogo = logo;
     const article = document.createElement('article');
     const header = document.createElement('header');
     header.innerHTML = '<div class="program-modal-channel"><span></span><div><p></p><div class="program-modal-title"><span class="program-modal-status"></span><span class="program-modal-status-reason" hidden></span><h2></h2></div></div></div><button class="guide-close" type="button" aria-label="閉じる">×</button>';
-    logo = createChannelLogo({ name: model.channel.name, url: model.channel.logoUrl }, { variant: 'list' });
-    header.querySelector('.program-modal-channel > span').replaceWith(logo.element);
+    const nextLogo = createChannelLogo({ name: model.channel.name, url: model.channel.logoUrl }, { variant: 'list' });
+    header.querySelector('.program-modal-channel > span').replaceWith(nextLogo.element);
     header.querySelector('p').textContent = `${model.channel.name} · ${model.dateTime}`;
     const status = header.querySelector('.program-modal-status');
     status.textContent = model.phase.label;
@@ -644,11 +659,11 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     }
     const thumbnailHost = document.createElement('div');
     if (!model.media.livePreviewUrl) clearLivePreview();
-    thumbnailView = { model, host: thumbnailHost };
     right.append(thumbnailHost);
-    renderThumbnail();
-    right.append(createManagement(model, seriesContext, seriesError));
-    body.append(createDescription(model), right);
+    const management = createManagement(model, seriesContext, seriesError);
+    const description = createDescription(model);
+    right.append(management);
+    body.append(description, right);
 
     const footer = document.createElement('footer');
     footer.innerHTML = '<div class="program-modal-primary"></div><div class="program-modal-search"></div><div class="program-modal-danger"></div><p role="status"></p>';
@@ -785,7 +800,65 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       danger.append(remove);
     }
     article.append(header, body, footer);
-    dialog.querySelector('article').replaceWith(article);
+    const nextFooterSignature = JSON.stringify([
+      model.title, model.programId, model.phase.key, model.actions,
+      model.media.liveModel, model.media.playable, model.media.recordedId,
+      model.media.downloadUrl, seriesContext?.seriesId, seriesContext?.event?.key,
+      seriesCorrectionActions(seriesContext), stopRequested, latestDetail?.program?.abort === true
+    ]);
+    if (oldBody && oldRight && oldThumbnailView?.host?.parentElement === oldRight) {
+      // スクロール領域と画像要素は維持し、変更部分だけ差し替える。
+      const oldHeader = oldArticle.querySelector(':scope > header');
+      if (oldHeader?.outerHTML === header.outerHTML) {
+        nextLogo.dispose();
+      } else {
+        previousLogo?.dispose();
+        logo = nextLogo;
+        if (oldHeader) oldHeader.replaceWith(header);
+        else oldArticle.prepend(header);
+      }
+      const oldDescription = oldBody.querySelector(':scope > .program-modal-description');
+      if (oldDescription?.outerHTML !== description.outerHTML) {
+        if (oldDescription) {
+          const leftScroll = oldDescription.scrollTop;
+          oldDescription.replaceChildren(...description.childNodes);
+          oldDescription.scrollTop = leftScroll;
+        } else oldBody.prepend(description);
+      }
+      const oldManagement = oldRight.querySelector(':scope > .program-modal-management');
+      const rightScroll = oldRight.scrollTop;
+      const bodyScroll = oldBody.scrollTop;
+      if (oldManagement) {
+        const oldDetails = oldManagement.querySelectorAll('details');
+        const nextDetails = management.querySelectorAll('details');
+        oldDetails.forEach((detail, index) => {
+          if (nextDetails[index]) nextDetails[index].open = detail.open;
+        });
+        if (oldManagement.outerHTML !== management.outerHTML) oldManagement.replaceWith(management);
+      } else oldRight.append(management);
+      oldRight.scrollTop = rightScroll;
+      oldBody.scrollTop = bodyScroll;
+
+      const oldFooter = oldArticle.querySelector(':scope > footer');
+      if (!oldFooter || lastFooterSignature !== nextFooterSignature) {
+        const previousFeedback = oldFooter?.querySelector('[role="status"]');
+        if (!feedback.textContent && previousFeedback?.textContent) {
+          feedback.textContent = previousFeedback.textContent;
+          feedback.classList.toggle('is-error', previousFeedback.classList.contains('is-error'));
+        }
+        if (oldFooter) oldFooter.replaceWith(footer);
+        else oldArticle.append(footer);
+      }
+      thumbnailView = { model, host: oldThumbnailView.host };
+      if (oldThumbnailKey !== thumbnailSourceKey(model.media)) renderThumbnail();
+    } else {
+      previousLogo?.dispose();
+      logo = nextLogo;
+      thumbnailView = { model, host: thumbnailHost };
+      oldArticle.replaceWith(article);
+      renderThumbnail();
+    }
+    lastFooterSignature = nextFooterSignature;
     if (busy) setMutationControlsDisabled(true);
     scheduleBoundary(model);
   }
@@ -841,10 +914,14 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       }
     } catch (cause) {
       if (disposed || requestController.signal.aborted || cause?.name === 'AbortError') return;
-      const error = document.createElement('div');
-      error.className = 'program-modal-loading is-error';
-      error.textContent = `${stopRequested ? '録画中止要求済みです。状態を取得できませんでした: ' : ''}${errorText(cause)}`;
-      dialog.querySelector('article').replaceChildren(error);
+      const message = `${stopRequested ? '録画中止要求済みです。状態を取得できませんでした: ' : ''}${errorText(cause)}`;
+      if (dialog.querySelector('.program-modal-body')) showFeedback(message, true);
+      else {
+        const error = document.createElement('div');
+        error.className = 'program-modal-loading is-error';
+        error.textContent = message;
+        dialog.querySelector('article').replaceChildren(error);
+      }
       return false;
     }
   }
