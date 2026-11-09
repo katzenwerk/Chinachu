@@ -1,3 +1,40 @@
+# Chinachu 0.10.7-thorn.37
+
+## Recording Files and Organization
+
+- Add an optional `【録画中】` filename prefix, disabled by default, and remove it after recording completion with recovery support for interrupted finalization. Do not combine it with equivalent post-recording rename commands.
+- Add optional automatic organization of completed recordings into existing subfolders directly beneath the recording destination, using filename, confirmed series title, and recording history in a configurable priority order.
+- Keep automatic folder organization disabled by default. Do not create folders or move files between recording destinations.
+- Correct recorded-results CSV path resolution after recording-file relocation.
+
+## Recording Control
+
+- Add global and per-rule recording-boundary priority settings to choose whether an incoming recording's start or an existing recording's end takes precedence during tuner handoff. Retain compatibility with legacy `allowEndLack` settings.
+- Send CLI recording-stop requests directly to Operator over IPC instead of rewriting `recording.json`, preserving the reservation-skip update for rule-based recordings.
+
+## Web UI and Post-processing
+
+- Preserve program-detail scroll positions and unchanged content during background refreshes. Keep the existing details visible if a refresh fails, showing the error without replacing the dialog.
+- Expand the Task monitor with running and waiting tasks, programme links and hover previews, and up to 20 recent completions.
+- Avoid unnecessary Task monitor redraws during periodic updates, and improve TS analysis progress and result presentation.
+- Expand saved TS analysis details, including CC samples and PCR gap context, and refine automatic-analysis hover controls.
+
+## Series Management (BETA)
+
+- Extend dictionary matching to consider both broadcast and full titles, including formal titles embedded within programme names, while checking ambiguity before automatic confirmation.
+- Add bulk association of selected programmes requiring review, with target revalidation before applying changes.
+- Load series lists in batches of 25, automatically fetching more near the end of the visible list and offering a manual "Load more" control.
+- Preserve existing series-list entries and visible positions across updates to reduce disruptive redraws.
+
+Series matching and bulk correction remain experimental and require validation with actual programme data.
+
+## Upgrade and Runtime
+
+- Improve Upgrade reporting of the current and target versions, local and Chinachu-managed Node.js environments, and runtime dependencies.
+- Allow runtime verification or repair independently of whether a Git source update is needed.
+- Require explicit confirmation before discarding tracked local changes, preserve untracked files, and stop non-interactive updates when that confirmation is required.
+
+
 # Chinachu 0.10.7-thorn.36
 
 ## Automatic Saved TS Analysis
