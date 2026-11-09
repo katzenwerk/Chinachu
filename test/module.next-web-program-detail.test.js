@@ -130,7 +130,7 @@ async function checkMaintenanceState() {
 	const normal = { result: { status: 'NO_FINDINGS', completed: true, ccErrorEvents: 0, pcrGapEvents: 0,
 		teiPackets: 0, syncErrorEvents: 0, invalidHeaderPackets: 0 } };
 	const normalView = summaryContext.createSavedTsSummary(normal);
-	assert.match(text(normalView, false), /異常未検出.*CC異常合計 0件.*GAP候補 0件.*TEI 0件/);
+	assert.match(text(normalView, false), /異常未検出.*CC異常 0件.*GAP候補 0件.*TEI 0件/);
 	assert.strictEqual(nodes(normalView).filter(node => node.tag === 'table').length, 0);
 	const analysis = { registeredPath: '/recordings/private.ts', result: { ...normal.result, status: 'SUSPECT', ccErrorEvents: 4,
 		pcrGapEvents: 5, ccErrorsByPid: { 256: 4 }, ccSamples: [{ pid: 256, byteOffset: 0, previousCc: 0, expectedCc: 1, actualCc: 2 }],
@@ -138,7 +138,8 @@ async function checkMaintenanceState() {
 	const before = JSON.stringify(analysis);
 	const view = summaryContext.createSavedTsSummary(analysis);
 	assert.strictEqual(JSON.stringify(analysis), before);
-	assert.match(text(view, false), /要確認.*全5件中、詳細1件.*00:02:03.400.*2.46秒.*12.3%.*疑いあり/);
+	assert.match(text(view, false), /要確認.*全9件中、詳細2件.*0→2（期待1・差1）.*00:02:03.400.*2.46秒（低データ量疑い）/);
+	assert.match(text(view), /GAP補足.*12.3%.*疑いあり/);
 	assert.ok(!text(view).includes(analysis.registeredPath));
 	assert.ok(!text(view, false).includes('直前CC'));
 	assert.ok(nodes(view).filter(node => node.tag === 'details').every(node => !node.open));
@@ -148,11 +149,11 @@ async function checkMaintenanceState() {
 	assert.match(text(view), /"packets": 123/);
 	assert.match(text(view), /"beforeMs": 123400/);
 	const ccOnly = summaryContext.createSavedTsSummary({ result: { ...analysis.result, pcrGapEvents: 0, pcrGapSamples: [] } });
-	assert.strictEqual(nodes(ccOnly, false).filter(node => node.tag === 'table').length, 0);
+	assert.strictEqual(nodes(ccOnly, false).filter(node => node.tag === 'table').length, 1);
 	const gapsOnly = summaryContext.createSavedTsSummary({ result: { ...analysis.result, ccErrorEvents: 0, ccSamples: [], ccErrorsByPid: {} } });
 	assert.strictEqual(nodes(gapsOnly, false).filter(node => node.tag === 'table').length, 1);
 	const unknown = summaryContext.createSavedTsSummary({ result: { completed: false, pcrGapEvents: 2 } });
-	assert.match(text(unknown, false), /CC異常合計 不明.*TEI 不明.*全2件中、詳細0件/);
+	assert.match(text(unknown, false), /CC異常 不明.*GAP候補 2件.*TEI 不明.*異常の発生位置は保存されていません。/);
 	assert.strictEqual(nodes(unknown).filter(node => node.tag === 'table').length, 0);
 	c.accept({ analysis }); assert.strictEqual(c.analysisOpen, true);
 	c.analysisOpen = false; c.accept({ analysis }); assert.strictEqual(c.analysisOpen, false);
