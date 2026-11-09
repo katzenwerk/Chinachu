@@ -409,14 +409,14 @@ export function openSeriesCorrectionDialog({
 
 export function openSeriesBulkCorrectionDialog({ group, onChanged = () => {} }) {
   let events = Array.isArray(group?.events) ? group.events.filter(event => event?.key) : [];
-  if (!group?.id || events.length === 0) return null;
+  if (!group || events.length === 0) return null;
   let eventKeys = events.map(event => event.key);
   const dialog = document.createElement('dialog');
   dialog.className = 'series-correction-dialog series-bulk-correction-dialog';
   const form = document.createElement('form');
   form.method = 'dialog';
   const heading = document.createElement('h2');
-  heading.textContent = '要確認グループをまとめて紐づけ';
+  heading.textContent = group.id ? '要確認グループをまとめて紐づけ' : '選択した番組をまとめて紐づけ';
   const target = document.createElement('p');
   target.className = 'series-correction-target';
   target.textContent = `${text(group.title, 'タイトル未取得')} · ${events.length}件へ共通のTIDだけを指定します。`;
@@ -433,7 +433,7 @@ export function openSeriesBulkCorrectionDialog({ group, onChanged = () => {} }) 
   }
   picker = createTitlePicker({
     initialCandidates: group.candidates || [],
-    initialQuery: text(events[0]?.title, text(group.title, '')),
+    initialQuery: group.id ? text(events[0]?.title, text(group.title, '')) : '',
     onSelection: updateConfirmation
   });
   const tidSelect = picker.select;
@@ -475,12 +475,22 @@ export function openSeriesBulkCorrectionDialog({ group, onChanged = () => {} }) 
   refreshTargets.addEventListener('click', async () => {
     refreshTargets.disabled = true;
     try {
-      const data = await loadSeriesProjection({ groupId: group.id });
-      const latest = data.attention.find(item => item.id === group.id);
-      if (!latest?.events?.length) throw new Error('このグループは変更・消滅しました。最新の一覧から開き直してください。');
-      group = latest;
-      events = latest.events;
-      eventKeys = events.map(event => event.key);
+      const data = await loadSeriesProjection(group.id ? { groupId: group.id } : { eventKeys });
+      if (group.id) {
+        const latest = data.attention.find(item => item.id === group.id);
+        if (!latest?.events?.length) throw new Error('このグループは変更・消滅しました。最新の一覧から開き直してください。');
+        group = latest;
+        events = latest.events;
+        eventKeys = events.map(event => event.key);
+      } else {
+        const latest = new Map(data.attention.flatMap(item => (item.events || []).map(event => [event.key, event])));
+        if (eventKeys.some(key => !latest.has(key))) {
+          throw new Error('選択した番組が要確認一覧から変更されました。最新の一覧から選び直してください。');
+        }
+        events = eventKeys.map(key => latest.get(key));
+        group = { ...group, events, generation: data.generation,
+          dictionaryGeneration: data.attention[0]?.dictionaryGeneration };
+      }
       target.textContent = `${text(group.title)} · 最新の対象 ${events.length}件`;
       eventList.replaceChildren(...events.map(event => {
         const item = document.createElement('li');

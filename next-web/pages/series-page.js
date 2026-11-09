@@ -153,6 +153,7 @@ function makeViewSwitch(active, onChange) {
     button.title = label;
     button.setAttribute('aria-label', label);
     button.setAttribute('aria-pressed', String(active === value));
+    button.dataset.seriesView = value;
     button.innerHTML = `<svg class="icon" aria-hidden="true" viewBox="0 0 24 24">${icon}</svg>`;
     button.addEventListener('click', () => onChange(value));
     controls.append(button);
@@ -163,7 +164,7 @@ function makeViewSwitch(active, onChange) {
 function makeDataButton(dialog, availability) {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = `button series-data-button is-${availability?.status || 'unknown'}`;
+  button.className = `button series-data-button series-availability-button is-${availability?.status || 'unknown'}`;
   button.textContent = 'データ取得状態';
   button.addEventListener('click', () => dialog.showModal());
   return button;
@@ -240,7 +241,7 @@ function createHiddenSeriesDialog(items, onRestore) {
 function makeHiddenSeriesButton(dialog, count) {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'button series-data-button';
+  button.className = 'button series-data-button series-hidden-button';
   button.textContent = `非表示（${count}）`;
   button.addEventListener('click', () => dialog.showModal());
   return button;
@@ -296,28 +297,36 @@ function seriesEpisodeSummary(item) {
   return `EP${knownEpisodeCount(item)}話　最新${latest}`;
 }
 
-function appendSeriesMenuButton(host, item, context) {
+// Keep the entry itself stable; handlers always read the latest series object.
+const seriesListStates = new WeakMap();
+
+function setContent(element, value) {
+  if (element.textContent !== value) element.textContent = value;
+}
+
+function appendSeriesMenuButton(host, state) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'series-item-menu-button';
   button.textContent = '⋯';
-  button.title = `${text(item.title, 'シリーズ')}の操作`;
-  button.setAttribute('aria-label', button.title);
   button.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
+    const item = state.item;
     const rect = button.getBoundingClientRect();
-    context.openSeriesMenu({ kind: 'series', tid: item.tid, hidden: item.hidden === true, series: item }, {
+    state.context.openSeriesMenu({ kind: 'series', tid: item.tid, hidden: item.hidden === true, series: item }, {
       x: rect.right, y: rect.bottom
     });
   });
   host.append(button);
+  state.menuButton = button;
 }
 
-function attachSeriesOperations(target, item, context) {
-  const open = ({ x, y }) => context.openSeriesMenu({
-    kind: 'series', tid: item.tid, hidden: item.hidden === true, series: item
-  }, { x, y });
+function attachSeriesOperations(target, state) {
+  const open = ({ x, y }) => {
+    const item = state.item;
+    state.context.openSeriesMenu({ kind: 'series', tid: item.tid, hidden: item.hidden === true, series: item }, { x, y });
+  };
   target.addEventListener('contextmenu', event => {
     event.preventDefault();
     event.stopPropagation();
@@ -332,89 +341,239 @@ function attachSeriesOperations(target, item, context) {
   });
 }
 
-function renderSeriesList(host, data, tab, search, viewMode = 'list', context = {}) {
-  const rows = seriesRows(data, tab);
-  host.replaceChildren();
-  host.className = viewMode === 'card' && tab !== 'attention' ? 'series-card-grid' : 'series-list';
-  if (!rows.length) {
-    const empty = document.createElement('p');
-    empty.className = 'series-empty';
-    empty.textContent = data.availability?.reason === 'syobocal-disabled' ?
-      'しょぼいカレンダーの情報利用がOFFのため、シリーズは表示されません。' :
-      data.availability?.dictionaryStatus?.usable === false ? data.availability.dictionaryStatus.message :
-      search ? '検索条件に一致する項目はありません。' : '表示できる項目はありません。';
-    host.append(empty);
-    return;
+function seriesListMeta(item, tab) {
+  if (tab === 'attention') return `${item.label} · ${item.eventCount ?? item.events.length}件${item.progLookupLabel ? ` · ${item.progLookupLabel}` : ''}${item.candidateTids?.length ? ` · TID候補 ${item.candidateTids.join(', ')}` : ''}`;
+  const recordings = item.counts.currentRecordings;
+  const missing = item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : '';
+  if (tab === 'reservations') {
+    return `${seriesEpisodeSummary(item)} · ${item.counts.reservations}件予約 · 録画 ${recordings}件${missing} · 次回 ${dateTime(item.nextReservationAt)}${item.nextReservationChannel ? ` · ${item.nextReservationChannel}` : ''}`;
   }
-  for (const item of rows) {
-    const href = seriesHref(data, item, tab);
-    if (viewMode === 'card' && tab !== 'attention') {
-      const entry = document.createElement('article');
-      entry.className = 'series-list-card-entry';
-      const card = document.createElement('a');
-      card.className = 'series-list-card';
-      card.href = href;
-      attachSeriesOperations(card, item, context);
-      const media = document.createElement('div');
-      media.className = 'series-list-card-media';
-      if (item.representativeThumbnailUrl) {
-        const image = document.createElement('img');
-        image.src = item.representativeThumbnailUrl;
-        image.loading = 'lazy';
-        image.decoding = 'async';
-        image.alt = '';
-        media.append(image);
-      } else {
-        media.classList.add('is-empty');
-        media.textContent = '画像なし';
+  if (tab === 'recordings') {
+    return `${seriesEpisodeSummary(item)} · ${recordings}件録画 · 予約 ${item.counts.reservations}件 · 最終録画 ${dateTime(item.latestRecordingAt)}`;
+  }
+  if (tab === 'all') return `${seriesEpisodeSummary(item)} · 録画 ${recordings}件${missing} · 予約 ${item.counts.reservations}件`;
+  return `${item.label} · ${item.eventCount ?? item.events.length}件${item.progLookupLabel ? ` · ${item.progLookupLabel}` : ''}${item.candidateTids?.length ? ` · TID候補 ${item.candidateTids.join(', ')}` : ''}`;
+}
+
+function syncAttentionSelection(state) {
+  const selection = state.selection;
+  if (!selection) return;
+  const selected = state.context.selectedAttentionEvents;
+  const count = selection.keys.filter(key => selected.has(key)).length;
+  selection.checkbox.checked = selection.keys.length > 0 && count === selection.keys.length;
+  selection.checkbox.indeterminate = count > 0 && count < selection.keys.length;
+  for (const [key, input] of selection.individual) input.checked = selected.has(key);
+}
+
+function appendAttentionSelection(entry, state) {
+  const host = document.createElement('div');
+  host.className = 'series-attention-selection';
+  const label = document.createElement('label');
+  label.className = 'series-attention-select-all';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  const labelText = document.createElement('span');
+  label.append(checkbox, labelText);
+  host.append(label);
+  checkbox.addEventListener('change', () => {
+    state.context.changeAttentionSelection(state.selection.keys, checkbox.checked);
+  });
+  state.selection = { host, checkbox, labelText, keys: [], signature: null, details: null, individual: [] };
+  entry.append(host);
+}
+
+function updateAttentionSelection(state, item) {
+  const selection = state.selection;
+  if (!selection) return;
+  const events = (item.selectionEvents || []).filter(event => event?.key);
+  const signature = JSON.stringify(events);
+  if (signature !== selection.signature) {
+    selection.signature = signature;
+    selection.keys = events.map(event => event.key);
+    selection.host.hidden = events.length === 0;
+    setContent(selection.labelText, `選択 (${events.length}件)`);
+    selection.individual = [];
+    if (events.length > 1) {
+      if (!selection.details) {
+        selection.details = document.createElement('details');
+        selection.details.className = 'series-attention-select-details';
+        const summary = document.createElement('summary');
+        summary.textContent = '個別に選択';
+        selection.details.append(summary);
+        selection.host.append(selection.details);
       }
-      const body = document.createElement('div');
-      body.className = 'series-list-card-body';
-      const primary = document.createElement('div');
-      primary.className = 'series-list-card-primary';
-      const title = document.createElement('strong');
-      title.textContent = text(item.title, '作品名未取得');
-      title.title = title.textContent;
-      const tid = document.createElement('span');
-      tid.textContent = item.tid === null ? '—' : String(item.tid);
-      tid.setAttribute('aria-label', item.tid === null ? 'ローカルシリーズ' : `TID ${item.tid}`);
-      const summary = document.createElement('div');
-      summary.className = 'series-list-card-summary';
-      summary.textContent = `${seriesEpisodeSummary(item)} · 録画 ${item.counts.currentRecordings}件${item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : ''} · 予約 ${item.counts.reservations}件`;
-      primary.append(title, tid);
-      body.append(primary, summary);
-      card.append(media, body);
-      entry.append(card);
-      appendSeriesMenuButton(entry, item, context);
-      host.append(entry);
-      continue;
+      const details = selection.details;
+      const summary = details.querySelector('summary');
+      const labels = events.map(event => {
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        const description = document.createElement('span');
+        description.textContent = `${text(event.fullTitle, text(event.title, '番組名未取得'))} · ${dateTime(event.start)}${event.channelName ? ` · ${event.channelName}` : ''}`;
+        label.append(input, description);
+        input.addEventListener('change', () => state.context.changeAttentionSelection([event.key], input.checked));
+        selection.individual.push([event.key, input]);
+        return label;
+      });
+      details.replaceChildren(summary, ...labels);
+    } else if (selection.details) {
+      selection.details.remove();
+      selection.details = null;
     }
-    const entry = document.createElement('div');
-    entry.className = 'series-list-entry';
-    const row = document.createElement('a');
-    row.className = 'series-list-row';
-    row.href = href;
-    if (tab !== 'attention') attachSeriesOperations(row, item, context);
+  }
+  syncAttentionSelection(state);
+}
+
+function createSeriesListEntry(cardMode, tab) {
+  const entry = document.createElement(cardMode ? 'article' : 'div');
+  entry.className = cardMode ? 'series-list-card-entry' : 'series-list-entry';
+  const link = document.createElement('a');
+  link.className = cardMode ? 'series-list-card' : 'series-list-row';
+  const state = { item: null, context: null, link, title: null, summary: null, menuButton: null, media: null, tid: null, thumbnailUrl: undefined, selection: null };
+  seriesListStates.set(entry, state);
+  if (cardMode) {
+    attachSeriesOperations(link, state);
+    const media = document.createElement('div');
+    media.className = 'series-list-card-media';
+    const body = document.createElement('div');
+    body.className = 'series-list-card-body';
+    const primary = document.createElement('div');
+    primary.className = 'series-list-card-primary';
+    state.title = document.createElement('strong');
+    state.tid = document.createElement('span');
+    state.summary = document.createElement('div');
+    state.summary.className = 'series-list-card-summary';
+    primary.append(state.title, state.tid);
+    body.append(primary, state.summary);
+    link.append(media, body);
+    entry.append(link);
+    state.media = media;
+  } else {
+    if (tab !== 'attention') attachSeriesOperations(link, state);
     const body = document.createElement('div');
     body.className = 'series-list-main';
-    const title = document.createElement('strong');
-    title.textContent = text(item.title, '作品名未取得');
-    const meta = document.createElement('span');
-    if (tab === 'reservations') {
-      meta.textContent = `${seriesEpisodeSummary(item)} · ${item.counts.reservations}件予約 · 録画 ${item.counts.currentRecordings}件${item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : ''} · 次回 ${dateTime(item.nextReservationAt)}${item.nextReservationChannel ? ` · ${item.nextReservationChannel}` : ''}`;
-    } else if (tab === 'recordings') {
-      meta.textContent = `${seriesEpisodeSummary(item)} · ${item.counts.currentRecordings}件録画 · 予約 ${item.counts.reservations}件 · 最終録画 ${dateTime(item.latestRecordingAt)}`;
-    } else if (tab === 'all') {
-      meta.textContent = `${seriesEpisodeSummary(item)} · 録画 ${item.counts.currentRecordings}件${item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : ''} · 予約 ${item.counts.reservations}件`;
-    } else {
-      meta.textContent = `${item.label} · ${item.eventCount ?? item.events.length}件${item.progLookupLabel ? ` · ${item.progLookupLabel}` : ''}${item.candidateTids?.length ? ` · TID候補 ${item.candidateTids.join(', ')}` : ''}`;
-    }
-    body.append(title, meta);
-    row.append(body);
-    entry.append(row);
-    if (tab !== 'attention') appendSeriesMenuButton(entry, item, context);
-    host.append(entry);
+    state.title = document.createElement('strong');
+    state.summary = document.createElement('span');
+    body.append(state.title, state.summary);
+    link.append(body);
+    entry.append(link);
   }
+  if (tab === 'attention') appendAttentionSelection(entry, state);
+  else appendSeriesMenuButton(entry, state);
+  return entry;
+}
+
+function updateSeriesListEntry(entry, item, data, tab, context) {
+  const state = seriesListStates.get(entry);
+  state.item = item;
+  state.context = context;
+  const href = seriesHref(data, item, tab);
+  if (state.link.getAttribute('href') !== href) state.link.setAttribute('href', href);
+  const title = text(item.title, '作品名未取得');
+  setContent(state.title, title);
+  setContent(state.summary, state.media
+    ? `${seriesEpisodeSummary(item)} · 録画 ${item.counts.currentRecordings}件${item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : ''} · 予約 ${item.counts.reservations}件`
+    : seriesListMeta(item, tab));
+  if (state.menuButton) {
+    const label = `${title}の操作`;
+    state.menuButton.title = label;
+    state.menuButton.setAttribute('aria-label', label);
+  }
+  if (tab === 'attention') updateAttentionSelection(state, item);
+  if (!state.media) return;
+  state.title.title = title;
+  const tid = item.tid === null ? '—' : String(item.tid);
+  setContent(state.tid, tid);
+  state.tid.setAttribute('aria-label', item.tid === null ? 'ローカルシリーズ' : `TID ${item.tid}`);
+  const thumbnail = item.representativeThumbnailUrl || null;
+  if (thumbnail === state.thumbnailUrl) return;
+  state.thumbnailUrl = thumbnail;
+  if (!thumbnail) {
+    state.media.classList.add('is-empty');
+    state.media.textContent = '画像なし';
+    return;
+  }
+  state.media.classList.remove('is-empty');
+  const image = state.media.querySelector('img') || document.createElement('img');
+  image.loading = 'lazy';
+  image.decoding = 'async';
+  image.alt = '';
+  if (image.getAttribute('src') !== thumbnail) image.src = thumbnail;
+  if (image.parentNode !== state.media) state.media.replaceChildren(image);
+}
+
+function seriesListKey(item, tab, index) {
+  const id = tab === 'attention'
+    ? item.id ?? item.firstEventKey ?? item.events?.[0]?.key
+    : item.id ?? item.tid;
+  return `${tab}:${id ?? `row-${index}`}`;
+}
+
+// Preserve the visible item when rows are inserted or removed above it.
+function seriesScrollAnchor(host) {
+  if (!host.isConnected) return null;
+  const element = Array.from(host.children).find(row => {
+    if (!row.dataset.seriesKey) return false;
+    const rect = row.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  });
+  return element ? { host, element, key: element.dataset.seriesKey, top: element.getBoundingClientRect().top } : null;
+}
+
+function reconcileSeriesChildren(host, desired) {
+  const wanted = new Set(desired);
+  for (const child of Array.from(host.children)) if (!wanted.has(child)) child.remove();
+  let cursor = host.firstChild;
+  for (const child of desired) {
+    if (child === cursor) cursor = cursor.nextSibling;
+    else host.insertBefore(child, cursor);
+  }
+}
+
+function keepSeriesAnchor(anchor) {
+  if (!anchor) return;
+  const element = anchor.element.isConnected ? anchor.element
+    : Array.from(anchor.host.children).find(child => child.dataset.seriesKey === anchor.key);
+  if (!element?.isConnected) return;
+  const delta = element.getBoundingClientRect().top - anchor.top;
+  if (delta) window.scrollBy({ top: delta, behavior: 'auto' });
+}
+
+function renderSeriesList(host, data, tab, search, viewMode = 'list', context = {}) {
+  const rows = seriesRows(data, tab);
+  const cardMode = viewMode === 'card' && tab !== 'attention';
+  const mode = `${tab}:${cardMode ? 'card' : 'list'}`;
+  if (host.dataset.seriesMode !== mode) {
+    host.dataset.seriesMode = mode;
+    host.replaceChildren();
+  }
+  host.className = cardMode ? 'series-card-grid' : 'series-list';
+  if (!rows.length) {
+    const message = data.availability?.reason === 'syobocal-disabled'
+      ? 'しょぼいカレンダーの情報利用がOFFのため、シリーズは表示されません。'
+      : data.availability?.dictionaryStatus?.usable === false ? data.availability.dictionaryStatus.message
+        : search ? '検索条件に一致する項目はありません。' : '表示できる項目はありません。';
+    let empty = host.querySelector('.series-empty');
+    if (!empty) { empty = document.createElement('p'); empty.className = 'series-empty'; host.replaceChildren(empty); }
+    setContent(empty, message);
+    return;
+  }
+  const anchor = seriesScrollAnchor(host);
+  const existing = new Map(Array.from(host.children).filter(entry => entry.dataset.seriesKey)
+    .map(entry => [entry.dataset.seriesKey, entry]));
+  const keysSeen = new Map();
+  const entries = rows.map((item, index) => {
+    const identity = seriesListKey(item, tab, index);
+    const occurrence = keysSeen.get(identity) || 0;
+    keysSeen.set(identity, occurrence + 1);
+    const key = occurrence ? `${identity}:${occurrence}` : identity;
+    const entry = existing.get(key) || createSeriesListEntry(cardMode, tab);
+    entry.dataset.seriesKey = key;
+    updateSeriesListEntry(entry, item, data, tab, context);
+    return entry;
+  });
+  reconcileSeriesChildren(host, entries);
+  keepSeriesAnchor(anchor);
 }
 
 function recordingWarnings(recording) {
@@ -490,16 +649,16 @@ function appendEventLogo(host, event, context, options = {}) {
       event.recordings?.length && event.recordings.every(recording => recording.deleted)) {
     button.classList.add('is-deleted');
   }
-  button.addEventListener('click', () => context.openDetail(seriesContext));
+  button.addEventListener('click', () => context.openDetail(context.eventIndex?.get(event.key) || seriesEventContext(event, context)));
   button.addEventListener('contextmenu', eventObject => {
     eventObject.preventDefault();
-    context.openMenu(seriesContext, { x: eventObject.clientX, y: eventObject.clientY });
+    context.openMenu(context.eventIndex?.get(event.key) || seriesEventContext(event, context), { x: eventObject.clientX, y: eventObject.clientY });
   });
   button.addEventListener('keydown', eventObject => {
     if (eventObject.key === 'ContextMenu' || eventObject.key === 'F10' && eventObject.shiftKey) {
       eventObject.preventDefault();
       const rect = button.getBoundingClientRect();
-      context.openMenu(seriesContext, { x: rect.left + 16, y: rect.top + 16 });
+      context.openMenu(context.eventIndex?.get(event.key) || seriesEventContext(event, context), { x: rect.left + 16, y: rect.top + 16 });
     }
   });
   wrapper.append(button);
@@ -601,57 +760,44 @@ function createEpisodeCard(episode, size, context) {
   return card;
 }
 
+function episodeKey(episode, index) {
+  return String(episode.id ?? episode.key ?? episode.number ?? episode.label ?? `row-${index}`);
+}
+
+function seriesContentSignature(item) {
+  // Server generation changes are not themselves visible changes. Event actions
+  // resolve their fresh context at click time instead of retaining old tokens.
+  return JSON.stringify(item, (key, value) => key === 'generation' ? undefined : value);
+}
+
 function renderSeriesDetail(host, series, tab, context) {
   let cardSize = readPreference(SIZE_KEY, ['small', 'medium', 'large'], 'medium');
   let columns = readPreference(COLUMNS_KEY, ['auto', '3', '4', '5', '6'], 'auto');
+  let currentSeries = series;
+  const eventContext = { ...context, seriesId: series.id, candidates: [{ tid: series.tid, title: series.title }] };
+  const episodeCards = new Map();
   host.replaceChildren();
   const back = link(`#series?tab=${tab}`, '← 一覧へ戻る', 'series-back-link');
   const header = document.createElement('section');
   header.className = 'panel series-detail-header';
   const image = document.createElement('div');
   image.className = 'series-representative-image';
-  if (series.representativeThumbnailUrl) {
-    const preview = document.createElement('img');
-    preview.src = series.representativeThumbnailUrl;
-    preview.alt = '';
-    image.append(preview);
-  } else image.textContent = '画像なし';
   const info = document.createElement('div');
   info.className = 'series-detail-info';
   const titleLine = document.createElement('div');
   titleLine.className = 'series-detail-title';
   const heading = document.createElement('h2');
-  heading.textContent = series.title;
+  const hiddenBadge = document.createElement('span');
+  hiddenBadge.className = 'badge series-hidden-badge';
+  hiddenBadge.textContent = '非表示中';
   titleLine.append(heading);
-  if (series.hidden === true) {
-    const hiddenBadge = document.createElement('span');
-    hiddenBadge.className = 'badge series-hidden-badge';
-    hiddenBadge.textContent = '非表示中';
-    titleLine.append(hiddenBadge);
-  }
   const tid = document.createElement('p');
   tid.className = 'series-detail-tid';
-  tid.textContent = series.tid === null ? 'ローカルシリーズ' : `TID ${series.tid}`;
   const counts = document.createElement('div');
   counts.className = 'series-detail-counts';
-  for (const label of [
-    `録画 ${series.counts.currentRecordings}件`, ...(series.counts.missingRecordings ? [`行方不明 ${series.counts.missingRecordings}件`] : []), `予約 ${series.counts.reservations}件`,
-    `取得済みEP ${series.counts.currentEpisodes ?? series.counts.episodes}件`,
-    `辞書登録EP ${series.counts.dictionaryEpisodes ?? 0}件`, `イベント確定EP ${series.counts.episodes}件`,
-    `EP未確定 ${series.counts.episodeUnresolved}件`
-  ]) {
-    const badge = document.createElement('span');
-    badge.className = 'badge';
-    badge.textContent = label;
-    counts.append(badge);
-  }
+  const description = document.createElement('p');
+  description.className = 'series-detail-description';
   info.append(titleLine, tid, counts);
-  if (series.description) {
-    const description = document.createElement('p');
-    description.className = 'series-detail-description';
-    description.textContent = series.description;
-    info.append(description);
-  }
   header.append(image, info);
 
   const sizeSelect = document.createElement('select');
@@ -665,80 +811,183 @@ function renderSeriesDetail(host, series, tab, context) {
   const hiddenButton = document.createElement('button');
   hiddenButton.type = 'button';
   hiddenButton.className = 'button series-data-button';
-  hiddenButton.textContent = series.hidden ? 'シリーズを再表示' : 'シリーズを非表示';
-  hiddenButton.hidden = !Number.isInteger(Number(series.tid)) || Number(series.tid) <= 0;
-  hiddenButton.addEventListener('click', () => context.setHidden(series.tid, !series.hidden));
+  hiddenButton.addEventListener('click', () => eventContext.setHidden(currentSeries.tid, !currentSeries.hidden));
   const grid = document.createElement('section');
   grid.className = 'series-episode-grid';
-  function renderGrid() {
-    context.closeHover();
+
+  function updateHeader() {
+    setContent(heading, currentSeries.title);
+    if (currentSeries.hidden === true) {
+      if (!hiddenBadge.isConnected) titleLine.append(hiddenBadge);
+    } else hiddenBadge.remove();
+    setContent(tid, currentSeries.tid === null ? 'ローカルシリーズ' : `TID ${currentSeries.tid}`);
+    const labels = [
+      `録画 ${currentSeries.counts.currentRecordings}件`,
+      ...(currentSeries.counts.missingRecordings ? [`行方不明 ${currentSeries.counts.missingRecordings}件`] : []),
+      `予約 ${currentSeries.counts.reservations}件`,
+      `取得済みEP ${currentSeries.counts.currentEpisodes ?? currentSeries.counts.episodes}件`,
+      `辞書登録EP ${currentSeries.counts.dictionaryEpisodes ?? 0}件`,
+      `イベント確定EP ${currentSeries.counts.episodes}件`,
+      `EP未確定 ${currentSeries.counts.episodeUnresolved}件`
+    ];
+    if (counts.dataset.values !== JSON.stringify(labels)) {
+      counts.dataset.values = JSON.stringify(labels);
+      counts.replaceChildren(...labels.map(label => {
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = label;
+        return badge;
+      }));
+    }
+    if (currentSeries.description) {
+      setContent(description, currentSeries.description);
+      if (!description.isConnected) info.append(description);
+    } else description.remove();
+    const thumbnail = currentSeries.representativeThumbnailUrl || null;
+    if (image.dataset.thumbnail !== (thumbnail || '')) {
+      image.dataset.thumbnail = thumbnail || '';
+      if (thumbnail) {
+        const preview = document.createElement('img');
+        preview.src = thumbnail;
+        preview.alt = '';
+        image.replaceChildren(preview);
+      } else image.textContent = '画像なし';
+    }
+    hiddenButton.textContent = currentSeries.hidden ? 'シリーズを再表示' : 'シリーズを非表示';
+    hiddenButton.hidden = !Number.isInteger(Number(currentSeries.tid)) || Number(currentSeries.tid) <= 0;
+  }
+
+  function renderGrid(firstRender = false, previousAnchor = null) {
     grid.dataset.size = cardSize;
     grid.dataset.columns = columns;
-    grid.replaceChildren(...series.episodes.map(episode => createEpisodeCard(episode, cardSize, {
-      ...context,
-      seriesId: series.id,
-      candidates: [{ tid: series.tid, title: series.title }]
-    })));
-    const selected = grid.querySelector('.series-event-logo-entry.is-selected');
-    if (selected) window.requestAnimationFrame(() => selected.scrollIntoView({ block: 'nearest' }));
+    const anchor = firstRender ? null : previousAnchor || seriesScrollAnchor(grid);
+    const nextCards = new Map();
+    const keysSeen = new Map();
+    const cards = currentSeries.episodes.map((episode, index) => {
+      const identity = episodeKey(episode, index);
+      const occurrence = keysSeen.get(identity) || 0;
+      keysSeen.set(identity, occurrence + 1);
+      const key = occurrence ? `${identity}:${occurrence}` : identity;
+      const signature = seriesContentSignature(episode);
+      const old = episodeCards.get(key);
+      let card;
+      if (old && old.signature === signature) card = old.card;
+      else {
+        card = createEpisodeCard(episode, cardSize, eventContext);
+        if (old) {
+          const prior = old.card.querySelectorAll('details.series-event-overflow');
+          const next = card.querySelectorAll('details.series-event-overflow');
+          prior.forEach((detail, i) => { if (next[i]) next[i].open = detail.open; });
+        }
+      }
+      card.dataset.seriesKey = key;
+      nextCards.set(key, { card, signature });
+      return card;
+    });
+    reconcileSeriesChildren(grid, cards);
+    episodeCards.clear();
+    nextCards.forEach((value, key) => episodeCards.set(key, value));
+    keepSeriesAnchor(anchor);
+    if (firstRender) {
+      const selected = grid.querySelector('.series-event-logo-entry.is-selected');
+      if (selected) window.requestAnimationFrame(() => selected.scrollIntoView({ block: 'nearest' }));
+    }
   }
+
   sizeSelect.addEventListener('change', () => {
     cardSize = sizeSelect.value;
     writePreference(SIZE_KEY, cardSize);
-    renderGrid();
+    grid.dataset.size = cardSize;
   });
   columnSelect.addEventListener('change', () => {
     columns = columnSelect.value;
     writePreference(COLUMNS_KEY, columns);
-    renderGrid();
+    grid.dataset.columns = columns;
   });
-  renderGrid();
+  updateHeader();
+  renderGrid(true);
   host.append(back, header, grid);
-  return { sizeSelect, columnSelect, hiddenButton };
+  return {
+    root: grid, seriesId: series.id, sizeSelect, columnSelect, hiddenButton,
+    update(nextSeries, nextContext) {
+      const anchor = seriesScrollAnchor(grid);
+      currentSeries = nextSeries;
+      Object.assign(eventContext, nextContext, {
+        seriesId: nextSeries.id, candidates: [{ tid: nextSeries.tid, title: nextSeries.title }]
+      });
+      updateHeader();
+      renderGrid(false, anchor);
+    }
+  };
 }
 
 function renderAttentionDetail(host, group, context) {
+  let currentGroup = group;
+  const eventContext = { ...context, candidates: group.candidates || [] };
+  const eventCards = new Map();
   host.replaceChildren();
   const back = link('#series?tab=attention', '← 要確認一覧へ戻る', 'series-back-link');
   const header = document.createElement('section');
   header.className = 'panel series-attention-detail';
   const heading = document.createElement('h2');
-  heading.textContent = group.title;
   const description = document.createElement('p');
-  description.textContent = `${group.label} · ${group.events.length}件${group.progLookupLabel ? ` · ${group.progLookupLabel}` : ''}`;
   const candidates = document.createElement('p');
   candidates.className = 'series-attention-candidates';
-  candidates.textContent = group.candidates?.length
-    ? `紐づけ候補: ${group.candidates.map(item => `${item.title} (TID ${item.tid})`).join(' / ')}`
-    : '既存候補なし。作品辞書検索から指定できます。';
   const actions = document.createElement('div');
   actions.className = 'series-attention-actions';
   const bulk = document.createElement('button');
   bulk.type = 'button';
   bulk.className = 'button primary';
   bulk.textContent = 'まとめて紐づけ';
-  bulk.addEventListener('click', () => context.openBulk(group));
+  bulk.addEventListener('click', () => eventContext.openBulk(currentGroup));
   actions.append(bulk);
   header.append(heading, description, candidates, actions);
   const list = document.createElement('section');
   list.className = 'series-attention-events';
-  for (const event of group.events) {
-    const card = document.createElement('article');
-    card.className = 'panel series-attention-event';
-    const title = document.createElement('strong');
-    title.textContent = text(event.fullTitle, event.title || 'タイトル未取得');
-    const meta = document.createElement('span');
-    meta.textContent = `${dateTime(event.start)} · ${text(event.channel?.name, '局名未取得')}`;
-    const subtitle = document.createElement('span');
-    subtitle.textContent = event.subTitle ? `副題: ${event.subTitle}` : '副題なし';
-    card.append(title, meta, subtitle);
-    const logoHost = document.createElement('div');
-    logoHost.className = 'series-recording-logos';
-    appendEventLogo(logoHost, event, { ...context, candidates: group.candidates || [] });
-    card.append(logoHost);
-    list.append(card);
-  }
   host.append(back, header, list);
+
+  function update(nextGroup, nextContext) {
+    const anchor = seriesScrollAnchor(list);
+    currentGroup = nextGroup;
+    Object.assign(eventContext, nextContext, { candidates: nextGroup.candidates || [] });
+    setContent(heading, nextGroup.title);
+    setContent(description, `${nextGroup.label} · ${nextGroup.events.length}件${nextGroup.progLookupLabel ? ` · ${nextGroup.progLookupLabel}` : ''}`);
+    setContent(candidates, nextGroup.candidates?.length
+      ? `紐づけ候補: ${nextGroup.candidates.map(item => `${item.title} (TID ${item.tid})`).join(' / ')}`
+      : '既存候補なし。作品辞書検索から指定できます。');
+    const nextCards = new Map();
+    const cards = nextGroup.events.map((event, index) => {
+      const key = String(event.key ?? `row-${index}`);
+      const signature = seriesContentSignature(event);
+      const old = eventCards.get(key);
+      let card;
+      if (old && old.signature === signature) card = old.card;
+      else {
+        card = document.createElement('article');
+        card.className = 'panel series-attention-event';
+        const title = document.createElement('strong');
+        title.textContent = text(event.fullTitle, event.title || 'タイトル未取得');
+        const meta = document.createElement('span');
+        meta.textContent = `${dateTime(event.start)} · ${text(event.channel?.name, '局名未取得')}`;
+        const subtitle = document.createElement('span');
+        subtitle.textContent = event.subTitle ? `副題: ${event.subTitle}` : '副題なし';
+        card.append(title, meta, subtitle);
+        const logoHost = document.createElement('div');
+        logoHost.className = 'series-recording-logos';
+        appendEventLogo(logoHost, event, eventContext);
+        card.append(logoHost);
+      }
+      card.dataset.seriesKey = key;
+      nextCards.set(key, { card, signature });
+      return card;
+    });
+    reconcileSeriesChildren(list, cards);
+    eventCards.clear();
+    nextCards.forEach((value, key) => eventCards.set(key, value));
+    keepSeriesAnchor(anchor);
+  }
+  update(group, context);
+  return { root: list, groupId: group.id, update };
 }
 
 export function renderSeriesPage(container, query = new URLSearchParams(), options = {}) {
@@ -761,6 +1010,14 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   let listData = null;
   let renderedQuery = null;
   let searchTimer = null;
+  let overviewView = null;
+  let detailView = null;
+  let attentionView = null;
+  let autoLoadObserver = null;
+  let autoLoadBlocked = false;
+  let loadError = '';
+  let visibleCount = 25;
+  const selectedAttentionEvents = new Set();
   const listKey = () => JSON.stringify([tab, viewMode, searchValue]);
   function reloadList(delay = 0) {
     renderedQuery = null;
@@ -794,7 +1051,8 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   function openBulk(group) {
     openSeriesBulkCorrectionDialog({
       group,
-      onChanged() {
+      onChanged(result) {
+        if (!result?.responseUnknown) selectedAttentionEvents.clear();
         const nextHash = '#series?tab=attention';
         if (window.location.hash === nextHash) scheduleRefresh(0);
         else window.location.hash = nextHash;
@@ -838,8 +1096,24 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     if (key === availabilityKey) return;
     availabilityKey = key;
     dataDialog?.updateAvailability(data.availability);
-    const button = headerActions?.querySelector('.series-data-button');
-    if (button) button.className = `button series-data-button is-${data.availability?.status || 'unknown'}`;
+    const button = headerActions?.querySelector('.series-availability-button');
+    if (button) button.className = `button series-data-button series-availability-button is-${data.availability?.status || 'unknown'}`;
+  }
+
+  function syncHeaderData(data) {
+    if (!dataDialog || !hiddenDialog) return;
+    const hiddenSeries = Array.isArray(data.hiddenSeries) ? data.hiddenSeries : [];
+    hiddenDialog.updateItems(hiddenSeries, data.manualGeneration || 0);
+    updateState(data);
+    const secondary = headerActions?.querySelector('.series-header-secondary');
+    if (!secondary) return;
+    let hiddenButton = secondary.querySelector('.series-hidden-button');
+    if (!hiddenSeries.length) hiddenButton?.remove();
+    else if (hiddenButton) setContent(hiddenButton, `非表示（${hiddenSeries.length}）`);
+    else {
+      hiddenButton = makeHiddenSeriesButton(hiddenDialog, hiddenSeries.length);
+      secondary.insertBefore(hiddenButton, secondary.querySelector('.series-availability-button'));
+    }
   }
 
   function installHeader(data, config = {}) {
@@ -853,14 +1127,11 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       document.body.append(dataDialog, hiddenDialog);
     }
     const hiddenSeries = Array.isArray(data.hiddenSeries) ? data.hiddenSeries : [];
-    hiddenDialog.updateItems(hiddenSeries, data.manualGeneration || 0);
-    updateState(data);
-    const dialog = dataDialog;
     const actions = makeHeaderActions({
       tab: config.showTabs === false ? null : tab,
       viewMode,
       availability: data.availability,
-      dialog,
+      dialog: dataDialog,
       hiddenDialog,
       hiddenSeries,
       searchControl: config.searchControl || null,
@@ -868,96 +1139,225 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
         if (nextView === viewMode) return;
         viewMode = nextView;
         writePreference(VIEW_KEY, viewMode);
+        headerActions?.querySelectorAll('[data-series-view]').forEach(button => {
+          button.setAttribute('aria-pressed', String(button.dataset.seriesView === viewMode));
+        });
         config.onViewChange?.();
       },
       detailControls: config.detailControls || []
     });
     headerActions = actions;
     setHeaderActions(actions.childElementCount ? actions : null);
+    syncHeaderData(data);
+  }
+
+  function updateOverviewPagination() {
+    if (!overviewView || !listData) return;
+    const pagination = listData.pagination;
+    overviewView.footer.hidden = !pagination && !loadError;
+    if (pagination) {
+      const displayed = Math.min(visibleCount, seriesRows(listData, tab).length);
+      setContent(overviewView.count, `${pagination.total}件中 ${displayed}件表示 · ${Math.max(1, Math.ceil(displayed / 25))}/${Math.max(1, Math.ceil(pagination.total / 25))}ページ`);
+      overviewView.more.hidden = displayed >= seriesRows(listData, tab).length && !pagination.hasMore;
+      overviewView.more.disabled = loading;
+      setContent(overviewView.more, loading ? '読み込み中…' : 'もっと見る');
+    }
+    overviewView.error.hidden = !loadError;
+    if (loadError) setContent(overviewView.error, loadError);
+  }
+
+  function showNextSeriesBatch() {
+    if (controller.signal.aborted || loading || !listData || renderedQuery !== listKey()) return;
+    const available = seriesRows(listData, tab).length;
+    if (visibleCount < available) {
+      visibleCount = Math.min(visibleCount + 25, available);
+      renderOverview(listData);
+      window.requestAnimationFrame(maybeAutoLoad);
+    } else if (listData.pagination?.hasMore) void load(true);
+  }
+
+  function maybeAutoLoad() {
+    if (controller.signal.aborted || loading || autoLoadBlocked || !overviewView || !listData ||
+        renderedQuery !== listKey() || renderedGeneration !== listData.generation) return;
+    if (visibleCount >= seriesRows(listData, tab).length && !listData.pagination?.hasMore) return;
+    const rect = overviewView.footer.getBoundingClientRect();
+    if (rect.bottom < 0 || rect.top > window.innerHeight + 500) return;
+    showNextSeriesBatch();
+  }
+
+  function updateAttentionSelectionCount() {
+    const controls = overviewView?.selectionControls;
+    if (!controls) return;
+    const count = selectedAttentionEvents.size;
+    setContent(controls.count, `${count}件を選択中`);
+    setContent(controls.bulk, `${count}件をまとめて紐づけ`);
+    controls.bulk.disabled = count === 0;
+    controls.clear.disabled = count === 0;
+  }
+
+  function changeAttentionSelection(keys, checked) {
+    for (const key of keys) {
+      if (checked) selectedAttentionEvents.add(key);
+      else selectedAttentionEvents.delete(key);
+    }
+    for (const entry of overviewView?.list.children || []) {
+      const state = seriesListStates.get(entry);
+      if (state?.selection) syncAttentionSelection(state);
+    }
+    updateAttentionSelectionCount();
+  }
+
+  async function openSelectedBulk() {
+    const eventKeys = Array.from(selectedAttentionEvents);
+    if (!eventKeys.length) return;
+    try {
+      const data = await loadSeriesProjection({ eventKeys, signal: controller.signal });
+      if (controller.signal.aborted) return;
+      const events = new Map(data.attention.flatMap(group => (group.events || []).map(event => [event.key, event])));
+      if (eventKeys.some(key => !events.has(key))) {
+        throw new Error('選択中に要確認の対象が変更されました。最新の一覧で選び直してください。');
+      }
+      const candidates = new Map();
+      for (const group of data.attention) {
+        for (const candidate of group.candidates || []) candidates.set(candidate.tid, candidate);
+      }
+      openBulk({
+        id: null, title: '選択した番組', events: eventKeys.map(key => events.get(key)),
+        candidates: Array.from(candidates.values()), generation: data.generation,
+        dictionaryGeneration: data.attention[0]?.dictionaryGeneration
+      });
+    } catch (error) {
+      if (!controller.signal.aborted) window.alert(`一括補正の対象を取得できませんでした: ${error.message}`);
+    }
   }
 
   function renderOverview(data) {
-    const oldSearch = headerActions?.querySelector('input[type="search"]');
-    const focused = oldSearch && document.activeElement === oldSearch;
-    const selection = focused ? [oldSearch.selectionStart, oldSearch.selectionEnd] : null;
-    container.replaceChildren();
-    const searchLabel = document.createElement('label');
-    searchLabel.className = 'series-header-search';
-    const search = document.createElement('input');
-    search.type = 'search';
-    search.value = searchValue;
-    search.placeholder = '作品名・番組名を検索';
-    search.setAttribute('aria-label', '作品名・番組名を検索');
-    search.autocomplete = 'off';
-    const list = document.createElement('section');
-    searchLabel.append(search);
-    container.append(list);
-    const render = () => renderSeriesList(list, data, tab, searchValue, viewMode, {
-      openSeriesMenu: contextMenu.open
-    });
-    let searchComposing = false;
-    const applySearch = () => {
-      searchValue = search.value;
-      reloadList(200);
-    };
-    search.addEventListener('compositionstart', () => { searchComposing = true; });
-    search.addEventListener('compositionend', () => {
-      searchComposing = false;
-      applySearch();
-    });
-    search.addEventListener('input', event => {
-      if (searchComposing || event.isComposing) return;
-      applySearch();
-    });
-    render();
-    const pagination = data.pagination;
-    if (pagination) {
+    if (!overviewView) {
+      container.replaceChildren();
+      const searchLabel = document.createElement('label');
+      searchLabel.className = 'series-header-search';
+      const search = document.createElement('input');
+      search.type = 'search';
+      search.value = searchValue;
+      search.placeholder = '作品名・番組名を検索';
+      search.setAttribute('aria-label', '作品名・番組名を検索');
+      search.autocomplete = 'off';
+      searchLabel.append(search);
+      const list = document.createElement('section');
       const footer = document.createElement('div');
       footer.className = 'series-pagination';
       const count = document.createElement('p');
-      count.textContent = `${pagination.total}件中 ${seriesRows(data, tab).length}件表示 · ${pagination.page}/${Math.max(1, pagination.totalPages)}ページ`;
-      footer.append(count);
-      if (pagination.hasMore) {
-        const more = document.createElement('button');
-        more.className = 'button';
-        more.type = 'button';
-        more.textContent = 'もっと見る';
-        more.addEventListener('click', () => { if (!loading) { more.disabled = true; load(true); } });
-        footer.append(more);
+      const error = document.createElement('p');
+      error.className = 'series-pagination-error';
+      error.setAttribute('role', 'status');
+      error.hidden = true;
+      const more = document.createElement('button');
+      more.className = 'button';
+      more.type = 'button';
+      more.textContent = 'もっと見る';
+      more.addEventListener('click', () => {
+        if (loading) return;
+        autoLoadBlocked = false;
+        showNextSeriesBatch();
+      });
+      footer.append(count, error, more);
+      let selectionControls = null;
+      if (tab === 'attention') {
+        const bar = document.createElement('div');
+        bar.className = 'series-attention-selection-bar';
+        const selectedCount = document.createElement('span');
+        const clear = document.createElement('button');
+        clear.type = 'button';
+        clear.className = 'button';
+        clear.textContent = '選択解除';
+        clear.addEventListener('click', () => changeAttentionSelection(Array.from(selectedAttentionEvents), false));
+        const bulk = document.createElement('button');
+        bulk.type = 'button';
+        bulk.className = 'button primary';
+        bulk.addEventListener('click', openSelectedBulk);
+        bar.append(selectedCount, clear, bulk);
+        container.append(bar);
+        selectionControls = { count: selectedCount, clear, bulk };
       }
-      container.append(footer);
-    }
-    installHeader(data, { searchControl: searchLabel, onViewChange: () => reloadList() });
-    if (focused) {
-      search.focus();
-      if (selection[0] !== null) search.setSelectionRange(...selection);
-    }
+      container.append(list, footer);
+      let searchComposing = false;
+      const applySearch = () => {
+        searchValue = search.value;
+        reloadList(200);
+      };
+      search.addEventListener('compositionstart', () => { searchComposing = true; });
+      search.addEventListener('compositionend', () => { searchComposing = false; applySearch(); });
+      search.addEventListener('input', event => {
+        if (searchComposing || event.isComposing) return;
+        applySearch();
+      });
+      overviewView = { list, footer, count, error, more, selectionControls };
+      updateAttentionSelectionCount();
+      installHeader(data, { searchControl: searchLabel, onViewChange: () => reloadList() });
+      if (typeof IntersectionObserver !== 'undefined') {
+        autoLoadObserver = new IntersectionObserver(entries => {
+          if (entries.some(entry => entry.isIntersecting)) maybeAutoLoad();
+        }, { root: null, rootMargin: '500px 0px', threshold: 0 });
+        autoLoadObserver.observe(footer);
+      } else window.addEventListener('scroll', maybeAutoLoad, { passive: true });
+    } else syncHeaderData(data);
+    renderSeriesList(overviewView.list, {
+      ...data, series: data.series.slice(0, visibleCount), attention: data.attention.slice(0, visibleCount)
+    }, tab, searchValue, viewMode, {
+      openSeriesMenu: contextMenu.open, selectedAttentionEvents, changeAttentionSelection
+    });
+    updateAttentionSelectionCount();
+    updateOverviewPagination();
   }
 
   async function load(append = false) {
-    if (loading) { refreshQueued = true; return; }
+    if (controller.signal.aborted) return;
+    if (loading) { if (!append) refreshQueued = true; return; }
+    if (append && (!listData?.pagination?.hasMore || renderedQuery !== listKey())) return;
     loading = true;
+    updateOverviewPagination();
     const current = ++sequence;
     const requestedQuery = listKey();
     const isList = !selectedId && !eventKey;
-    const page = append && listData?.pagination ? listData.pagination.page + 1 : 1;
+    const previousPages = isList && renderedQuery === requestedQuery ? Math.max(1, listData?.pagination?.page || 1) : 1;
+    const page = append ? listData.pagination.page + 1 : 1;
     try {
       let data = await loadSeriesProjection({ signal: controller.signal, id: selectedId || undefined, event: eventKey || undefined,
         filter: tab, view: viewMode, q: searchValue, page, generation: append ? renderedGeneration : undefined });
       if (controller.signal.aborted || current !== sequence) return;
       if (isList && requestedQuery !== listKey()) { refreshQueued = true; return; }
       if (!append && renderedGeneration === data.generation && (!isList || renderedQuery === requestedQuery)) {
-        updateState(data);
+        syncHeaderData(data);
         return;
       }
       if (append) {
-        if (!listData || listData.generation !== data.generation || renderedQuery !== requestedQuery) { reloadList(); return; }
+        if (!listData || listData.generation !== data.generation || renderedQuery !== requestedQuery) {
+          refreshQueued = true;
+          return;
+        }
         data = { ...data, series: [...listData.series, ...data.series], attention: [...listData.attention, ...data.attention] };
+      } else if (isList && previousPages > 1) {
+        // Rebuild the *data* for all pages already opened, without replacing their DOM.
+        // Pin generation so that pages from different snapshots are never mixed.
+        let lastPage = data;
+        const series = data.series.slice();
+        const attention = data.attention.slice();
+        for (let number = 2; number <= previousPages && lastPage.pagination?.hasMore; number += 1) {
+          lastPage = await loadSeriesProjection({ signal: controller.signal, filter: tab, view: viewMode,
+            q: searchValue, page: number, generation: data.generation });
+          if (controller.signal.aborted || current !== sequence) return;
+          if (requestedQuery !== listKey()) { refreshQueued = true; return; }
+          series.push(...lastPage.series);
+          attention.push(...lastPage.attention);
+        }
+        data = { ...lastPage, series, attention };
       }
+      if (isList && !append && renderedQuery !== requestedQuery) visibleCount = 25;
+      if (isList && append) visibleCount += 25;
       renderedGeneration = data.generation;
-      programHover.close();
       renderedQuery = requestedQuery;
       if (isList) listData = data;
+      loadError = '';
       const eventIndex = buildSeriesEventIndex(data);
       const eventContext = {
         closeHover: programHover.close,
@@ -975,26 +1375,40 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
         if (!selected) tab = 'attention';
       }
       if (selected) {
-        const controls = renderSeriesDetail(container, selected, tab, eventContext);
-        installHeader(data, {
-          showTabs: false,
-          detailControls: [controls.sizeSelect, controls.columnSelect, controls.hiddenButton]
-        });
+        attentionView = null;
+        if (detailView && detailView.seriesId === selected.id && detailView.root.isConnected) {
+          detailView.update(selected, eventContext);
+          syncHeaderData(data);
+        } else {
+          detailView = renderSeriesDetail(container, selected, tab, eventContext);
+          installHeader(data, {
+            showTabs: false,
+            detailControls: [detailView.sizeSelect, detailView.columnSelect, detailView.hiddenButton]
+          });
+        }
         return;
       }
       const attentionTarget = eventKey
         ? data.attention.find(item => (item.events || []).some(event => event.key === eventKey)) : null;
       if (attentionTarget) {
-        renderAttentionDetail(container, attentionTarget, eventContext);
-        installHeader(data, { showTabs: false });
+        detailView = null;
+        if (attentionView && attentionView.groupId === attentionTarget.id && attentionView.root.isConnected) {
+          attentionView.update(attentionTarget, eventContext);
+          syncHeaderData(data);
+        } else {
+          attentionView = renderAttentionDetail(container, attentionTarget, eventContext);
+          installHeader(data, { showTabs: false });
+        }
         return;
       }
       if (selectedId || eventKey) {
+        detailView = null;
+        attentionView = null;
         const message = document.createElement('section');
         message.className = 'panel series-empty';
-        const text = document.createElement('p');
-        text.textContent = '対象のシリーズ・イベントは現在の一覧にありません。';
-        message.append(text, link(`#series?tab=${tab}`, '一覧へ戻る'));
+        const label = document.createElement('p');
+        label.textContent = '対象のシリーズ・イベントは現在の一覧にありません。';
+        message.append(label, link(`#series?tab=${tab}`, '一覧へ戻る'));
         container.replaceChildren(message);
         installHeader(data, { showTabs: false });
         return;
@@ -1002,14 +1416,20 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       renderOverview(data);
     } catch (error) {
       if (controller.signal.aborted || current !== sequence) return;
-      if (error.status === 409) { reloadList(); return; }
-      renderedGeneration = null;
-      container.innerHTML = '<section class="panel series-loading is-error"><h2>シリーズ情報を表示できません</h2><p></p></section>';
-      container.querySelector('p').textContent = error?.message || String(error);
-      setHeaderActions();
+      if (error.status === 409) { renderedGeneration = null; refreshQueued = true; return; }
+      if (append) autoLoadBlocked = true;
+      loadError = `${append ? '続きを読み込めませんでした' : '更新できませんでした'}: ${error?.message || String(error)}`;
+      if (overviewView) updateOverviewPagination();
+      else {
+        container.innerHTML = '<section class="panel series-loading is-error"><h2>シリーズ情報を表示できません</h2><p></p></section>';
+        container.querySelector('p').textContent = error?.message || String(error);
+        setHeaderActions();
+      }
     } finally {
       loading = false;
+      updateOverviewPagination();
       if (refreshQueued && !controller.signal.aborted) { refreshQueued = false; scheduleRefresh(0); }
+      else if (isList && overviewView) window.requestAnimationFrame(maybeAutoLoad);
     }
   }
 
@@ -1050,6 +1470,8 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     window.clearTimeout(refreshTimer);
     window.clearTimeout(searchTimer);
     window.clearInterval(pollTimer);
+    autoLoadObserver?.disconnect();
+    if (!autoLoadObserver) window.removeEventListener('scroll', maybeAutoLoad);
     unsubscribers.forEach(unsubscribe => unsubscribe());
     contextMenu.destroy();
     dataDialog?.remove();

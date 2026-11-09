@@ -30,6 +30,14 @@
 .series-list-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 58px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); color: inherit; text-decoration: none; transition: border-color .12s ease,background .12s ease,box-shadow .12s ease; }
 .series-list-row:hover { border-color: color-mix(in srgb,var(--brand) 42%,var(--border)); background: color-mix(in srgb,var(--brand-soft) 28%,var(--panel)); box-shadow: 0 4px 13px rgba(22,48,33,.07); }
 .series-list-row:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.series-attention-selection-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 9px; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); font-size: 12px; }
+.series-attention-selection-bar > span { margin-right: auto; }
+.series-attention-selection { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: start; margin: 4px 10px 9px; font-size: 12px; }
+.series-attention-select-all,.series-attention-select-details label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+.series-attention-selection input[type="checkbox"] { flex: 0 0 auto; width: 16px; height: 16px; accent-color: var(--brand); }
+.series-attention-select-details { min-width: 0; max-width: 100%; }
+.series-attention-select-details summary { cursor: pointer; color: var(--brand); }
+.series-attention-select-details label { margin: 7px 0 0 9px; overflow-wrap: anywhere; }
 .series-list-main { display: grid; min-width: 0; gap: 3px; }
 .series-list-main strong { overflow: hidden; font-size: 14px; font-weight: var(--font-title-weight); text-overflow: ellipsis; white-space: nowrap; }
 .series-list-main span { color: var(--muted); font-size: 12px; }
