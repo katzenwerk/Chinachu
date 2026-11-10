@@ -135,15 +135,15 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		writeJson(fixture.files.match, fixture.programs.map(match).concat([found, absent].map(value =>
 			Object.assign(match(value), { deletion: { deletedAt: null, reason: 'recorded-missing' } }))));
 		const plan = createPlan(fixture);
-		assert.strictEqual(plan.summary.recordedMissingFound, 1);
-		assert.strictEqual(plan.summary.recordedMissingHistory, 1);
+		assert.strictEqual(plan.summary.recordedMissingFound, 0);
+		assert.strictEqual(plan.summary.recordedMissingHistoryHeld, 2);
 		const outcome = cleaner.applyPlan(fixture.root, plan);
 			assert.deepStrictEqual(outcome.counts, {
-				fileMissing: 0, fileRestored: 0, pathRepaired: 1, recordedRemoved: 1, matchRemoved: 2, reserves2Removed: 2,
-				programsRemoved: 2, recordedHistoryRemoved: 1, deletedMatchHistoryRemoved: 0,
-				recordedMissingHistoryRemoved: 1,
+				fileMissing: 0, fileRestored: 0, pathRepaired: 1, recordedRemoved: 1, matchRemoved: 1, reserves2Removed: 1,
+				programsRemoved: 1, recordedHistoryRemoved: 1, deletedMatchHistoryRemoved: 0,
+				recordedMissingHistoryRemoved: 0,
 				skippedHistoryRemoved: 0, missedHistoryRemoved: 0,
-				thumbnailDeleted: 0, thumbnailRetained: 0, thumbnailFailed: 0, held: 1
+				thumbnailDeleted: 0, thumbnailRetained: 0, thumbnailFailed: 0, held: 3
 			});
 		assert.deepStrictEqual(outcome.changedLedgers.sort(), ['match', 'recorded', 'reserves2']);
 		const recorded = JSON.parse(fs.readFileSync(fixture.files.recorded, 'utf8'));
@@ -155,13 +155,13 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		assert.strictEqual(reserves2.some(item => item.id === 'missing'), false);
 		assert.strictEqual(matches.some(item => item.recording.recordedId === 'missing'), false);
 		assert.strictEqual(matches.some(item => item.recording.recordedId === 'recorded-missing-found'), true);
-		assert.strictEqual(matches.some(item => item.recording.recordedId === 'recorded-missing-absent'), false);
+		assert.strictEqual(matches.some(item => item.recording.recordedId === 'recorded-missing-absent'), true);
 		// A fresh missing recording is retained in both ledgers, then restored at the same path.
 		const retainedProgram = program('retained-file', path.join(fixture.recordings, 'retained-file.m2ts'));
 		const beforeRecorded = JSON.parse(fs.readFileSync(fixture.files.recorded, 'utf8'));
 		const beforeMatch = JSON.parse(fs.readFileSync(fixture.files.match, 'utf8'));
 		writeJson(fixture.files.recorded, beforeRecorded.concat([retainedProgram]));
-		const retainedMatch = match(retainedProgram); retainedMatch.recording = null;
+		const retainedMatch = match(retainedProgram); // Keep the recorded ID for unambiguous file-state reconciliation.
 		writeJson(fixture.files.match, beforeMatch.concat([retainedMatch]));
 		cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
 		assert.ok(JSON.parse(fs.readFileSync(fixture.files.recorded, 'utf8')).some(row => row.id === 'retained-file'));
@@ -170,19 +170,44 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
 		assert.equal(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).find(row => row.key === retainedMatch.key).fileMissing, undefined);
 
-		assert.strictEqual(matches.find(item => item.recording.recordedId === 'relocated').recording.path, fixture.paths.relocatedNew);
+		assert.strictEqual(matches.find(item => item.recording.recordedId === 'relocated').recording.path, undefined);
 		assert.strictEqual(JSON.parse(fs.readFileSync(fixture.files.reserves, 'utf8')).length, 0);
 		assert.strictEqual(fs.readFileSync(path.join(fixture.data, 'csv', 'recording-history_2026-10.csv'), 'utf8'), 'sentinel');
 		[fixture.paths.normal, fixture.paths.relocatedNew, fixture.paths.ambiguousA, fixture.paths.ambiguousB]
 			.forEach(file => assert.strictEqual(fs.existsSync(file), true));
 		assert.strictEqual(Object.prototype.hasOwnProperty.call(outcome, 'backupDirectory'), false);
 		assert.strictEqual(fs.existsSync(path.join(fixture.data, 'ledger-cleaner-backups')), false);
+
+		// Two recordings can share a canonical broadcast key but retain different recording IDs.
+		// Removing A must not remove or update B in any ledger.
+		const absentA = program('collision-a', path.join(fixture.recordings, 'collision-a.m2ts'), {
+			channel: { id: 'collision-channel' }
+		});
+		const presentB = program('collision-b', path.join(fixture.recordings, 'collision-b.m2ts'), {
+			channel: absentA.channel, start: absentA.start, end: absentA.end
+		});
+		assert.strictEqual(cleaner.canonicalKey(absentA), cleaner.canonicalKey(presentB));
+		fs.writeFileSync(presentB.recorded, 'fixture');
+		writeJson(fixture.files.recorded, [absentA, presentB]);
+		writeJson(fixture.files.recording, []);
+		writeJson(fixture.files.reserves, []);
+		writeJson(fixture.files.reserves2, [absentA, presentB]);
+		writeJson(fixture.files.match, [match(absentA), match(presentB)]);
+		const collisionPlan = createPlan(fixture);
+		assert.strictEqual(collisionPlan.results.find(item => item.id === 'collision-a').action, 'remove-history');
+		assert.strictEqual(collisionPlan.results.find(item => item.id === 'collision-b').classification, 'ok');
+		assert.strictEqual(collisionPlan.results.find(item => item.id === 'collision-a').impact.matchRemove, 1);
+		cleaner.applyPlan(fixture.root, collisionPlan);
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(fixture.files.recorded, 'utf8')).map(row => row.id), ['collision-b']);
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(fixture.files.reserves2, 'utf8')).map(row => row.id), ['collision-b']);
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).map(row => row.recording.recordedId), ['collision-b']);
+		assert.strictEqual(fs.existsSync(presentB.recorded), true);
 	} finally {
 		fixture.close();
 	}
 });
 
-test('deleted and recorded-missing history is removed without a location scan and cleans only unshared thumbnails', function () {
+test('deleted and recorded-missing match-only history can be removed without a file location scan', function () {
 	const fixture = createFixture();
 	try {
 		const thumbnailDir = path.join(fixture.data, 'thumbnails');
@@ -227,7 +252,8 @@ test('deleted and recorded-missing history is removed without a location scan an
 		assert.strictEqual(plan.index.files, 0);
 		assert.strictEqual(plan.summary.deletedMatch, 3);
 		assert.strictEqual(plan.summary.recordedMissingHistory, 1);
-		assert.match(plan.results.find(item => item.id === 'recorded-missing-unchecked').reason, /not selected/);
+		assert.strictEqual(plan.summary.recordedMissingHistoryHeld, 0);
+		assert.match(plan.results.find(item => item.id === 'recorded-missing-unchecked').reason, /no file absence or location/);
 		assert.strictEqual(fs.readFileSync(fixture.files.match, 'utf8'), beforeMatch);
 
 		const outcome = cleaner.applyPlan(fixture.root, plan);
@@ -245,8 +271,9 @@ test('deleted and recorded-missing history is removed without a location scan an
 
 		const matchItems = JSON.parse(fs.readFileSync(fixture.files.match, 'utf8'));
 		const reserves2Items = JSON.parse(fs.readFileSync(fixture.files.reserves2, 'utf8'));
-		assert.deepStrictEqual(matchItems, [sharedValidMatch]);
-		assert.deepStrictEqual(reserves2Items, []);
+		assert.deepStrictEqual(matchItems.map(row => row.key), [recordedMissingMatch.key, sharedValidMatch.key]);
+		assert.ok(matchItems.every(row => row.recording?.path === undefined));
+		assert.deepStrictEqual(reserves2Items.map(row => row.id), [recordedMissing.id]);
 		const rebuilt = matching.writeMatchLedgerLocked({
 			oldMatchPath: fixture.files.match,
 			output: fixture.files.match,
@@ -261,8 +288,8 @@ test('deleted and recorded-missing history is removed without a location scan an
 			schemaVersion: 2,
 			config: {}
 		});
-		assert.strictEqual(rebuilt.results.some(item => [deletedMatch.key, sharedDeletedMatch.key, thumbnailFailureMatch.key,
-			recordedMissingMatch.key].includes(item.key)), false);
+		assert.strictEqual(rebuilt.results.some(item => [deletedMatch.key, sharedDeletedMatch.key, thumbnailFailureMatch.key]
+			.includes(item.key)), false);
 	} finally {
 		fixture.close();
 	}
@@ -386,7 +413,7 @@ test('apply rejects stale ledgers and an incomplete root without changing data',
 		})]);
 		const incomplete = createPlan(fixture);
 		assert.strictEqual(incomplete.index.complete, false);
-		assert.strictEqual(incomplete.summary.recordedMissingUninspected, 1);
+		assert.strictEqual(incomplete.summary.recordedMissingHistoryHeld, 1);
 		assert.strictEqual(incomplete.results.find(item => item.id === 'recorded-missing-uninspected').automatic, false);
 		assert.throws(() => cleaner.applyPlan(fixture.root, incomplete), /Every registered recording root/);
 	} finally {

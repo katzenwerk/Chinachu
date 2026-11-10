@@ -203,9 +203,11 @@ function recordingPathInfo(detail, state, file) {
   const visible = state.key === 'recording' || ['recorded', 'aborted', 'deleted', 'unknown', 'file-missing'].includes(state.key) ||
     ['MISSED', 'SKIPPED_ONLY'].includes(historyStatus);
   if (!visible) return null;
-  const path = (detail.currentSource === 'recorded' && validText(detail.program?.recorded)) ||
-    validText(detail.match?.recording?.path) || validText(detail.program?.recorded) ||
-    validText(detail.program?.path);
+  // Historical match/reserves/schedule metadata cannot establish a recording location.
+  const path = detail.currentSource === 'recorded' || detail.resolution?.source === 'recorded'
+    ? validText(detail.program?.recorded)
+    : state.key === 'recording' && detail.currentSource === 'recording'
+      ? validText(detail.program?.recorded) : null;
   const unavailable = file.key === 'deleted' ? '削除済み' : null;
   return {
     label: 'ファイルパス',

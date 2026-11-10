@@ -79,18 +79,36 @@ describe('Match detail resolver', function() {
 		assert.strictEqual(result.resolution.matchedBy, 'minimal-match');
 		assert.deepStrictEqual(result.program.channel, { id: 'channel-a' });
 		assert.strictEqual(result.program.fullTitle, 'Match title');
-		assert.strictEqual(result.program.recorded, '/fixture/recorded-a.ts');
+		assert.strictEqual(result.program.recorded, undefined);
 	});
 
-	it('rejects an ID match for another canonical key and uses the correct key match', function() {
+	it('rejects a conflicting recorded ID even when another recording has the same canonical key', function() {
 		const wrongById = program({ id: 'recorded-a', start: start + 60000, end: start + 1860000 });
 		const correctByKey = program({ id: 'recorded-b', fullTitle: 'Correct key' });
 		const result = resolver.resolveMatchDetail(v2(), { recorded: [wrongById, correctByKey] });
 
-		assert.strictEqual(result.resolution.source, 'recorded');
-		assert.strictEqual(result.resolution.matchedBy, 'canonical-key');
+		assert.strictEqual(result.resolution.source, 'match');
+		assert.strictEqual(result.resolution.matchedBy, 'minimal-match');
 		assert.strictEqual(result.resolution.idConflict, true);
-		assert.strictEqual(result.program.id, 'recorded-b');
+		assert.strictEqual(result.program.recorded, undefined);
+
+		const missing = v2({
+			recording: null,
+			fileMissing: { recordedId: 'recorded-a', checkedAt: start + 1 }
+		});
+		const differentRecorded = program({
+			id: 'recorded-b', recorded: '/fixture/recorded-b.ts',
+			ruleUid: 'other-rule', savedTsAnalysis: { result: { status: 'OK' } }
+		});
+		const detailResolver = resolver.createDetailResolver({ recorded: [differentRecorded] });
+		const missingDetail = detailResolver.resolve(missing);
+		assert.strictEqual(missingDetail.resolution.source, 'match');
+		assert.strictEqual(missingDetail.resolution.idConflict, true);
+		assert.strictEqual(detailResolver.resolveRuleUid(missing), '');
+		const page = resolver.buildPage([missing], detailResolver, { now: start + 36000000, results: 'missing' });
+		assert.strictEqual(page.items[0].recordedId, 'recorded-a');
+		assert.strictEqual(page.items[0].recordingPath, null);
+		assert.strictEqual(page.items[0].savedTsAnalysis, null);
 	});
 
 	it('normalizes legacy and v2 entries and preserves explicit deletion separately from status', function() {
@@ -112,13 +130,11 @@ describe('Match detail resolver', function() {
 
 		assert.strictEqual(normalizedLegacy.schemaVersion, 2);
 		assert.strictEqual(normalizedLegacy.status, 'RECORDED');
-		assert.deepStrictEqual(normalizedLegacy.recording, {
-			recordedId: 'legacy-recorded', path: '/fixture/legacy.ts'
-		});
+		assert.deepStrictEqual(normalizedLegacy.recording, { recordedId: 'legacy-recorded' });
 		assert.deepStrictEqual(normalizedLegacy.deletion, {
 			deletedAt: start + 86400000, reason: 'manual'
 		});
-		assert.deepStrictEqual(normalizedV2, v2());
+		assert.deepStrictEqual(normalizedV2, v2({ recording: { recordedId: 'recorded-a' } }));
 		assert.strictEqual(resolver.normalizeMatchEntry({
 			key,
 			status: 'MISSED',
@@ -132,6 +148,28 @@ describe('Match detail resolver', function() {
 		assert.strictEqual(deleted.match.status, 'RECORDED');
 		assert.strictEqual(deleted.resolution.source, 'reserves2');
 		assert.strictEqual(deleted.program.fullTitle, 'Deleted reserve title');
+		const legacyOnly = resolver.resolveMatchDetail(legacy, {});
+		assert.strictEqual(legacyOnly.resolution.source, 'match');
+		assert.strictEqual(legacyOnly.program.recorded, undefined);
+
+		const resultDetail = resolver.resolveMatchDetail({
+			key,
+			status: 'RECORDED',
+			recordingResult: {
+				id: 'legacy-recorded', detail: 'Result detail',
+				snapshot: {
+					id: 'legacy-recorded', recorded: '/fixture/snapshot.ts',
+					savedTsAnalysis: { registeredPath: '/fixture/snapshot.ts', file: { path: '/fixture/fingerprint.ts' } }
+				}
+			},
+			savedTsAnalysis: { registeredPath: '/fixture/result.ts', file: { path: '/fixture/fingerprint.ts' } }
+		}, {});
+		assert.strictEqual(resultDetail.resolution.source, 'match');
+		assert.strictEqual(resultDetail.program.snapshot.recorded, undefined);
+		assert.strictEqual(resultDetail.program.snapshot.savedTsAnalysis.registeredPath, undefined);
+		assert.strictEqual(resultDetail.program.snapshot.savedTsAnalysis.file.path, '/fixture/fingerprint.ts');
+		assert.strictEqual(resultDetail.program.savedTsAnalysis.registeredPath, undefined);
+		assert.strictEqual(resultDetail.program.savedTsAnalysis.file.path, '/fixture/fingerprint.ts');
 	});
 
 	it('does not join another programme when neither canonical key nor a unique safe ID matches', function() {
@@ -320,13 +358,13 @@ describe('Match detail resolver', function() {
 			end: start + 9000000,
 			deletion: { deletedAt: null, reason: 'recorded-missing' }
 		});
-		const lost = { ...missing, fileMissing: { recordedId: missing.recording.recordedId, path: missing.recording.path, checkedAt: now } };
+		const lost = { ...missing, fileMissing: { recordedId: missing.recording.recordedId, path: '/legacy/missing.ts', checkedAt: now } };
 		const lostPage = resolver.buildPage([lost], resolver.createDetailResolver({}), { now, results: 'missing' });
 		assert.equal(lostPage.counts.missing, 1);
 		assert.equal(lostPage.counts.deleted, 0);
 		assert.equal(lostPage.items[0].deletion.reason, 'recorded-missing');
 		assert.equal(lostPage.items[0].deletionKind, 'file-missing');
-		assert.deepStrictEqual(lostPage.items[0].fileMissing, lost.fileMissing);
+		assert.deepStrictEqual(lostPage.items[0].fileMissing, { recordedId: lost.fileMissing.recordedId, checkedAt: now });
 		const reserved = v2({ status: 'RESERVED', start: now + 1000, end: now + 1801000, recording: null });
 		const detailResolver = resolver.createDetailResolver({
 			recorded: [recorded],
@@ -370,7 +408,7 @@ describe('Match detail resolver', function() {
 		const deletedItem = result.items.find(item => item.deletion && item.deletion.reason === 'manual');
 		assert.strictEqual(deletedItem.status, 'RECORDED');
 		assert.strictEqual(deletedItem.deletionKind, 'explicit');
-		assert.strictEqual(deletedItem.recordingPath, '/fixture/deleted-a.ts');
+		assert.strictEqual(deletedItem.recordingPath, null); // match-only history cannot determine a file path.
 		assert.strictEqual(result.items.find(item => item.status === 'MISSED').recordingPath, null);
 		assert.strictEqual(result.items.find(item => item.status === 'SKIPPED_ONLY').recordingPath, null);
 		assert.strictEqual(result.items.find(item => item.deletion && item.deletion.reason === 'recorded-missing').deletionKind, 'missing');
@@ -566,7 +604,7 @@ describe('Match detail resolver', function() {
 		assert.ok(Object.hasOwn(invoke({ mode: 'summary' }).body, 'counts'));
 	});
 
-	it('resolves v2 recorded API fallback as separate metadata and historical path concerns', function() {
+	it('does not turn match-only metadata into a recorded API file target', function() {
 		const match = v2();
 		const fromReserve = program({ id: 'reserve-a', fullTitle: 'Reserve metadata', recorded: undefined });
 		const fallback = resolver.resolveRecordedProgram('recorded-a', [match], {
@@ -574,11 +612,9 @@ describe('Match detail resolver', function() {
 			reserves2: [fromReserve]
 		});
 
-		assert.strictEqual(fallback.source, 'match');
-		assert.strictEqual(fallback.resolution.source, 'reserves2');
-		assert.strictEqual(fallback.program.fullTitle, 'Reserve metadata');
-		assert.strictEqual(fallback.program.recorded, '/fixture/recorded-a.ts');
-		assert.strictEqual(fallback.program._isMatchFallback, true);
+		assert.strictEqual(fallback.source, null);
+		assert.strictEqual(fallback.program, null);
+		assert.strictEqual(fallback.resolution.error, 'recorded-not-found');
 
 		const wrongRecorded = program({ id: 'recorded-a', start: start + 60000, end: start + 1860000 });
 		const conflicted = resolver.resolveRecordedProgram('recorded-a', [match], { recorded: [wrongRecorded] });

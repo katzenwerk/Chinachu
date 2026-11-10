@@ -25,8 +25,8 @@ async function requestFile(range, options = {}) {
 	response.setHeader = (name, value) => { headers[name.toLowerCase()] = String(value); };
 	response.head = value => { status = value; };
 	response.error = value => { status = value; response.end(); };
-	const program = { id: 'fixture', recorded: '/fixture.m2ts' };
-	const matchItems = options.match || [{ key: 'fixture', recordingResult: program }];
+	const program = { id: 'fixture', recorded: '/fixture.m2ts', start: 1760194800000, end: 1760196600000, seconds: 1800, channel: { id: 'channel-a' } };
+	const matchItems = options.match || [{ key: 'channel-a|1760194800000|1800', recordingResult: program }];
 	const context = {
 		request: { method: 'GET', type: 'm2ts', param: { id: 'fixture' }, headers: { range, ...options.headers } },
 		response,
@@ -52,9 +52,9 @@ function deleteRecorded(targetScript, fileExists, options = {}) {
 	const recordedPathJson = '/recorded.json';
 	const thumbnailDir = '/thumbnails';
 	const thumbnailPath = '/thumbnails/fixture.jpg';
-	const program = { id: 'fixture', recorded: recordedPath };
+	const program = { id: 'fixture', recorded: recordedPath, start: 1760194800000, end: 1760196600000, seconds: 1800, channel: { id: 'channel-a' } };
 	const match = options.match || [{
-		key: 'fixture',
+		key: 'channel-a|1760194800000|1800',
 		program: { id: 'fixture', recorded: recordedPath },
 		recordingResult: { id: 'fixture', recorded: recordedPath, snapshot: { id: 'fixture', recorded: recordedPath } }
 	}];
@@ -203,7 +203,7 @@ it('unsatisfiable byte ranges return 416 with file size and no body', async () =
 	assert.equal(empty.headers['content-range'], 'bytes */0');
 });
 
-it('normal downloads, ignored Range forms and match fallback preserve attachment and file contents', async () => {
+it('normal downloads and ignored Range forms preserve attachment and file contents', async () => {
 	for (const range of [undefined, 'bytes=0-1,4-5', 'bytes=oops', 'items=0-1', 'bytes=-']) {
 		const result = await requestFile(range);
 		assert.equal(result.status, 200);
@@ -212,7 +212,7 @@ it('normal downloads, ignored Range forms and match fallback preserve attachment
 		assert.deepEqual(result.body, bytes);
 	}
 	assert.equal((await requestFile('bytes=0-1', { headers: { 'if-range': '"unknown"' } })).status, 200);
-	assert.deepEqual((await requestFile('bytes=0-999', { fallback: true })).body, bytes.subarray(0, 1000));
+	assert.equal((await requestFile('bytes=0-999', { fallback: true })).status, 404);
 	const empty = await requestFile(undefined, { body: Buffer.alloc(0) });
 	assert.equal(empty.status, 200);
 	assert.equal(empty.headers['content-length'], '0');
@@ -220,7 +220,7 @@ it('normal downloads, ignored Range forms and match fallback preserve attachment
 	assert.equal((await requestFile('bytes=0-999', { exists: false })).status, 410);
 });
 
-it('resolves recorded detail and file GET from recorded first, then v2 match and external metadata', async () => {
+it('resolves recorded detail from recorded but does not recover file paths from match', async () => {
 	const direct = requestRecordedDetail();
 	assert.equal(direct.status, 200);
 	assert.equal(direct.body.fullTitle, 'Recorded detail');
@@ -236,31 +236,19 @@ it('resolves recorded detail and file GET from recorded first, then v2 match and
 		channel: { id: 'channel-a', name: 'Channel A', type: 'GR' }
 	};
 	const fallback = requestRecordedDetail({ direct: false, reserves2: [reserve] });
-	assert.equal(fallback.status, 200);
-	assert.equal(fallback.body.fullTitle, 'Reserve detail');
-	assert.equal(fallback.body.recorded, '/fixture.m2ts');
-	assert.equal(fallback.body._recordedSource, 'match');
+	assert.equal(fallback.status, 404);
 
 	const minimal = requestRecordedDetail({ direct: false });
-	assert.equal(minimal.status, 200);
-	assert.equal(minimal.body.fullTitle, 'Minimal match title');
-	assert.equal(minimal.body.recorded, '/fixture.m2ts');
+	assert.equal(minimal.status, 404);
 
 	const v2File = await requestFile('bytes=0-999', {
 		fallback: true,
 		match: [{
-			schemaVersion: 2,
-			key: `channel-a|${start}|1800`,
-			status: 'RECORDED',
-			start,
-			end: start + 1800000,
-			fullTitle: 'Minimal match title',
-			recording: { recordedId: 'fixture', path: '/fixture.m2ts' },
-			deletion: null
+			schemaVersion: 2, key: `channel-a|${start}|1800`, status: 'RECORDED',
+			start, end: start + 1800000, recording: { recordedId: 'fixture', path: '/fixture.m2ts' }, deletion: null
 		}]
 	});
-	assert.equal(v2File.status, 206);
-	assert.deepEqual(v2File.body, bytes.subarray(0, 1000));
+	assert.equal(v2File.status, 404);
 });
 
 it('manual DELETE records its reason only when it actually removes the recording file', () => {
@@ -344,7 +332,7 @@ it('manual DELETE updates only the matching v2 entry and preserves recorded hist
 		assert.equal(deleted.status, 200);
 		const items = deleted.writes['/match.json'];
 		assert.equal(items[0].status, 'RECORDED');
-		assert.deepEqual(items[0].recording, { recordedId: 'fixture', path: '/fixture.m2ts' });
+		assert.deepEqual(items[0].recording, { recordedId: 'fixture' });
 		assert.equal(items[0].deletion.reason, 'manual');
 		assert.ok(items[0].deletion.deletedAt > 0);
 			assert.equal(items[0].program, undefined);
@@ -371,10 +359,10 @@ it('reports a match history save failure after deletion without claiming history
 
 it('stops ambiguous and active targets before deleting the recording file', () => {
 	const duplicate = [{
-		key: 'fixture-a', program: { id: 'fixture', recorded: '/fixture.m2ts' },
+		key: 'channel-a|1760194800000|1800', program: { id: 'fixture', recorded: '/fixture.m2ts' },
 		recordingResult: { id: 'fixture', recorded: '/fixture.m2ts' }
 	}, {
-		key: 'fixture-b', program: { id: 'fixture', recorded: '/fixture.m2ts' },
+		key: 'channel-a|1760194800000|1800', program: { id: 'fixture', recorded: '/fixture.m2ts' },
 		recordingResult: { id: 'fixture', recorded: '/fixture.m2ts' }
 	}];
 	for (const targetScript of [script, recordedProgramScript]) {

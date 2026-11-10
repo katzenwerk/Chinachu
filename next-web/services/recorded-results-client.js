@@ -111,45 +111,10 @@ export async function loadAllRecordedResults(options = {}) {
   return items;
 }
 
-function recordedPath(item) {
-  const candidates = [
-    item?.recording?.path,
-    item?.recordingResult?.path,
-    item?.recordingResult?.recorded,
-    item?.recorded?.path,
-    item?.recorded?.recorded,
-    item?.program?.path,
-    item?.program?.recorded
-  ];
-  return candidates.find(value => typeof value === 'string' && value !== '') || null;
-}
-
-export async function loadMatchRecordingPaths(options = {}) {
-  const response = await fetch('/api/match.json', {
-    method: 'GET',
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
-    signal: options.signal
-  });
-  if (!response.ok) throw new Error(`/api/match.json returned HTTP ${response.status}`);
-  const items = await response.json();
-  if (!Array.isArray(items)) throw new Error('Match ledger API response is invalid');
-  const paths = new Map();
-  items.forEach(item => {
-    const key = typeof item?.key === 'string' && item.key !== '' ? item.key : null;
-    const path = recordedPath(item);
-    if (key !== null && path !== null) paths.set(key, path);
-  });
-  return paths;
-}
-
 export async function loadRecordedResultsWithStoragePaths(options = {}) {
-  const [items, paths] = await Promise.all([
-    loadAllRecordedResults(options),
-    loadMatchRecordingPaths(options)
-  ]);
+  const items = await loadAllRecordedResults(options);
   return items.map(item => ({ ...item,
-    storageRecordingPath: item.recordingPath || paths.get(item.key) || null
+    storageRecordingPath: item.recordingPath || null
   }));
 }
 

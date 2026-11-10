@@ -185,6 +185,16 @@ function detail(overrides = {}) {
 
 test('common programme detail maps reservation, rule and recorded actions without merging phase/file/history state', async function () {
 	const { buildProgramDetailModel } = await programDetailModel();
+	// The WUI must not override a resolved history with a recording whose ID or key conflicts.
+	const clientSource = fs.readFileSync(path.join(__dirname, '../next-web/services/program-detail-client.js'), 'utf8');
+	const identityCode = clientSource.slice(clientSource.indexOf('function validText('), clientSource.indexOf('function selectCurrentProgram('));
+	const context = vm.createContext({});
+	vm.runInContext(identityCode + '\nthis.selectByIdentity = findProgramByIdentity;', context);
+	const candidate = { id: 'current-id', channel: { id: 'channel' }, start: 1000, seconds: 60 };
+	const key = 'channel|1000|60';
+	assert.strictEqual(context.selectByIdentity([candidate], 'old-id', key), null);
+	assert.strictEqual(context.selectByIdentity([candidate], 'current-id', 'different|1000|60'), null);
+	assert.strictEqual(context.selectByIdentity([candidate], 'current-id', key)?.id, 'current-id');
 	const future = buildProgramDetailModel(detail());
 	assert.strictEqual(future.phase.key, 'program');
 	assert.strictEqual(future.actions.reservation, 'reserve');
@@ -266,6 +276,7 @@ test('common programme detail maps reservation, rule and recorded actions withou
 	assert.strictEqual(deleted.media.thumbnailUrl, '/api/recorded/recorded-a/thumbnail.jpg');
 	assert.strictEqual(deleted.actions.deleteRecording, null);
 	assert.strictEqual(deleted.actions.recordedMaintenance, null);
+	assert.strictEqual(deleted.recordingPath?.copyValue ?? null, null);
 	const lostDetail = detail({ program: { id: 'recorded-a', recorded: '/recordings/a.m2ts' },
 		match: { status: 'RECORDED', recording: { recordedId: 'recorded-a', path: '/recordings/a.m2ts' },
 			deletion: { reason: 'recorded-missing' }, fileMissing: { recordedId: 'recorded-a', path: '/recordings/a.m2ts', checkedAt: Date.now() } },

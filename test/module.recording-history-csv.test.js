@@ -106,7 +106,7 @@ test('monthly CSV is activation-bounded, classified, escaped, immutable, and ide
 		assert.strictEqual(rows[2][5], '容量不足');
 		assert.ok(!original.includes('canceled'));
 		assert.ok(!original.includes('/recorded/old.m2ts'));
-		assert.strictEqual(rows[5][6], '/recorded/active.m2ts');
+		assert.strictEqual(rows[5][6], ''); // No recorded.json row; match-only path is not a fallback.
 
 		options.recordedList = [active];
 		const recovery = history.exportHistory(options);

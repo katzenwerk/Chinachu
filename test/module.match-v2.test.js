@@ -57,7 +57,7 @@ describe('Match v2 writer and migration', function () {
 		const future = { ...base, id: 'future', start: nowMs + 3600000, end: nowMs + 5400000 };
 		const missed = { ...base, id: 'missed', channel: { ...base.channel, id: 'channel-missed' } };
 		const skipped = { ...base, id: 'skipped', channel: { ...base.channel, id: 'channel-skip' }, isSkip: true };
-		const recorded = { ...base, recorded: '/fixture/a.m2ts', recordedDurationSeconds: 1700, savedTsAnalysis: { schemaVersion: 1, status: 'complete' } };
+		const recorded = { ...base, recorded: '/fixture/a.m2ts', recordedDurationSeconds: 1700, savedTsAnalysis: { schemaVersion: 1, status: 'complete', registeredPath: '/fixture/a.m2ts', file: { path: '/fixture/a.m2ts' } } };
 		const untracked = {
 			...base,
 			id: 'recorded-b',
@@ -87,10 +87,11 @@ describe('Match v2 writer and migration', function () {
 			assert.equal(entry.recordingResult, undefined);
 			assert.equal(entry.reservationMeta, undefined);
 			assert.equal(entry.matchMeta, undefined);
+			assert.equal(entry.recording?.path, undefined);
 		});
 		const saved = persisted.find(entry => entry.recording?.recordedId === 'recorded-a');
 		assert.equal(saved.recordedDurationSeconds, recorded.recordedDurationSeconds);
-		assert.deepStrictEqual(saved.savedTsAnalysis, recorded.savedTsAnalysis);
+		assert.deepStrictEqual(saved.savedTsAnalysis, { schemaVersion: 1, status: 'complete', file: { path: '/fixture/a.m2ts' } });
 		assert.equal(saved.ruleUid, 'rule-a');
 		assert.equal(results.find(entry => entry.recording?.recordedId === 'recorded-b').ruleUid, 'rule-b');
 	});
@@ -113,12 +114,14 @@ describe('Match v2 writer and migration', function () {
 		assert.equal(matching.mergeOldNew(old, sameWithoutReservation).status, 'RECORDED');
 		assert.equal(matching.mergeOldNew(old, replaced).deletion, null);
 		assert.equal(matching.mergeOldNew(v2({ ruleUid: 'rule-old' }), v2({ ruleUid: null })).ruleUid, 'rule-old');
-		const fact = { recordedId: same.recording.recordedId, path: same.recording.path, checkedAt: nowMs };
+		const fact = { recordedId: same.recording.recordedId, checkedAt: nowMs };
 		const lost = v2({ fileMissing: fact, deletion: { deletedAt: null, reason: 'recorded-missing' } });
 		const retained = matching.mergeOldNew(lost, same, null, null, { recordedReadOk: true });
 		assert.deepStrictEqual(retained.fileMissing, fact); // Restored recorded.json is not a file discovery.
 		assert.equal(retained.deletion, null);
 		assert.deepStrictEqual(matchV2.toV2Entry(lost).fileMissing, fact);
+		assert.deepStrictEqual(matchV2.toV2Entry(v2({ recording: { recordedId: 'recorded-a', path: '/legacy/old.m2ts' } })).recording,
+			{ recordedId: 'recorded-a' });
 		assert.deepStrictEqual(matchV2.toV2Entry(v2({ recording: null, fileMissing: fact })).fileMissing, fact);
 		assert.equal(matching.mergeOldNew(lost, replaced, null, null, { recordedReadOk: true }).fileMissing, undefined);
 		for (const reason of ['manual', 'storage-low']) {

@@ -25,8 +25,10 @@ function findProgram(programs, id) {
 }
 
 function findProgramByIdentity(programs, id, key) {
+  if (id === null && key === null) return null;
   return (Array.isArray(programs) ? programs : []).find(program =>
-    (id !== null && programIds(program).includes(id)) || (key !== null && canonicalProgramKey(program) === key)) || null;
+    (id === null || programIds(program).includes(id)) &&
+    (key === null || canonicalProgramKey(program) === key)) || null;
 }
 
 function canonicalProgramKey(program) {
@@ -183,25 +185,25 @@ export async function loadProgramDetail({ key = null, id = null, signal } = {}) 
   key = validText(key);
   id = validText(id);
   if (key !== null) {
-    const [resolved, recording, reserves, recorded, scheduled, rules] = await Promise.all([
+    const [resolved, recording, reserves, scheduled, rules] = await Promise.all([
       loadResolvedMatch(key, signal),
       loadResource('recording'),
       loadResource('reserves'),
-      loadResource('recorded'),
       id === null ? Promise.resolve(null) : loadProgramById(id, signal),
       loadRules()
     ]);
     const candidates = {
       recording: findProgramByIdentity(recording, id, key),
       reserves: findProgramByIdentity(reserves, id, key),
-      recorded: findProgramByIdentity(recorded, id, key),
+      // The API resolver already verifies recorded ID and canonical key.
+      recorded: resolved.resolution?.source === 'recorded' ? resolved.program : null,
       schedule: scheduled && canonicalProgramKey(scheduled) === key ? scheduled : null
     };
     const current = selectCurrentProgram(candidates, resolved.match.status);
     return {
       ...resolved,
       program: current ? current[1] : resolved.program,
-      currentSource: current ? current[0] : null,
+      currentSource: current ? current[0] : resolved.resolution?.source === 'recorded' ? 'recorded' : null,
       historyAmbiguous: false,
       reserves,
       rules
@@ -231,6 +233,12 @@ export async function loadProgramDetail({ key = null, id = null, signal } = {}) 
     catch (error) { if (error?.code !== 'not-found') throw error; }
     if (resolved !== null) {
       const selected = selectCurrentProgram(candidates, resolved.match.status);
+      const recordedId = validText(resolved.match?.recording?.recordedId || resolved.match?.fileMissing?.recordedId);
+      if (selected?.[0] === 'recorded' && recordedId !== null && validText(selected[1]?.id) !== recordedId) {
+        // An old history must not be coupled with a different recorded file.
+        return { match: null, program: selected[1], resolution: null, currentSource: 'recorded',
+          historyAmbiguous: false, reserves, rules };
+      }
       return {
         ...resolved,
         program: selected[1],

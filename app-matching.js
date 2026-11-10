@@ -398,23 +398,9 @@ function hasRecordedEvidence(entry) {
 	var recordingResult = entry && entry.recordingResult;
 	var recording = entry && entry.recording;
 
-	if (recording && typeof recording === "object") {
-		if (!!recording.path || !!recording.recordedId) {
-			return true;
-		}
-	}
-
-	if (recorded && typeof recorded === "object") {
-		if (!!recorded.path || !!recorded.recorded || safeInt(recorded.start, 0) > 0) {
-			return true;
-		}
-	}
-
-	if (recordingResult && typeof recordingResult === "object") {
-		if (!!recordingResult.path || !!recordingResult.recorded || !!recordingResult.id || !!recordingResult.recordedId) {
-			return true;
-		}
-	}
+	if (recording && typeof recording === "object" && !!recording.recordedId) return true;
+	if (recorded && typeof recorded === "object" && (recorded.id || recorded.recordedId || safeInt(recorded.start, 0) > 0)) return true;
+	if (recordingResult && typeof recordingResult === "object" && (recordingResult.id || recordingResult.recordedId)) return true;
 
 	return false;
 }
@@ -427,26 +413,6 @@ function buildRecdFlg(hasRecorded, hasReserve, isSkip, exactMatch, nearMatch) {
 		exactMatch: !!exactMatch,
 		nearMatch: !!nearMatch
 	};
-}
-
-function getRecordingPath(entry) {
-	var recordingResult = entry && entry.recordingResult;
-	var recorded = entry && entry.recorded;
-	var recording = entry && entry.recording;
-
-	if (recording && typeof recording === "object") {
-		return recording.path || "";
-	}
-
-	if (recordingResult && typeof recordingResult === "object") {
-		return recordingResult.path || recordingResult.recorded || "";
-	}
-
-	if (recorded && typeof recorded === "object") {
-		return recorded.path || recorded.recorded || "";
-	}
-
-	return "";
 }
 
 function isRecordedStatus(status) {
@@ -519,46 +485,12 @@ function mergeOldNew(oldEntry, newEntry, logger, config, options) {
 	}
 
 	if (isRecordedStatus(oldEntry.status) && isRecordedStatus(newEntry.status)) {
-		var oldNormalized = matchDetailResolver.normalizeMatchEntry(oldEntry);
-		var oldPath = getRecordingPath(oldEntry);
-		var newPath = getRecordingPath(newEntry);
-		var oldIsTemp = isTemporaryRecordingPath(oldPath, config);
-		var newIsTemp = isTemporaryRecordingPath(newPath, config);
-		var oldIsFinal = typeof oldPath === "string" && oldPath && !oldIsTemp;
-		var newIsFinal = typeof newPath === "string" && newPath && !newIsTemp;
-
-		if (oldIsFinal && newIsTemp) {
-			if (logger) {
-				logger("KEEP_FINAL_RECORDED_PATH: " + oldPath + " over " + newPath);
-			}
-			if (canRecoverRecordedMissing(oldEntry, newEntry, options)) {
-				return Object.assign({}, oldEntry, { deletion: null });
-			}
-			return oldEntry;
-		}
-
-		if (oldPath !== newPath && newIsFinal && logger) {
-			logger("UPDATE_RECORDED_PATH: " + oldPath + " -> " + newPath);
-		}
-
-		if (oldNormalized.deletion && oldNormalized.deletion.reason === "recorded-missing" &&
-			isClearlyDifferentRecording(oldEntry, newEntry)) {
-			return oldEntry;
-		}
-
 		if (!isClearlyDifferentRecording(oldEntry, newEntry)) {
 			var continuedEntry = preserveDeletion(oldEntry, newEntry, options);
 			var oldMissing = matchDetailResolver.normalizeMatchEntry(oldEntry).fileMissing;
-			if (oldMissing && matchDetailResolver.sameRecordingTarget(oldMissing, matchDetailResolver.normalizeMatchEntry(continuedEntry).recording)) {
+			if (oldMissing && isSameRecordedEntry(oldEntry, continuedEntry)) {
 				continuedEntry = Object.assign({}, continuedEntry, { fileMissing: cloneJson(oldMissing) });
 			} else { delete continuedEntry.fileMissing; }
-			if (oldPath && oldPath === newPath) {
-				['savedTsAnalysis', 'recordedDurationSeconds'].forEach(function(field) {
-					if (typeof continuedEntry[field] === 'undefined' && typeof oldEntry[field] !== 'undefined') {
-						continuedEntry[field] = cloneJson(oldEntry[field]);
-					}
-				});
-			}
 			if (Number(continuedEntry.schemaVersion) === matchV2.SCHEMA_VERSION &&
 				oldEntry.status === "RECORDED" && continuedEntry.status === "RECORDED_UNTRACKED") {
 				continuedEntry = Object.assign({}, continuedEntry, { status: "RECORDED" });
@@ -968,8 +900,7 @@ function buildMatchItem(status, key, recorded, reserve, channel, hasRecorded, ha
 		seconds = safeInt(startSource.seconds, 0);
 		end = safeInt(startSource.end, 0) || (start && seconds ? start + seconds * 1000 : 0);
 		recording = hasRecorded ? {
-			recordedId: recorded && (recorded.id || recorded.recordedId || recorded.origId || recorded.programId) || null,
-			path: recorded && (recorded.recorded || recorded.path) || null
+			recordedId: recorded && (recorded.id || recorded.recordedId || recorded.origId || recorded.programId) || null
 		} : null;
 
 		return {
@@ -1249,7 +1180,7 @@ function buildMatchLedger(options) {
 	});
 
 	var results = Object.keys(mergedByKey).map(function (key) {
-		return mergedByKey[key];
+		return matchDetailResolver.withoutRecordingPaths(mergedByKey[key]);
 	}).filter(function (entry) {
 		return getMatchEntryStartMs(entry) >= keepCutoffMs;
 	}).sort(function (a, b) {

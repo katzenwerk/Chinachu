@@ -767,7 +767,7 @@ describe('Operator low-storage handling', function() {
 
 		assert.strictEqual(storageLow.markMatchRecordingDeleted(
 			[target, other],
-			[{ id: 'recorded-a', recorded: '/recorded/target.m2ts' }],
+			[{ id: 'recorded-a', recorded: '/recorded/target.m2ts', start: 1760194800000, seconds: 1800, channel: { id: 'channel-a' } }],
 			'/recorded/target.m2ts',
 			deletedAt,
 			'storage-low'
@@ -786,7 +786,7 @@ describe('Operator low-storage handling', function() {
 	it('does not update ambiguous deletion history targets', function() {
 		const entries = [0, 1].map(index => ({
 			schemaVersion: 2,
-			key: `channel-${index}|1760194800000|1800`,
+			key: 'channel-a|1760194800000|1800',
 			status: 'RECORDED',
 			start: 1760194800000,
 			end: 1760196600000,
@@ -797,7 +797,7 @@ describe('Operator low-storage handling', function() {
 
 		assert.strictEqual(storageLow.markMatchRecordingDeleted(
 			entries,
-			[{ id: 'recorded-a', recorded: '/recorded/target.m2ts' }],
+			[{ id: 'recorded-a', recorded: '/recorded/target.m2ts', start: 1760194800000, seconds: 1800, channel: { id: 'channel-a' } }],
 			'/recorded/target.m2ts',
 			1760281200000,
 			'storage-low'
