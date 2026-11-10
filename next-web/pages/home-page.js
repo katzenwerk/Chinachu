@@ -344,6 +344,10 @@ function mountReservationSection(container, isActive, onContextMenu) {
   let forceQueued = false;
   let displayBoundaryTimer = null;
   const timelineRenderer = createReservationTimelineRenderer();
+  const reservationCards = new Map();
+  const reservationGrid = document.createElement('div');
+  reservationGrid.className = 'reservation-grid';
+  let hasReservationSnapshot = false;
 
   timelineRenderer.element.addEventListener('click', event => {
     const link = event.target.closest?.('a[href*="#program?"]');
@@ -371,7 +375,8 @@ function mountReservationSection(container, isActive, onContextMenu) {
   content.addEventListener('keydown', keyboardContext);
 
   function renderPrograms(programs) {
-    programHover.close();
+    hasReservationSnapshot = true;
+    panel.querySelector('[data-refresh-error]')?.remove();
     latestPrograms = programs;
     const now = Date.now();
     const options = {
@@ -396,28 +401,31 @@ function mountReservationSection(container, isActive, onContextMenu) {
       remaining -= items.length;
     }
     timelineRenderer.render(visibleGroups);
+    const keys = new Set(view.items.map(model => model.key));
+    for (const [key, card] of reservationCards) {
+      if (keys.has(key)) continue;
+      card.dispose(); card.element.remove(); reservationCards.delete(key);
+    }
     if (view.total === 0) {
-      content.innerHTML = '<p class="home-section-message">今後の予約はありません</p>';
+      if (content.firstElementChild?.textContent !== '今後の予約はありません') content.innerHTML = '<p class="home-section-message">今後の予約はありません</p>';
       return;
     }
-    const grid = document.createElement('div');
-    grid.className = 'reservation-grid';
+    let cursor = reservationGrid.firstChild;
     view.items.forEach(model => {
-      const card = createReservationCard(model, {
+      let card = reservationCards.get(model.key);
+      if (!card) {
+        card = createReservationCard(model, {
         onOpenDetail: selected => {
           const query = new URLSearchParams(selected.detailUrl?.split('?')[1] || '');
           openProgramDetailDialog({ id: query.get('id'), onChanged: () => requestRefresh(true) });
         }
-      });
-      card.dataset.reservationKey = model.key;
-      grid.append(card);
+        });
+        reservationCards.set(model.key, card);
+      } else card.update(model);
+      if (card.element === cursor) cursor = cursor.nextSibling;
+      else reservationGrid.insertBefore(card.element, cursor);
     });
-    const currentGrid = content.querySelector(':scope > .reservation-grid');
-    if (timelineRenderer.element.parentElement === content && currentGrid !== null) {
-      currentGrid.replaceWith(grid);
-    } else {
-      content.replaceChildren(grid, timelineRenderer.element);
-    }
+    if (reservationGrid.parentElement !== content) content.replaceChildren(reservationGrid, timelineRenderer.element);
   }
 
   function scheduleDisplayBoundary() {
@@ -432,6 +440,14 @@ function mountReservationSection(container, isActive, onContextMenu) {
   }
 
   function renderError(error) {
+    if (hasReservationSnapshot) {
+      const notice = panel.querySelector('[data-refresh-error]') || document.createElement('p');
+      notice.dataset.refreshError = '';
+      notice.setAttribute('role', 'status');
+      notice.textContent = `予約情報を更新できませんでした（前回の表示を保持）: ${error.message || error}`;
+      if (!notice.isConnected) panel.append(notice);
+      return;
+    }
     latestPrograms = [];
     window.clearTimeout(displayBoundaryTimer);
     const message = document.createElement('div');
@@ -484,6 +500,7 @@ function mountReservationSection(container, isActive, onContextMenu) {
 
   return () => {
     disposed = true;
+    reservationCards.forEach(card => card.dispose());
     unsubscribe();
     unsubscribeStorage();
     content.removeEventListener('contextmenu', openContext);
@@ -529,6 +546,7 @@ function mountRecentRecordedSection(container, isActive, onContextMenu) {
   }
 
   function renderItems(items) {
+    panel.querySelector('[data-refresh-error]')?.remove();
     const models = buildRecentRecordedModels(items, RECENT_RECORDED_DISPLAY_LIMIT);
     contextItems = new Map(items.filter(item => typeof item?.key === 'string').map(item => [item.key, item]));
     const activeKeys = new Set(models.map(model => model.key));
@@ -561,15 +579,29 @@ function mountRecentRecordedSection(container, isActive, onContextMenu) {
     const currentKeys = Array.from(grid.children).map(card => card.dataset.recordedKey);
     const orderChanged = currentKeys.length !== models.length ||
       currentKeys.some((key, index) => key !== models[index].key);
-    if (orderChanged) grid.append(...elements);
+    if (orderChanged) {
+      let cursor = grid.firstChild;
+      for (const element of elements) {
+        if (element === cursor) cursor = cursor.nextSibling;
+        else grid.insertBefore(element, cursor);
+      }
+    }
     if (models.length === 0) {
-      content.innerHTML = '<p class="home-section-message">再生可能な録画結果はありません</p>';
+      if (content.firstElementChild?.textContent !== '再生可能な録画結果はありません') content.innerHTML = '<p class="home-section-message">再生可能な録画結果はありません</p>';
     } else if (!grid.isConnected) {
       content.replaceChildren(grid);
     }
   }
 
   function renderError(error) {
+    if (grid.isConnected) {
+      const notice = panel.querySelector('[data-refresh-error]') || document.createElement('p');
+      notice.dataset.refreshError = '';
+      notice.setAttribute('role', 'status');
+      notice.textContent = `録画結果を更新できませんでした（前回の表示を保持）: ${error.message || error}`;
+      if (!notice.isConnected) panel.append(notice);
+      return;
+    }
     const message = document.createElement('div');
     message.className = 'recording-list-error';
     message.innerHTML = '<p>録画結果を取得できませんでした</p><small></small><button class="button" type="button">再試行</button>';

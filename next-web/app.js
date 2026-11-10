@@ -14,8 +14,8 @@ import { renderSearchPage } from './pages/search-page.js';
 import { renderSettingsPage } from './pages/settings-page.js';
 import { renderRulesPage } from './pages/rules-page.js';
 import { renderSeriesPage } from './pages/series-page.js';
-import { loadResource } from './services/api-client.js';
-import { subscribeMatchNotifications, subscribeRealtimeConnection, subscribeReservationNotifications, subscribeRecordedNotifications } from './services/realtime-client.js';
+import { invalidateResources, loadResource } from './services/api-client.js';
+import { refreshRealtimeData, subscribeMatchNotifications, subscribeRealtimeConnection, subscribeReservationNotifications, subscribeRecordedNotifications } from './services/realtime-client.js';
 import { subscribeRecordingData } from './services/recording-store.js';
 import { loadAutoTsStatus, subscribeAutoTsStatus } from './services/auto-ts-analysis-client.js';
 import { loadRecordedResultsCounts } from './services/recorded-results-client.js';
@@ -233,7 +233,10 @@ const unsubscribeWuiConnection = subscribeWuiConnection(connectionState => {
     window.location.reload();
     return;
   }
-  if (routeReady && event.kind === 'reconnected') route();
+  if (routeReady && event.kind === 'reconnected') {
+    invalidateResources();
+    refreshRealtimeData();
+  }
 });
 
 let currentPageName = null;

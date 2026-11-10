@@ -70,7 +70,7 @@ function savedTsCardSummary(saved) {
   if (!result) return null;
   const info = savedTsResultInfo(saved);
   const parts = [];
-  for (const [key, label] of [['ccErrorEvents', 'CC異常'], ['pcrGapEvents', '時間飛び'],
+  for (const [key, label] of [['ccErrorEvents', 'DROP疑い'], ['pcrGapEvents', '時間飛び'],
     ['teiPackets', 'TEI'], ['syncErrorEvents', '同期異常'], ['invalidHeaderPackets', 'ヘッダー異常'], ['pcrBackwards', 'PCR逆行']]) {
     if (Number.isFinite(result[key]) && result[key] > 0) parts.push(`${label} ${result[key].toLocaleString('ja-JP')}件`);
   }
@@ -163,6 +163,7 @@ export function createRecordedCard(initialModel, { onWatch, onOpenDetail } = {})
   const play = article.querySelector('.recorded-card-play');
   const detailLink = article.querySelector('.recorded-card-detail');
   const warning = article.querySelector('.recorded-result-warning');
+  applyResultWarningTooltip(warning, '');
   let currentModel = initialModel;
   const programHover = createProgramHover(article);
   article.querySelectorAll('.recorded-card-title-overlay,.mobile-card-title,.recorded-card-detail').forEach(target => setProgramHover(target, () => currentModel.hover));
@@ -203,16 +204,32 @@ export function createRecordedCard(initialModel, { onWatch, onOpenDetail } = {})
     detailLink.setAttribute('aria-label', `${model.title}の詳細`);
     const observations = (model.recordingWarnings || []).filter(item => item.key === 'drop');
     if (model.savedTsSummary) observations.push({ ...model.savedTsSummary, key: 'saved-ts' });
-    article.querySelector('.recorded-card-observations').replaceChildren(...observations.map(item => {
+    const observationHost = article.querySelector('.recorded-card-observations');
+    const existingObservations = new Map(Array.from(observationHost.children).map(tag => [tag.dataset.observationKey, tag]));
+    const observationElements = observations.map(item => {
+      const signature = JSON.stringify(item);
+      const retained = existingObservations.get(item.key);
+      if (retained?.dataset.observationSignature === signature) return retained;
       const tag = document.createElement('span'); tag.textContent = item.label;
+      tag.dataset.observationKey = item.key;
+      tag.dataset.observationSignature = signature;
       if (item.key === 'saved-ts') tag.className = `recorded-card-analysis${item.findings ? ' is-warning' : ''}`;
       applyResultWarningTooltip(tag, item.description || item.label); return tag;
-    }));
+    });
+    const wantedObservations = new Set(observationElements);
+    for (const tag of Array.from(observationHost.children)) if (!wantedObservations.has(tag)) tag.remove();
+    let observationCursor = observationHost.firstChild;
+    for (const tag of observationElements) {
+      if (tag === observationCursor) observationCursor = observationCursor.nextSibling;
+      else observationHost.insertBefore(tag, observationCursor);
+    }
     const otherWarnings = (model.recordingWarnings || []).filter(item => !['drop', 'saved-ts'].includes(item.key));
     const warningLabels = otherWarnings.map(item => item.label);
     const warningDescriptions = otherWarnings.map(item => item.description || item.label);
     warning.hidden = warningLabels.length === 0;
-    warning.setAttribute('aria-label', warningLabels.length === 0 ? '' : `録画異常。${warningLabels.join('。')}`);
+    warning.classList.toggle('is-deleted', model.fileState === 'deleted');
+    warning.querySelector('[aria-hidden="true"]').textContent = model.fileState === 'deleted' ? '✕' : '⚠';
+    warning.setAttribute('aria-label', warningLabels.length === 0 ? '' : warningDescriptions.join('\n'));
     warning.querySelector('.storage-warning-tip').textContent = warningDescriptions.join('\n');
     if (warningLabels.length === 0) warning.removeAttribute('tabindex');
     else warning.tabIndex = 0;

@@ -93,6 +93,15 @@ export function subscribeRecordingNotifications(listener) {
   };
 }
 
+// A temporary disconnect needs fresh data, not a new route and page instance.
+export function refreshRealtimeData() {
+  const listeners = new Set([
+    ...recordingListeners, ...reservationListeners, ...recordedListeners,
+    ...matchListeners, ...scheduleListeners
+  ]);
+  listeners.forEach(listener => listener());
+}
+
 export function subscribeSeriesNotifications(listener) {
   seriesListeners.add(listener);
   connect();

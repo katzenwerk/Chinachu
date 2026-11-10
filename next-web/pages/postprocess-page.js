@@ -51,7 +51,7 @@ function status(value, label) {
   const span = node('span', `postprocess-state is-${value}`, label);
   return span;
 }
-function dataTable(headers, rows) {
+function dataTable(headers, rows, keys = []) {
   const wrap = node('div', 'postprocess-table-scroll');
   const table = node('table', 'postprocess-table');
   const head = node('thead');
@@ -59,8 +59,9 @@ function dataTable(headers, rows) {
   for (const name of headers) heading.append(node('th', '', name));
   head.append(heading);
   const body = node('tbody');
-  for (const cells of rows) {
+  for (const [index, cells] of rows.entries()) {
     const row = node('tr');
+    row.dataset.taskKey = keys[index] || String(index);
     for (const value of cells) {
       const cell = node('td');
       if (value instanceof Node) cell.append(value);
@@ -90,7 +91,7 @@ function renderTasks(data) {
   });
   if (!rows.length) return empty('状態を取得中です');
   const box = node('div');
-  box.append(dataTable(['処理種別', '状態', 'キュー待機', '備考'], rows));
+  box.append(dataTable(['処理種別', '状態', 'キュー待機', '備考'], rows, (data.queues || []).map(item => item.type)));
   const explanation = data.auto?.enabled === false ? '自動TS解析は無効です。' :
     data.auto?.paused ? '自動TS解析は一時停止中です。' :
     '録画や他の処理に支障がないときに、順次解析します。';
@@ -150,7 +151,8 @@ function renderWaiting(data) {
   const rows = running.concat(waiting);
   if (!rows.length) return empty('実行中・待機中のタスクはありません。');
   const box = node('div');
-  box.append(dataTable(['状態', '処理', '対象・内容', '開始／受付'], rows));
+  box.append(dataTable(['状態', '処理', '対象・内容', '開始／受付'], rows,
+    [...(data.running || []), ...(data.waiting || [])].map(item => `${item.type}:${item.id}:${item.startedAt || item.queuedAt}`)));
   if (number(data.queuedTotal) > waiting.length) {
     box.append(node('p', 'postprocess-muted',
       `待機中のほか${number(data.queuedTotal) - waiting.length}件は省略しています。表示順は実行順を保証しません。`));
@@ -170,7 +172,8 @@ function renderCompleted(data) {
     elapsed(item.durationMs),
     completedStatus(item.status)
   ]);
-  return rows.length ? dataTable(['終了', '処理', '対象・内容', '所要', '結果'], rows) :
+  return rows.length ? dataTable(['終了', '処理', '対象・内容', '所要', '結果'], rows,
+    (data.completed || []).map(item => `${item.type}:${item.id}:${item.finishedAt}`)) :
     empty('Operator起動後の完了履歴はまだありません。');
 }
 function tsStatus(value) {
@@ -186,7 +189,7 @@ function renderTsResults(data) {
       item.status === 'SUSPECT' ? `CC ${item.ccErrorEvents}件 / 時間飛び ${item.pcrGapEvents}件` : '異常未検出'));
     return [clock(item.checkedAt), detailLink(item.id, item.title, data.programs), result];
   });
-  return rows.length ? dataTable(['解析', '録画番組', '結果・内容'], rows) :
+  return rows.length ? dataTable(['解析', '録画番組', '結果・内容'], rows, (data.recentTs || []).map(item => String(item.id))) :
     empty('解析結果はまだ記録されていません。');
 }
 
@@ -237,7 +240,7 @@ export function renderPostprocessPage(container) {
         const snapshot = id === 'tasks' ? [data.queues, data.auto?.enabled, data.auto?.paused] :
           id === 'waiting' ? [data.running, data.waiting, data.queuedTotal, data.programs] :
           id === 'completed' ? [data.completed, data.programs] :
-          id === 'results' ? [data.recentTs, data.programs] : data.currentTs;
+          id === 'results' ? [data.recentTs, data.programs] : [data.currentTs, data.auto?.state];
         const signature = JSON.stringify(snapshot);
         if (section.signature === signature) continue;
         const ts = data.currentTs;
@@ -255,10 +258,38 @@ export function renderPostprocessPage(container) {
             continue;
           }
         }
-        const scrollTop = section.content.scrollTop;
-        if (section.content.querySelector('[data-program-hover]:hover')) hover.close();
-        section.content.replaceChildren(section.render(data));
-        section.content.scrollTop = scrollTop;
+        const incoming = section.render(data);
+        const body = section.content.querySelector('tbody');
+        const nextBody = incoming.querySelector('tbody');
+        if (body && nextBody && section.content.querySelector('thead').outerHTML === incoming.querySelector('thead').outerHTML) {
+          const rows = new Map(Array.from(body.children).map(row => [row.dataset.taskKey, row]));
+          const desired = Array.from(nextBody.children).map(row => {
+            const retained = rows.get(row.dataset.taskKey);
+            if (!retained) return row;
+            Array.from(row.children).forEach((cell, index) => {
+              const current = retained.children[index];
+              const comparison = current.cloneNode(true);
+              comparison.querySelectorAll('[aria-describedby="program-hover"]').forEach(target => target.removeAttribute('aria-describedby'));
+              if (comparison.outerHTML !== cell.outerHTML) {
+                if (current.querySelector('[aria-describedby="program-hover"]')) hover.close();
+                current.replaceWith(cell);
+              }
+            });
+            return retained;
+          });
+          const wanted = new Set(desired);
+          for (const row of Array.from(body.children)) if (!wanted.has(row)) row.remove();
+          let cursor = body.firstChild;
+          for (const row of desired) {
+            if (row === cursor) cursor = cursor.nextSibling;
+            else body.insertBefore(row, cursor);
+          }
+          const note = section.content.querySelector('p.postprocess-muted');
+          const nextNote = incoming.querySelector('p.postprocess-muted');
+          if (note && nextNote) { if (note.textContent !== nextNote.textContent) note.textContent = nextNote.textContent; }
+          else if (note) note.remove();
+          else if (nextNote) section.content.firstElementChild.append(nextNote);
+        } else if (section.content.firstElementChild?.outerHTML !== incoming.outerHTML) section.content.replaceChildren(incoming);
         section.signature = signature;
         section.identity = id === 'current' ? identity : '';
       }

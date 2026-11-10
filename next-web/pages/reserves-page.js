@@ -22,6 +22,7 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
   let active = true;
   let models = [];
   let latestPrograms = [];
+  let hasSnapshot = false;
   let storageData = null;
   let storageError = null;
   let storageToken = query.get('storage') || null;
@@ -248,6 +249,14 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
   }
 
   function renderError(error) {
+    if (hasSnapshot) {
+      const notice = page.querySelector('[data-refresh-error]') || document.createElement('p');
+      notice.dataset.refreshError = '';
+      notice.setAttribute('role', 'status');
+      notice.textContent = `予約情報を更新できませんでした（前回の表示を保持）: ${error.message || error}`;
+      if (!notice.isConnected) page.append(notice);
+      return;
+    }
     latestPrograms = [];
     listRenderer.clear();
     window.clearTimeout(displayBoundaryTimer);
@@ -281,6 +290,8 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
           if (!isActive()) return;
           if (generation !== refreshGeneration) continue;
           latestPrograms = programs;
+          hasSnapshot = true;
+          page.querySelector('[data-refresh-error]')?.remove();
           if (seriesSnapshot !== null) {
             seriesTitleIndex = buildSeriesTitleIndex(seriesSnapshot);
           }

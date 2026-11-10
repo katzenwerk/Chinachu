@@ -104,7 +104,7 @@ export function savedTsResultInfo(saved) {
   const parts = [], notes = [];
   if (Number.isFinite(result.ccErrorEvents) && result.ccErrorEvents > 0) {
     parts.push(`CC ${result.ccErrorEvents.toLocaleString('ja-JP')}`);
-    notes.push('保存TSのパケット連続性異常です。件数は欠落パケット数そのものではありません。');
+    notes.push('映像や音声が乱れている可能性があります');
   }
   if (Number.isFinite(result.pcrGapEvents) && result.pcrGapEvents > 0) {
     parts.push('GAPあり'); notes.push('保存TSで検出した時間飛び候補です。発生箇所は解析詳細で確認できます。');
@@ -125,13 +125,13 @@ export function recordedResultWarnings(item) {
     warnings.push(warning('missed', '未録画', '録画されませんでした', 'confirmed', 'danger'));
   }
   if (recordedFileState(item) === 'deleted') {
-    warnings.push(warning('deleted', '削除済み', '録画ファイルは削除済みとして記録されています', 'confirmed', 'muted'));
+    warnings.push(warning('deleted', '削除済み', '削除済みです', 'confirmed', 'danger'));
   } else if (recordedFileState(item) === 'missing') {
     warnings.push(warning('file-missing', '行方不明', '正常に捜索を完了しましたが、録画ファイルが見つかりませんでした。明示的に再捜索できます。', 'confirmed', 'muted'));
   }
   if (item?.deletionKind === 'missing' || item?.deletion?.reason === 'recorded-missing') {
     warnings.push(warning('recorded-unknown', '台帳不整合', item?.fileMissing ? '録画ファイルの行方不明に加え、録画管理情報にも対応する項目がありません。' : '録画管理台帳に対応する項目がありません。', 'confirmed', 'muted'));
-  } else if (recordedStatus(item) && item?.recordingPathMissing === true) {
+  } else if (recordedFileState(item) !== 'deleted' && recordedStatus(item) && item?.recordingPathMissing === true) {
     warnings.push(warning('path-unknown', 'パス不明', '録画ファイルの保存パスが台帳にありません', 'confirmed', 'muted'));
   }
 
@@ -145,7 +145,16 @@ export function recordedResultWarnings(item) {
     warnings.push(warning('recording-abort', '録画中止', description, 'confirmed', 'danger'));
   }
   if (item?.operatorEndLack === true) {
-    warnings.push(warning('end-lack-allowed', '尻切れ許可', '次の録画へ切り替えるため、録画末尾の不足を許可して終了しました', 'confirmed', 'muted'));
+    const recordedEarlySeconds = item.operatorEndLackEarlySeconds == null || item.operatorEndLackEarlySeconds === ''
+      ? null : finiteNonNegative(item.operatorEndLackEarlySeconds);
+    const recordingEnd = finitePositive(item.operatorRecordingEnd);
+    const programEnd = finitePositive(item.end);
+    const earlySeconds = recordedEarlySeconds ?? (recordingEnd !== null && programEnd !== null && recordingEnd < programEnd
+      ? (programEnd - recordingEnd) / 1000 : null);
+    const description = earlySeconds !== null && earlySeconds > 0
+      ? `録画が番組終了予定より${formatRecordingSeconds(earlySeconds, true)}早く終了しました`
+      : '次の録画へ切り替えるため、録画末尾の不足を許可して終了しました';
+    warnings.push(warning('end-lack-allowed', '尻切れ許可', description, 'confirmed', 'muted'));
   }
 
   if (recordedStatus(item)) {

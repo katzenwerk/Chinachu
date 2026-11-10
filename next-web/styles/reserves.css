@@ -78,6 +78,7 @@ html:has(.reserves-page) { min-width: 0; }
 .reservation-list-tag-items { display: contents; }
 .recorded-result-warning { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; color: var(--warning); font-size: 15px; line-height: 1; }
 .recorded-result-warning[hidden] { display: none; }
+.recorded-result-warning.is-deleted { color: var(--danger); }
 .reservation-list-tag { display: inline-flex; align-items: center; min-height: 23px; padding: 2px 8px; border: 1px solid transparent; border-radius: 999px; background: var(--brand-soft); color: var(--brand-strong); font-size: 11px; white-space: nowrap; }
 :root[data-theme="dark"] .reservation-list-tag { color: #dff3e6; }
 .reservation-list-tag.is-skip { border-color: var(--warning-border); background: color-mix(in srgb,var(--warning) 12%,transparent); color: var(--warning); }

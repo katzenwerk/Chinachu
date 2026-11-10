@@ -40,7 +40,7 @@ async function requestJson(name) {
 
 export function loadResource(name, options = {}) {
   resourcePath(name);
-  if (options.force === true) values.delete(name);
+  if (options.force === true) invalidateResource(name);
   if (values.has(name)) return Promise.resolve(values.get(name));
   const revision = resourceRevision(name);
   const current = pending.get(name);

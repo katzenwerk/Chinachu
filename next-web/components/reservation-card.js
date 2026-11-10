@@ -3,6 +3,8 @@ import { createChannelLogo } from './channel-logo.js';
 import { setProgramHover } from './program-hover.js';
 
 export function createReservationCard(model, { onOpenDetail } = {}) {
+  let currentModel = model;
+  let signature = null;
   const article = document.createElement('article');
   article.className = 'reservation-card';
   article.innerHTML = `
@@ -22,14 +24,24 @@ export function createReservationCard(model, { onOpenDetail } = {}) {
     tooltip: model.channelTooltip
   }, { variant: 'thumbnail', focusable: true });
   article.querySelector('.reservation-card-logo-slot').replaceWith(channelLogo.element);
-  article.querySelector('.reservation-datetime span').textContent = model.dateText;
-  article.querySelector('time').textContent = model.timeText;
   const title = article.querySelector('.reservation-card-title');
-  title.textContent = model.title;
-  setProgramHover(title, model.hover);
-  title.disabled = model.detailUrl === null || typeof onOpenDetail !== 'function';
-  title.addEventListener('click', () => onOpenDetail?.(model));
-  applyStorageWarning(article.querySelector('.reservation-storage-warning'), model.storageNotice);
-  article.querySelector('.reservation-kind').textContent = model.reservationTypeText;
-  return article;
+  setProgramHover(title, () => currentModel.hover);
+  title.addEventListener('click', () => onOpenDetail?.(currentModel));
+  function update(next) {
+    currentModel = next;
+    const nextSignature = JSON.stringify(next);
+    if (signature === nextSignature) return;
+    signature = nextSignature;
+    article.dataset.reservationKey = next.key;
+    channelLogo.update({ url: next.channelLogoUrl, name: next.channelName,
+      fallbackText: next.channelFallbackText, tooltip: next.channelTooltip });
+    article.querySelector('.reservation-datetime span').textContent = next.dateText;
+    article.querySelector('time').textContent = next.timeText;
+    title.textContent = next.title;
+    title.disabled = next.detailUrl === null || typeof onOpenDetail !== 'function';
+    applyStorageWarning(article.querySelector('.reservation-storage-warning'), next.storageNotice);
+    article.querySelector('.reservation-kind').textContent = next.reservationTypeText;
+  }
+  update(model);
+  return { element: article, update, dispose: () => channelLogo.dispose() };
 }

@@ -13,6 +13,9 @@ export function mountRecordingList(container, {
   onContextMenu = null
 } = {}) {
   const cards = new Map();
+  const grid = document.createElement('div');
+  grid.className = 'recording-grid';
+  let hasSnapshot = false;
   let latestPrograms = [];
   let disposed = false;
   let storageData = null;
@@ -25,6 +28,8 @@ export function mountRecordingList(container, {
   }
 
   function renderPrograms(programs) {
+    hasSnapshot = true;
+    container.querySelector('[data-refresh-error]')?.remove();
     latestPrograms = programs;
     const models = buildRecordingViewModels(programs, Date.now(), { storageData });
     contextModels.clear();
@@ -37,15 +42,15 @@ export function mountRecordingList(container, {
     cards.forEach((card, key) => {
       if (activeKeys.has(key)) return;
       card.dispose();
+      card.element.remove();
       cards.delete(key);
     });
     if (models.length === 0) {
-      if (compactEmpty) container.replaceChildren();
-      else container.innerHTML = '<p class="home-section-message">現在録画中の番組はありません</p>';
+      if (compactEmpty) { if (container.childNodes.length) container.replaceChildren(); }
+      else if (container.firstElementChild?.textContent !== '現在録画中の番組はありません') container.innerHTML = '<p class="home-section-message">現在録画中の番組はありません</p>';
       return;
     }
-    const grid = document.createElement('div');
-    grid.className = 'recording-grid';
+    let cursor = grid.firstChild;
     models.forEach(model => {
       let card = cards.get(model.key);
       if (!card) {
@@ -56,12 +61,21 @@ export function mountRecordingList(container, {
         card.update(model);
       }
       if (typeof onContextMenu === 'function') card.element.dataset.homeRecordingKey = model.key;
-      grid.append(card.element);
+      if (card.element === cursor) cursor = cursor.nextSibling;
+      else grid.insertBefore(card.element, cursor);
     });
-    container.replaceChildren(grid);
+    if (grid.parentElement !== container) container.replaceChildren(grid);
   }
 
   function renderError(error) {
+    if (hasSnapshot) {
+      const notice = container.querySelector('[data-refresh-error]') || document.createElement('p');
+      notice.dataset.refreshError = '';
+      notice.setAttribute('role', 'status');
+      notice.textContent = `録画情報を更新できませんでした（前回の表示を保持）: ${error.message || error}`;
+      if (!notice.isConnected) container.append(notice);
+      return;
+    }
     latestPrograms = [];
     clearCards();
     onCountChange(null, 'error');
@@ -84,6 +98,7 @@ export function mountRecordingList(container, {
       return;
     }
     onCountChange(null, 'loading');
+    if (hasSnapshot) return;
     container.innerHTML = '<p class="home-section-message">録画情報を取得しています</p>';
   }
 

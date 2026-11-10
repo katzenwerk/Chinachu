@@ -1,6 +1,6 @@
 import { createChannelLogo } from '../components/channel-logo.js';
 import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
-import { appendMobileContextButton } from '../components/mobile-layout.js';
+import { appendMobileContextButton, headerCompactMedia } from '../components/mobile-layout.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { openSeriesBulkCorrectionDialog, openSeriesCorrectionDialog } from '../components/series-correction-dialog.js';
 import { createSeriesContextMenu } from '../components/series-context-menu.js';
@@ -18,7 +18,7 @@ import {
 const SIZE_KEY = 'chinachu.next.series.cardSize';
 const COLUMNS_KEY = 'chinachu.next.series.columns';
 const VIEW_KEY = 'chinachu.next.series.view';
-const TABS = new Set(['all', 'reservations', 'recordings', 'attention']);
+const TABS = new Set(['all', 'attention']);
 
 const dateTimeFormatter = new Intl.DateTimeFormat('ja-JP', {
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
@@ -133,7 +133,7 @@ function makeTabs(active) {
   const tabs = document.createElement('div');
   tabs.className = 'series-tabs';
   tabs.setAttribute('role', 'tablist');
-  for (const [key, label] of [['all', 'すべて'], ['recordings', '録画済み'], ['reservations', '予約'], ['attention', '要確認']]) {
+  for (const [key, label] of [['all', '一覧'], ['attention', '要確認']]) {
     const item = link(`#series?tab=${key}`, label);
     item.setAttribute('role', 'tab');
     item.setAttribute('aria-selected', String(active === key));
@@ -252,7 +252,7 @@ function makeHiddenSeriesButton(dialog, count) {
 
 function makeHeaderActions({
   tab, viewMode, availability, dialog, hiddenDialog, hiddenSeries = [], searchControl = null,
-  onViewChange, detailControls = []
+  onViewChange, detailControls = [], selectionControl = null
 }) {
   const actions = document.createElement('div');
   actions.className = 'series-header-toolbar';
@@ -260,6 +260,7 @@ function makeHeaderActions({
     const primary = document.createElement('div');
     primary.className = 'series-header-primary';
     primary.append(makeTabs(tab));
+    if (tab === 'attention' && selectionControl) primary.append(selectionControl);
     if (tab !== 'attention') primary.append(makeViewSwitch(viewMode, onViewChange));
 
     const secondary = document.createElement('div');
@@ -348,14 +349,7 @@ function seriesListMeta(item, tab) {
   if (tab === 'attention') return `${item.label} · ${item.eventCount ?? item.events.length}件${item.progLookupLabel ? ` · ${item.progLookupLabel}` : ''}${item.candidateTids?.length ? ` · TID候補 ${item.candidateTids.join(', ')}` : ''}`;
   const recordings = item.counts.currentRecordings;
   const missing = item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : '';
-  if (tab === 'reservations') {
-    return `${seriesEpisodeSummary(item)} · ${item.counts.reservations}件予約 · 録画 ${recordings}件${missing} · 次回 ${dateTime(item.nextReservationAt)}${item.nextReservationChannel ? ` · ${item.nextReservationChannel}` : ''}`;
-  }
-  if (tab === 'recordings') {
-    return `${seriesEpisodeSummary(item)} · ${recordings}件録画 · 予約 ${item.counts.reservations}件 · 最終録画 ${dateTime(item.latestRecordingAt)}`;
-  }
-  if (tab === 'all') return `${seriesEpisodeSummary(item)} · 録画 ${recordings}件${missing} · 予約 ${item.counts.reservations}件`;
-  return `${item.label} · ${item.eventCount ?? item.events.length}件${item.progLookupLabel ? ` · ${item.progLookupLabel}` : ''}${item.candidateTids?.length ? ` · TID候補 ${item.candidateTids.join(', ')}` : ''}`;
+  return `${seriesEpisodeSummary(item)} · 録画 ${recordings}件${missing} · 予約 ${item.counts.reservations}件`;
 }
 
 function syncAttentionSelection(state) {
@@ -1010,6 +1004,10 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   let dataDialog = null;
   let hiddenDialog = null;
   let headerActions = null;
+  let headerControls = null;
+  const compactHeader = headerCompactMedia(1100);
+  const syncCompactHeader = () => { if (headerControls) headerControls.open = !compactHeader.matches; };
+  compactHeader.addEventListener('change', syncCompactHeader);
   let availabilityKey = null;
   let renderedGeneration = null;
   let loading = false;
@@ -1070,7 +1068,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   function handleSeriesAction(action, context) {
       if (action === 'detail') return openDetail(context);
       if (action === 'series-view') {
-        const href = seriesEventHref(context, tab === 'attention' ? 'recordings' : tab);
+        const href = seriesEventHref(context, 'all');
         if (href) window.location.hash = href;
         return;
       }
@@ -1199,6 +1197,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       hiddenDialog,
       hiddenSeries,
       searchControl: config.searchControl || null,
+      selectionControl: config.selectionControl || null,
       onViewChange(nextView) {
         if (nextView === viewMode) return;
         viewMode = nextView;
@@ -1211,7 +1210,13 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       detailControls: config.detailControls || []
     });
     headerActions = actions;
-    setHeaderActions(actions.childElementCount ? actions : null);
+    headerControls = document.createElement('details');
+    headerControls.className = 'series-header-controls';
+    const summary = document.createElement('summary');
+    summary.textContent = '表示・操作';
+    headerControls.append(summary, actions);
+    syncCompactHeader();
+    setHeaderActions(actions.childElementCount ? headerControls : null);
     syncHeaderData(data);
   }
 
@@ -1253,8 +1258,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     const controls = overviewView?.selectionControls;
     if (!controls) return;
     const count = selectedAttentionEvents.size;
-    setContent(controls.count, `${count}件を選択中`);
-    setContent(controls.bulk, `${count}件をまとめて紐づけ`);
+    setContent(controls.count, `${count}件選択中`);
     controls.bulk.disabled = count === 0;
     controls.clear.disabled = count === 0;
   }
@@ -1328,8 +1332,11 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       let selectionControls = null;
       if (tab === 'attention') {
         const bar = document.createElement('div');
-        bar.className = 'series-attention-selection-bar';
+        bar.className = 'series-selection-controls';
+        bar.setAttribute('role', 'group');
+        bar.setAttribute('aria-label', '要確認番組の選択操作');
         const selectedCount = document.createElement('span');
+        selectedCount.setAttribute('role', 'status');
         const clear = document.createElement('button');
         clear.type = 'button';
         clear.className = 'button';
@@ -1338,10 +1345,10 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
         const bulk = document.createElement('button');
         bulk.type = 'button';
         bulk.className = 'button primary';
+        bulk.textContent = 'まとめて紐づけ';
         bulk.addEventListener('click', openSelectedBulk);
         bar.append(selectedCount, clear, bulk);
-        container.append(bar);
-        selectionControls = { count: selectedCount, clear, bulk };
+        selectionControls = { root: bar, count: selectedCount, clear, bulk };
       }
       container.append(list, footer);
       let searchComposing = false;
@@ -1357,7 +1364,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       });
       overviewView = { list, footer, count, error, more, selectionControls };
       updateAttentionSelectionCount();
-      installHeader(data, { searchControl: searchLabel, onViewChange: () => reloadList() });
+      installHeader(data, { searchControl: searchLabel, selectionControl: selectionControls?.root, onViewChange: () => reloadList() });
       if (typeof IntersectionObserver !== 'undefined') {
         autoLoadObserver = new IntersectionObserver(entries => {
           if (entries.some(entry => entry.isIntersecting)) maybeAutoLoad();
@@ -1485,6 +1492,9 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       if (append) autoLoadBlocked = true;
       loadError = `${append ? '続きを読み込めませんでした' : '更新できませんでした'}: ${error?.message || String(error)}`;
       if (overviewView) updateOverviewPagination();
+      else if (detailView || attentionView) {
+        updateState({ availability: { status: 'stale', message: loadError } });
+      }
       else {
         container.innerHTML = '<section class="panel series-loading is-error"><h2>シリーズ情報を表示できません</h2><p></p></section>';
         container.querySelector('p').textContent = error?.message || String(error);
@@ -1530,6 +1540,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   load();
 
   return () => {
+    compactHeader.removeEventListener('change', syncCompactHeader);
     programHover.dispose();
     controller.abort();
     window.clearTimeout(refreshTimer);

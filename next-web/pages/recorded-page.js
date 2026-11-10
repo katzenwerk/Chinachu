@@ -106,6 +106,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   let currentPage = 0;
   let totalPages = 0;
   let loading = false;
+  let refreshing = false;
   let exporting = false;
   let searchComposing = false;
   let searchTimer = null;
@@ -346,8 +347,12 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
       }
       return card.element;
     });
-    cardGrid.append(...elements);
-    content.replaceChildren(cardGrid);
+    let cursor = cardGrid.firstChild;
+    for (const element of elements) {
+      if (element === cursor) cursor = cursor.nextSibling;
+      else cardGrid.insertBefore(element, cursor);
+    }
+    if (cardGrid.parentElement !== content) content.replaceChildren(cardGrid);
   }
 
   function updateFilterControl() {
@@ -395,8 +400,8 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   function updateMore() {
     const hasMore = currentPage < totalPages;
     more.hidden = !hasMore && !(loading && items.length > 0);
-    loadingIndicator.hidden = !loading;
-    moreButton.hidden = loading;
+    loadingIndicator.hidden = !loading || refreshing;
+    moreButton.hidden = loading && !refreshing;
     moreButton.disabled = loading;
     moreButton.textContent = 'もっと見る';
   }
@@ -418,7 +423,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     if (items.length === 0) {
       listRenderer.clear();
       clearCards();
-      content.innerHTML = '<p class="reserves-message">条件に一致する録画結果はありません</p>';
+      if (content.firstElementChild?.textContent !== '条件に一致する録画結果はありません') content.innerHTML = '<p class="reserves-message">条件に一致する録画結果はありません</p>';
       updateMore();
       return;
     }
@@ -447,6 +452,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   async function loadPage(reset = false) {
     if (!isActive() || loading && !reset) return;
     if (reset) {
+      refreshing = false;
       requestController?.abort();
       autoLoadArmed = false;
       autoLoadBlocked = false;
@@ -520,6 +526,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     const sequence = ++requestSequence;
     const controller = new AbortController();
     requestController = controller;
+    refreshing = true;
     loading = true;
     feedback.hidden = true;
     updateMore();
@@ -559,6 +566,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
       more.hidden = false;
     } finally {
       if (sequence === requestSequence) {
+        refreshing = false;
         loading = false;
         requestController = null;
         updateMore();

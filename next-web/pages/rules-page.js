@@ -5,6 +5,7 @@ import { createRulesContextMenu } from '../components/rules-context-menu.js';
 import { applyStorageWarning } from '../components/storage-warning.js';
 import { buildReservationStorageDisplay, itemMatchesStorage, resolveStorageFilter } from '../services/storage-model.js';
 import { retryStorageData, subscribeStorageData } from '../services/storage-store.js';
+import { subscribeReservationNotifications } from '../services/realtime-client.js';
 import {
   buildRuleChannelMap, buildRuleRows, categoryLabel, filterRuleRows
 } from '../services/rule-model.js';
@@ -116,9 +117,12 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
     history.replaceState(null, '', `#rules${params.size ? `?${params}` : ''}`);
   }
 
-  function disposeLogos() {
-    logoHandles.forEach(handle => handle.dispose());
-    logoHandles = [];
+  function disposeLogos(detachedOnly = false) {
+    logoHandles = logoHandles.filter(({ handle, item }) => {
+      if (detachedOnly && item.isConnected) return true;
+      handle.dispose();
+      return false;
+    });
   }
 
   function clearSelection() {
@@ -162,8 +166,6 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
 
   function renderRows() {
     if (!active) return;
-    disposeLogos();
-    contextMenu.close();
     const storage = resolveStorageFilter(storageData, storageToken);
     storageFilter.hidden = storageToken === null;
     storageFilter.querySelector('span').textContent = storageToken === null ? ''
@@ -185,24 +187,55 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
     }
     const filtered = currentFilteredRows();
     shown.textContent = `${filtered.length}件`;
+    const tableRows = Array.from(listHost.querySelectorAll('.rule-row'));
+    if (filtered.length > 0 && tableRows.length === filtered.length && tableRows.every((item, index) => rowByElement.get(item) === filtered[index])) {
+      tableRows.forEach(item => {
+        const row = rowByElement.get(item);
+        const reserves = item.querySelector('.rule-reserves');
+        if (reserves.textContent !== `${row.reservationCount}件`) reserves.textContent = `${row.reservationCount}件`;
+        reserves.classList.toggle('is-zero', row.reservationCount === 0);
+        applyStorageWarning(item.querySelector('.rule-storage-warning'), row.enabled
+          ? buildReservationStorageDisplay(storageData, row.rule).notice : null);
+      });
+      updateSelectionControls(listHost.querySelector('.rule-table'), filtered);
+      updateHash();
+      return;
+    }
+    contextMenu.close();
     if (!filtered.length) {
       listHost.innerHTML = `<p class="rules-message">${rows.length ? '条件に一致するルールはありません' : 'ルールはありません'}</p>`;
+      disposeLogos(true);
       updateSelectionControls(null, filtered);
       updateHash();
       return;
     }
-    const table = document.createElement('div');
+    const existingRows = new Map(Array.from(listHost.querySelectorAll('.rule-row')).map(item => [rowByElement.get(item), item]));
+    const currentTable = listHost.querySelector('.rule-table');
+    const table = currentTable || document.createElement('div');
     table.className = 'rule-table';
-    table.innerHTML = '<div class="rule-table-head"><label class="rule-select-cell"><input class="rule-select-all" type="checkbox" aria-label="表示中のルールをすべて選択"></label><span>#</span><span>予約</span><span>録画実績</span><span>状態</span><span>条件</span><span>対象局</span></div>';
-    const selectAll = table.querySelector('.rule-select-all');
-    selectAll.addEventListener('change', () => {
-      filtered.forEach(row => {
-        if (!row.uid) return;
-        if (selectAll.checked) selectedRuleUids.add(row.uid); else selectedRuleUids.delete(row.uid);
+    if (!currentTable) {
+      table.innerHTML = '<div class="rule-table-head"><label class="rule-select-cell"><input class="rule-select-all" type="checkbox" aria-label="表示中のルールをすべて選択"></label><span>#</span><span>予約</span><span>録画実績</span><span>状態</span><span>条件</span><span>対象局</span></div>';
+      const selectAll = table.querySelector('.rule-select-all');
+      selectAll.addEventListener('change', () => {
+        const selectable = currentFilteredRows();
+        selectable.forEach(row => {
+          if (!row.uid) return;
+          if (selectAll.checked) selectedRuleUids.add(row.uid); else selectedRuleUids.delete(row.uid);
+        });
+        updateSelectionControls(table, selectable);
       });
-      updateSelectionControls(table, filtered);
-    });
+    }
+    const desired = [];
     filtered.forEach(row => {
+      const retained = existingRows.get(row);
+      if (retained) {
+        const reserves = retained.querySelector('.rule-reserves');
+        if (reserves.textContent !== `${row.reservationCount}件`) reserves.textContent = `${row.reservationCount}件`;
+        reserves.classList.toggle('is-zero', row.reservationCount === 0);
+        applyStorageWarning(retained.querySelector('.rule-storage-warning'), row.enabled
+          ? buildReservationStorageDisplay(storageData, row.rule).notice : null);
+        desired.push(retained); return;
+      }
       const item = document.createElement('div');
       item.className = `rule-row${row.enabled ? '' : ' is-disabled'}`;
       rowByElement.set(item, row);
@@ -224,7 +257,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
       checkbox.addEventListener('click', event => event.stopPropagation());
       checkbox.addEventListener('change', () => {
         if (checkbox.checked) selectedRuleUids.add(row.uid); else selectedRuleUids.delete(row.uid);
-        updateSelectionControls(table, filtered);
+        updateSelectionControls(table, currentFilteredRows());
       });
       item.querySelector('.rule-order').textContent = String(row.index + 1);
       item.querySelector('.rule-state').textContent = row.enabled ? '有効' : '無効';
@@ -241,7 +274,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
         row.channelIds.slice(0, 3).forEach(id => {
           const channel = listChannelMap.get(id) || { id, name: id };
           const handle = createChannelLogo({ name: channel?.name || id, fallbackText: channel?.name || id, tooltip: channel?.name || id, url: logoUrl(channel) }, { variant: 'list', focusable: true });
-          logoHandles.push(handle);
+          logoHandles.push({ handle, item });
           channelHost.append(handle.element);
         });
         if (row.channelIds.length > 3) {
@@ -266,9 +299,17 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
       const show = () => showEditor(row);
       item.addEventListener('click', event => { if (!event.target.closest('a,button,input,label,.storage-warning')) show(); });
       item.addEventListener('keydown', event => { if ((event.key === 'Enter' || event.key === ' ') && event.target === item) { event.preventDefault(); show(); } });
-      table.append(item);
+      desired.push(item);
     });
-    listHost.replaceChildren(table);
+    const wanted = new Set(desired);
+    for (const item of table.querySelectorAll('.rule-row')) if (!wanted.has(item)) item.remove();
+    let cursor = table.querySelector('.rule-table-head').nextSibling;
+    for (const item of desired) {
+      if (item === cursor) cursor = cursor.nextSibling;
+      else table.insertBefore(item, cursor);
+    }
+    if (table.parentElement !== listHost) listHost.replaceChildren(table);
+    disposeLogos(true);
     updateSelectionControls(table, filtered);
     updateHash();
   }
@@ -466,19 +507,29 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
     }
   });
 
-  async function refresh(force = false) {
+  async function refresh(force = false, background = false) {
     const revision = ++refreshRevision;
     const achievementRequest = loadRuleRecordingCounts({ signal: controller.signal })
       .then(result => ({ result }), error => ({ error }));
     try {
-      data = await loadRulesPageData({ force, signal: controller.signal });
+      const nextData = await loadRulesPageData({ force, signal: controller.signal });
       if (!active || revision !== refreshRevision) return { ok: true, superseded: true };
+      data = nextData;
       listChannelMap = buildReservationChannelMap(data.reserves);
       const channelMap = listChannelMap;
-      rows = buildRuleRows(data.rules, data.reserves, null, channelMap);
-      clearSelection();
+      const previousRows = new Map(rows.map(row => [row.uid, row]));
+      rows = buildRuleRows(data.rules, data.reserves, null, channelMap).map(row => {
+        row.channelDisplaySignature = JSON.stringify(row.channelIds.map(id => channelMap.get(id) || { id }));
+        const previous = previousRows.get(row.uid);
+        if (!previous || !row.uid) return row;
+        row.achievementCount = previous.achievementCount;
+        if (JSON.stringify([previous.rule, previous.index, previous.channelIds, previous.channelDisplaySignature]) !== JSON.stringify([row.rule, row.index, row.channelIds, row.channelDisplaySignature])) return row;
+        return Object.assign(previous, row);
+      });
+      if (!background) clearSelection();
+      else for (const uid of selectedRuleUids) if (!rows.some(row => row.uid === uid)) selectedRuleUids.delete(uid);
       renderRows();
-      if (openRuleUid) {
+      if (openRuleUid && !background) {
         const target = rows.find(row => row.uid === openRuleUid);
         if (target) showEditor(target);
       }
@@ -496,7 +547,11 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
       updateAchievementCells();
       return { ok: true };
     } catch (error) {
-      if (!active || error?.name === 'AbortError') return { ok: true, aborted: true };
+      if (!active || revision !== refreshRevision || error?.name === 'AbortError') return { ok: true, aborted: true };
+      if (data !== null && listHost.querySelector('.rule-table')) {
+        showToast(`ルール情報を更新できませんでした（前回の表示を保持）: ${error.message}`, 7000, 'error');
+        return { ok: false, error };
+      }
       listHost.innerHTML = '<div class="rules-error"><p>ルール情報を取得できませんでした</p><small></small><button class="button" type="button">再試行</button></div>';
       listHost.querySelector('small').textContent = error.message;
       listHost.querySelector('button').addEventListener('click', () => refresh(true), { once: true });
@@ -567,10 +622,12 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
         : null);
     });
   });
+  const unsubscribeReserves = subscribeReservationNotifications(() => { void refresh(true, true); });
   refresh().catch(() => {});
 
   return () => {
     active = false;
+    unsubscribeReserves();
     unsubscribeStorage();
     controller.abort();
     contextMenu.destroy();

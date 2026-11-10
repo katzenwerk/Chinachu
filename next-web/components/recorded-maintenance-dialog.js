@@ -275,6 +275,7 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
     }
     function row(key, label, text, action, { expanded, toggle, warning = false } = {}) {
       const line = document.createElement('div'); line.className = 'recorded-maintenance-row';
+      line.dataset.maintenanceRow = key;
       const caption = document.createElement('span'); caption.className = 'recorded-maintenance-label'; caption.textContent = label;
       const status = toggle ? button(`${text} ${expanded ? '▲' : '▼'}`, toggle) : document.createElement('span');
       status.className = `recorded-maintenance-value${toggle ? ' is-toggle' : ''}${warning ? ' is-warning' : ''}`;
@@ -378,7 +379,7 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
       body.append(feedback, button('表示を更新', async () => { announced = ''; await updated(); if (!disposed) render(); }, busy()));
     }
     const footer = document.createElement('footer'); footer.append(button('閉じる', () => dialog.close()));
-    shell.append(header, body, footer); dialog.replaceChildren(shell);
+    shell.append(header, body, footer);
     body.querySelectorAll('.program-saved-ts-summary details').forEach((element, index) => {
       if (!savedDetails[index]) return;
       element.open = savedDetails[index].open;
@@ -388,7 +389,39 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
       const control = Array.from(dialog.querySelectorAll('[data-maintenance-control]')).find(element => element.dataset.maintenanceControl === focused);
       control?.focus({ preventScroll: true });
     }
-    body.scrollTop = scrollTop;
+    if (previous) {
+      const identity = element => element.dataset.maintenanceRow || element.id ||
+        `${element.tagName}:${element.className}:${element.matches('details') ? element.querySelector('summary')?.textContent : ''}`;
+      const available = Array.from(previous.children);
+      const desired = Array.from(body.children).map(incoming => {
+        const index = available.findIndex(element => identity(element) === identity(incoming));
+        if (index < 0) return incoming;
+        const retained = available.splice(index, 1)[0];
+        if (retained.outerHTML === incoming.outerHTML) return retained;
+        if (incoming.dataset.maintenanceRow) {
+          Array.from(incoming.children).forEach((child, position) => {
+            const current = retained.children[position];
+            if (current.outerHTML === child.outerHTML) return;
+            if (current.tagName === 'SPAN' && child.tagName === 'SPAN') {
+              current.className = child.className;
+              if (current.textContent !== child.textContent) current.textContent = child.textContent;
+            } else current.replaceWith(child);
+          });
+          return retained;
+        }
+        return incoming;
+      });
+      const wanted = new Set(desired);
+      for (const element of Array.from(previous.children)) if (!wanted.has(element)) element.remove();
+      let cursor = previous.firstChild;
+      for (const element of desired) {
+        if (element === cursor) cursor = cursor.nextSibling;
+        else previous.insertBefore(element, cursor);
+      }
+    } else {
+      dialog.replaceChildren(shell);
+      body.scrollTop = scrollTop;
+    }
   }
   dialog.addEventListener('close', () => {
     disposed = true; window.clearTimeout(timer); controller.abort(); dialog.remove();

@@ -31,10 +31,8 @@ function note(model) {
   return `<div class="storage-note is-${escapeText(model.state.key)}">${model.notes.map((line, index) => index === model.notes.length - 1 && (line.includes('停止中') || line.includes('録画禁止中')) ? `<strong>${escapeText(line)}</strong>` : `<span>${escapeText(line)}</span>`).join('')}</div>`;
 }
 
-export function createStorageCard(model, { onRefresh = null } = {}) {
-  const article = document.createElement('article');
-  article.className = `storage-card is-${model.state.key}${model.state.stale ? ' is-reference' : ''}`;
-  article.innerHTML = `
+function storageCardMarkup(model, onRefresh) {
+  return `
     <div class="storage-card-head">
       <div class="storage-drive-icon">${icon()}</div>
       <div class="storage-card-ident"><div><h2>${escapeText(model.name)}</h2>${statusBadge(model)}</div><p>${escapeText(model.path)}</p></div>
@@ -45,6 +43,14 @@ export function createStorageCard(model, { onRefresh = null } = {}) {
     <div class="storage-values"><div><span>使用量：</span><strong>${escapeText(model.usage)}</strong></div>${thresholdValues(model)}</div>
     <div class="storage-card-footer">${note(model)}<div class="storage-links"><a href="${model.ruleHref}" data-filter-link>対象ルール ${model.ruleCount}件</a><a href="${model.reserveHref}" data-filter-link>録画予定 ${model.reserveCount}件</a><a href="${model.recordedHref}" data-filter-link>録画済み ${model.recordedCount}件</a></div></div>
     <button class="storage-mobile-details-toggle" type="button" aria-expanded="false">詳細を表示</button>`;
+}
+
+export function createStorageCard(model, { onRefresh = null } = {}) {
+  let currentModel = model;
+  let signature = JSON.stringify(model);
+  const article = document.createElement('article');
+  article.className = `storage-card is-${model.state.key}${model.state.stale ? ' is-reference' : ''}`;
+  article.innerHTML = storageCardMarkup(model, onRefresh);
   const detailsToggle = article.querySelector('.storage-mobile-details-toggle');
   detailsToggle.addEventListener('click', () => {
     const expanded = article.classList.toggle('is-mobile-expanded');
@@ -57,12 +63,43 @@ export function createStorageCard(model, { onRefresh = null } = {}) {
       button.disabled = true;
       button.classList.add('is-loading');
       try {
-        await onRefresh(model);
+        await onRefresh(currentModel);
       } finally {
         button.disabled = false;
         button.classList.remove('is-loading');
       }
     });
   }
-  return article;
+  function update(next) {
+    currentModel = next;
+    const nextSignature = JSON.stringify(next);
+    if (signature === nextSignature) return;
+    signature = nextSignature;
+    article.className = `storage-card is-${next.state.key}${next.state.stale ? ' is-reference' : ''}${article.classList.contains('is-mobile-expanded') ? ' is-mobile-expanded' : ''}`;
+    const template = document.createElement('div');
+    template.innerHTML = storageCardMarkup(next, onRefresh);
+    for (const selector of ['.storage-card-ident h2', '.storage-card-ident p', '.storage-status-badge',
+      '.storage-checked-label', '.storage-checked-value', '.storage-checked-ago',
+      '.storage-primary-metric strong', '.storage-links a']) {
+      const oldNodes = article.querySelectorAll(selector);
+      template.querySelectorAll(selector).forEach((incoming, index) => {
+        const retained = oldNodes[index];
+        if (retained.textContent !== incoming.textContent) retained.textContent = incoming.textContent;
+        for (const attribute of incoming.attributes) {
+          if (retained.getAttribute(attribute.name) !== attribute.value) retained.setAttribute(attribute.name, attribute.value);
+        }
+      });
+    }
+    for (const selector of ['.storage-usage-wrap', '.storage-values']) {
+      const retained = article.querySelector(selector), incoming = template.querySelector(selector);
+      if (retained.outerHTML !== incoming.outerHTML) retained.replaceWith(incoming);
+    }
+    const retainedNote = article.querySelector('.storage-note');
+    const incomingNote = template.querySelector('.storage-note');
+    if (!incomingNote) retainedNote?.remove();
+    else if (!retainedNote) article.querySelector('.storage-card-footer').prepend(incomingNote);
+    else if (retainedNote.outerHTML !== incomingNote.outerHTML) retainedNote.replaceWith(incomingNote);
+    article.querySelector('.storage-refresh').setAttribute('aria-label', `${next.name} の現在の容量情報を確認`);
+  }
+  return { element: article, update };
 }

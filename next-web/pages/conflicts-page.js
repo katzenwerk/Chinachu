@@ -494,48 +494,85 @@ export function renderConflictsPage(container) {
         });
       }
     });
+    activeMenu.dataset.programId = String(program.id || '');
+    activeMenu.dataset.programSignature = JSON.stringify(program);
   }
 
+  const conflictCards = new Map();
+  let overviewSignature = null;
+  function closeRemovedHover(element) {
+    if (element.querySelector('[aria-describedby="program-hover"]')) programHover.close();
+  }
   function render() {
     if (!active || programs === null) return;
-    programHover.close();
-    activeMenu?.remove();
-    activeMenu = null;
-    clearExpiryTimer();
-    overviewCalendar?.destroy();
-    overviewCalendar = null;
     const now = Date.now();
     const conflicts = programs.filter(program => program?.isConflict === true && program.isSkip !== true &&
       interval(program)?.end > now).sort((a, b) => interval(a).start - interval(b).start);
+    clearExpiryTimer();
+    if (activeMenu && activeMenu.dataset.programSignature !== JSON.stringify(programs.find(program => String(program.id || '') === activeMenu.dataset.programId))) {
+      activeMenu.remove(); activeMenu = null;
+    }
     count.textContent = `競合 ${conflicts.length}件`;
-    content.replaceChildren();
-    if (!conflicts.length) {
-      const empty = document.createElement('p');
-      empty.className = 'panel conflicts-message';
-      empty.textContent = '現在、未終了の競合予約はありません。';
-      content.append(empty);
-    } else {
-      conflicts.forEach(program => {
-        const id = String(program.id || '');
-        const offsetHours = timelineOffsets.get(id) || 0;
-        content.append(createConflictCard(program, interval(program), programs, offsetHours, delta => {
-          timelineOffsets.set(id, offsetHours + delta);
+    const desired = [];
+    const keys = new Set();
+    conflicts.forEach(program => {
+      const id = String(program.id || '');
+      keys.add(id);
+      const offsetHours = timelineOffsets.get(id) || 0;
+      const period = interval(program);
+      const signature = JSON.stringify([program, timelineEntries(programs, timelineRange(period, offsetHours)), tuners, offsetHours]);
+      let entry = conflictCards.get(id);
+      if (entry?.signature !== signature) {
+        const element = createConflictCard(program, period, programs, offsetHours, delta => {
+          timelineOffsets.set(id, (timelineOffsets.get(id) || 0) + delta);
           render();
-        }, openProgramMenu, tuners));
-      });
+        }, openProgramMenu, tuners);
+        if (entry) { closeRemovedHover(entry.element); entry.element.replaceWith(element); }
+        entry = { element, signature };
+        conflictCards.set(id, entry);
+      }
+      desired.push(entry.element);
+    });
+    for (const [id, entry] of conflictCards) {
+      if (keys.has(id)) continue;
+      closeRemovedHover(entry.element);
+      entry.element.remove(); conflictCards.delete(id); timelineOffsets.delete(id);
+    }
+    if (!conflicts.length) {
+      if (content.querySelector('.conflicts-message')?.textContent !== '現在、未終了の競合予約はありません。') {
+        const empty = document.createElement('p');
+        empty.className = 'panel conflicts-message';
+        empty.textContent = '現在、未終了の競合予約はありません。';
+        content.replaceChildren(empty);
+      }
+    } else {
+      content.querySelector('.conflicts-message')?.remove();
+      let cursor = content.firstChild;
+      for (const element of desired) {
+        if (element === cursor) cursor = cursor.nextSibling;
+        else content.insertBefore(element, cursor);
+      }
     }
 
     const currentHour = Math.floor(now / HOUR_MS) * HOUR_MS;
-    overview.replaceChildren(createTimeline(programs, null, null, 0, delta => {
-      overviewStart += delta * HOUR_MS;
-      render();
-    }, openProgramMenu, {
-      start: overviewStart,
-      isCurrent: overviewStart === currentHour,
-      onStartChange: timestamp => { overviewStart = timestamp; render(); },
-      onReset: () => { overviewStart = Math.floor(Date.now() / HOUR_MS) * HOUR_MS; render(); },
-      onCalendarCreated: calendar => { overviewCalendar = calendar; }
-    }, tuners));
+    const nextOverviewSignature = JSON.stringify([overviewStart, currentHour, tuners,
+      timelineEntries(programs, { start: overviewStart, end: overviewStart + TIMELINE_DURATION_MS })]);
+    if (overviewSignature !== nextOverviewSignature) {
+      closeRemovedHover(overview);
+      overviewCalendar?.destroy();
+      overviewCalendar = null;
+      overview.replaceChildren(createTimeline(programs, null, null, 0, delta => {
+        overviewStart += delta * HOUR_MS;
+        render();
+      }, openProgramMenu, {
+        start: overviewStart,
+        isCurrent: overviewStart === currentHour,
+        onStartChange: timestamp => { overviewStart = timestamp; render(); },
+        onReset: () => { overviewStart = Math.floor(Date.now() / HOUR_MS) * HOUR_MS; render(); },
+        onCalendarCreated: calendar => { overviewCalendar = calendar; }
+      }, tuners));
+      overviewSignature = nextOverviewSignature;
+    }
 
     const endTimes = programs.map(program => interval(program)?.end).filter(end => end > now);
     if (endTimes.length) {
@@ -554,6 +591,10 @@ export function renderConflictsPage(container) {
       render();
     }).catch(() => {
       if (!active || current !== generation) return;
+      if (programs !== null) {
+        count.textContent = '更新失敗（前回の表示を保持）';
+        return;
+      }
       clearExpiryTimer();
       count.textContent = '取得失敗';
       const message = document.createElement('p');

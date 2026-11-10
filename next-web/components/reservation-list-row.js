@@ -141,7 +141,7 @@ export function createReservationListRenderer(content) {
 
       rows.forEach((row, key) => {
         if (activeKeys.has(key)) return;
-        programHover.close();
+        if (row.querySelector('[aria-describedby="program-hover"]')) programHover.close();
         row.remove();
         rows.delete(key);
         changed = true;
@@ -161,7 +161,11 @@ export function createReservationListRenderer(content) {
       const currentKeys = Array.from(list.children).map(row => row.dataset.reservationKey);
       const orderChanged = currentKeys.length !== keys.length || currentKeys.some((key, index) => key !== keys[index]);
       if (orderChanged) {
-        list.append(...elements);
+        let cursor = list.firstChild;
+        for (const element of elements) {
+          if (element === cursor) cursor = cursor.nextSibling;
+          else list.insertBefore(element, cursor);
+        }
         changed = true;
       }
       if (!list.isConnected) {

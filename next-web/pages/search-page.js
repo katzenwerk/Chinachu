@@ -100,11 +100,16 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
     contextMenu?.remove();
     contextMenu = null;
   }
+  function retireRow(key, entry) {
+    if (entry.row.querySelector('[aria-describedby="program-hover"]')) programHover.close();
+    if (contextMenu?.dataset.programKey === key) closeMenu();
+    entry.logo.dispose();
+  }
 
+  const searchRows = new Map();
+  let scheduleRequest = 0;
   function redraw() {
     if (disposed) return;
-    programHover.close();
-    closeMenu();
     const query = keyword.value.trim();
     const waves = waveChecks.filter(check => check.checked).map(check => check.value);
     const now = Date.now();
@@ -119,19 +124,27 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
     const total = found.length;
     pageIndex = Math.min(pageIndex, Math.max(0, Math.ceil(total / PAGE_SIZE) - 1));
     count.textContent = `${total}件`;
-    resultsHost.replaceChildren();
     pagination.hidden = total <= PAGE_SIZE;
     if (total === 0) {
+      searchRows.forEach((entry, key) => retireRow(key, entry));
+      searchRows.clear();
       const message = document.createElement('p');
       message.className = 'program-search-empty';
       message.textContent = '条件に一致する番組はありません。';
-      resultsHost.append(message);
+      if (resultsHost.firstElementChild?.textContent !== message.textContent) resultsHost.replaceChildren(message);
       return;
     }
-    const fragment = document.createDocumentFragment();
+    const desired = [];
+    const wantedKeys = new Set();
     for (const entry of found.slice(pageIndex * PAGE_SIZE, (pageIndex + 1) * PAGE_SIZE)) {
       const { program, channel } = entry;
       const state = hasReservationData ? programState(program, reserves, recording) : { key: 'unknown', label: '状態未確認' };
+      const key = `${channel.id}|${program.id}|${entry.start}`;
+      const signature = JSON.stringify([program, { ...channel, programs: undefined }, state, hasReservationData]);
+      wantedKeys.add(key);
+      const retained = searchRows.get(key);
+      if (retained?.signature === signature) { desired.push(retained.row); continue; }
+      if (retained) retireRow(key, retained);
       const row = document.createElement('article');
       row.className = `program-search-row is-${state.key}`;
       const date = document.createElement('span');
@@ -210,11 +223,23 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
             },
             onRule: action => openRuleAction(displayProgram, action)
           });
+          contextMenu.dataset.programKey = key;
         });
       }
-      fragment.append(row);
+      searchRows.set(key, { row, logo, signature });
+      desired.push(row);
     }
-    resultsHost.append(fragment);
+    for (const [key, entry] of searchRows) {
+      if (wantedKeys.has(key)) continue;
+      retireRow(key, entry); searchRows.delete(key);
+    }
+    const wanted = new Set(desired);
+    for (const row of Array.from(resultsHost.children)) if (!wanted.has(row)) row.remove();
+    let cursor = resultsHost.firstChild;
+    for (const row of desired) {
+      if (row === cursor) cursor = cursor.nextSibling;
+      else resultsHost.insertBefore(row, cursor);
+    }
     pagination.querySelector('[data-page]').textContent = `${pageIndex + 1} / ${Math.ceil(total / PAGE_SIZE)}ページ`;
     pagination.querySelector('[data-prev]').disabled = pageIndex === 0;
     pagination.querySelector('[data-next]').disabled = (pageIndex + 1) * PAGE_SIZE >= total;
@@ -232,7 +257,10 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
       hasReservationData = true;
       redraw();
     } catch (_) {
-      if (!disposed && request === latestRequest) { hasReservationData = false; redraw(); }
+      if (!disposed && request === latestRequest) {
+        if (!hasReservationData) redraw();
+        count.textContent = `${count.textContent.split('（')[0]}（状態更新失敗${hasReservationData ? '・前回表示' : ''}）`;
+      }
     }
   }
 
@@ -264,7 +292,13 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   function populateFilters() {
     const categories = new Set();
     for (const channel of schedule) for (const program of channel.programs || []) if (program.category) categories.add(String(program.category));
-    for (const code of [...categories].sort()) category.append(option(code, CATEGORY_LABELS[code] || code));
+    const codes = [...categories].sort();
+    const values = ['', ...codes];
+    if (JSON.stringify(Array.from(category.options, entry => entry.value)) === JSON.stringify(values)) return;
+    const selected = category.value;
+    category.replaceChildren(option('', '全ジャンル'));
+    for (const code of codes) category.append(option(code, CATEGORY_LABELS[code] || code));
+    if (values.includes(selected)) category.value = selected;
   }
 
   function navigateKeyword() {
@@ -301,25 +335,27 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   releases.push(subscribeReservationNotifications(() => { if (!disposed) void reloadReservations(); }));
   releases.push(subscribeRecordingNotifications(() => { if (!disposed) void reloadReservations(); }));
   releases.push(subscribeScheduleNotifications(() => {
+    const request = ++scheduleRequest;
     loadResource('schedule', { force: true }).then(value => {
-      if (disposed) return;
+      if (disposed || request !== scheduleRequest) return;
       schedule = Array.isArray(value) ? value : [];
       const selectedCategory = category.value;
-      category.replaceChildren(option('', '全ジャンル'));
       populateFilters();
       if ([...category.options].some(item => item.value === selectedCategory)) category.value = selectedCategory;
       redraw();
+      if (!hasReservationData) void reloadReservations();
     }).catch(() => {});
   }));
 
+  const initialScheduleRequest = ++scheduleRequest;
   loadResource('schedule').then(value => {
-    if (disposed) return;
+    if (disposed || initialScheduleRequest !== scheduleRequest) return;
     schedule = Array.isArray(value) ? value : [];
     populateFilters();
     redraw();
     void reloadReservations();
   }).catch(error => {
-    if (disposed) return;
+    if (disposed || initialScheduleRequest !== scheduleRequest) return;
     count.textContent = '番組表を取得できません';
     const message = document.createElement('p');
     message.className = 'program-search-empty';
@@ -329,6 +365,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
 
   return () => {
     disposed = true;
+    searchRows.forEach(entry => entry.logo.dispose());
     programHover.dispose();
     window.clearTimeout(keywordTimer);
     window.clearTimeout(displayBoundaryTimer);

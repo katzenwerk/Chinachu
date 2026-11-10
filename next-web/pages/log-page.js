@@ -353,26 +353,37 @@ export function renderLogPage(container, query = new URLSearchParams()) {
     });
   }
 
+  const logRows = new WeakMap();
   function renderLines() {
     renderFrame = null;
     if (!active) return;
     const visible = filteredLines();
     const previousScrollTop = consoleElement.scrollTop;
-    const fragment = document.createDocumentFragment();
+    const elements = [];
     if (visible.length === 0) {
-      const empty = document.createElement('div');
+      const empty = linesElement.querySelector('.log-empty') || document.createElement('div');
       empty.className = 'log-empty';
       empty.textContent = lines.length === 0 ? 'ログはありません' : '条件に一致するログはありません';
-      fragment.append(empty);
+      elements.push(empty);
     } else {
       visible.forEach(line => {
-        const row = document.createElement('div');
-        row.className = `log-line is-${line.level}`;
-        row.textContent = line.text;
-        fragment.append(row);
+        let row = logRows.get(line);
+        if (!row) {
+          row = document.createElement('div');
+          row.className = `log-line is-${line.level}`;
+          row.textContent = line.text;
+          logRows.set(line, row);
+        }
+        elements.push(row);
       });
     }
-    linesElement.replaceChildren(fragment);
+    const wanted = new Set(elements);
+    for (const row of Array.from(linesElement.children)) if (!wanted.has(row)) row.remove();
+    let cursor = linesElement.firstChild;
+    for (const row of elements) {
+      if (row === cursor) cursor = cursor.nextSibling;
+      else linesElement.insertBefore(row, cursor);
+    }
     if (pendingHistoryPrependScroll !== null) {
       const { scrollHeight, scrollTop } = pendingHistoryPrependScroll;
       pendingHistoryPrependScroll = null;

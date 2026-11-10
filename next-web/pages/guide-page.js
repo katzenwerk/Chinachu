@@ -321,13 +321,12 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     });
   }
 
+  const programCells = new Map();
+  let structureSignature = null;
   function renderGrid(preserveScroll = false) {
-    programHover.close();
     const scroll = container.querySelector('.guide-scroll');
     const previous = preserveScroll && scroll ? { left: scroll.scrollLeft, top: scroll.scrollTop,
       hourHeight: renderedHourHeight } : null;
-    logoHandles.forEach(handle => handle.dispose());
-    logoHandles = [];
     const columns = gridColumns();
     const range = gridRange();
     const layout = measureLayout(scroll, columns.length);
@@ -341,63 +340,75 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     if (heightOutput) heightOutput.textContent = `${config.hourHeight}px${hourHeight > config.hourHeight ? `（表示 ${Math.round(hourHeight)}px）` : ''}`;
     const bodyHeight = (range.end - range.start) / 3600000 * hourHeight;
     const canvasWidth = AXIS_WIDTH + columns.length * channelWidth;
-    const canvas = document.createElement('div');
-    canvas.className = 'guide-canvas';
-    canvas.classList.toggle('is-weekly', !!weeklyChannel);
-    canvas.style.width = `${canvasWidth}px`;
-    canvas.style.height = `${HEADER_HEIGHT + bodyHeight}px`;
-    canvas.style.setProperty('--guide-axis', `${AXIS_WIDTH}px`);
-    canvas.style.setProperty('--guide-header', `${HEADER_HEIGHT}px`);
-    canvas.style.setProperty('--guide-hour', `${hourHeight}px`);
-    const header = document.createElement('div');
-    header.className = 'guide-channel-row';
-    header.style.width = `${canvasWidth}px`;
-    header.style.gridTemplateColumns = `${AXIS_WIDTH}px repeat(${columns.length},${channelWidth}px)`;
-    header.innerHTML = '<div class="guide-corner"></div>';
-    columns.forEach(({ channel, start }) => {
-      const cell = document.createElement(weeklyChannel ? 'div' : 'button');
-      cell.className = 'guide-channel';
-      if (weeklyChannel) {
-        cell.textContent = new Intl.DateTimeFormat('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short' }).format(new Date(start));
-        cell.classList.add('guide-week-date');
-        cell.title = '04:00 〜 翌04:00';
+    const nextStructure = JSON.stringify([layout, range, columns.map(({ channel, start, end }) =>
+      [{ ...channel, programs: undefined }, start, end]), !!weeklyChannel]);
+    let canvas = scroll.querySelector('.guide-canvas');
+    const rebuild = !canvas || nextStructure !== structureSignature;
+    if (rebuild) {
+      programHover.close();
+      logoHandles.forEach(handle => handle.dispose());
+      logoHandles = [];
+      programCells.clear();
+      canvas = document.createElement('div');
+      canvas.className = 'guide-canvas';
+      canvas.classList.toggle('is-weekly', !!weeklyChannel);
+      canvas.style.width = `${canvasWidth}px`;
+      canvas.style.height = `${HEADER_HEIGHT + bodyHeight}px`;
+      canvas.style.setProperty('--guide-axis', `${AXIS_WIDTH}px`);
+      canvas.style.setProperty('--guide-header', `${HEADER_HEIGHT}px`);
+      canvas.style.setProperty('--guide-hour', `${hourHeight}px`);
+      const header = document.createElement('div');
+      header.className = 'guide-channel-row';
+      header.style.width = `${canvasWidth}px`;
+      header.style.gridTemplateColumns = `${AXIS_WIDTH}px repeat(${columns.length},${channelWidth}px)`;
+      header.innerHTML = '<div class="guide-corner"></div>';
+      columns.forEach(({ channel, start }) => {
+        const cell = document.createElement(weeklyChannel ? 'div' : 'button');
+        cell.className = 'guide-channel';
+        if (weeklyChannel) {
+          cell.textContent = new Intl.DateTimeFormat('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short' }).format(new Date(start));
+          cell.classList.add('guide-week-date');
+          cell.title = '04:00 〜 翌04:00';
+          header.append(cell);
+          return;
+        }
+        cell.type = 'button';
+        const tooltip = channelDetailText(channel);
+        cell.title = tooltip;
+        cell.setAttribute('aria-label', `${tooltip}。週間番組表を表示`);
+        cell.addEventListener('click', () => openWeekly(channel));
+        const logo = createChannelLogo({ name: channel.name, url: logoUrl(channel), tooltip }, { variant: 'list' });
+        logoHandles.push(logo);
+        const name = document.createElement('span');
+        name.textContent = channel.name;
+        cell.append(logo.element, name);
         header.append(cell);
-        return;
+      });
+      canvas.append(header);
+      const axis = document.createElement('div');
+      axis.className = 'guide-time-axis';
+      axis.style.height = `${bodyHeight}px`;
+      const halfHourCount = Math.round((range.end - range.start) / (30 * 60000));
+      for (let half = 0; half <= halfHourCount; half++) {
+        const timestamp = range.start + half * 30 * 60000;
+        const y = half * hourHeight / 2;
+        const line = document.createElement('div');
+        line.className = `guide-grid-line${half % 2 === 0 ? ' is-hour' : ''}`;
+        line.style.top = `${HEADER_HEIGHT + y - (half === halfHourCount ? 1 : 0)}px`;
+        line.style.left = `${AXIS_WIDTH}px`;
+        line.style.width = `${canvasWidth - AXIS_WIDTH}px`;
+        canvas.append(line);
+        if (half % 2 === 0 && half < halfHourCount) {
+          const label = document.createElement('time');
+          label.style.top = `${y}px`;
+          label.textContent = formatTime(timestamp);
+          axis.append(label);
+        }
       }
-      cell.type = 'button';
-      const tooltip = channelDetailText(channel);
-      cell.title = tooltip;
-      cell.setAttribute('aria-label', `${tooltip}。週間番組表を表示`);
-      cell.addEventListener('click', () => openWeekly(channel));
-      const logo = createChannelLogo({ name: channel.name, url: logoUrl(channel), tooltip }, { variant: 'list' });
-      logoHandles.push(logo);
-      const name = document.createElement('span');
-      name.textContent = channel.name;
-      cell.append(logo.element, name);
-      header.append(cell);
-    });
-    canvas.append(header);
-    const axis = document.createElement('div');
-    axis.className = 'guide-time-axis';
-    axis.style.height = `${bodyHeight}px`;
-    const halfHourCount = Math.round((range.end - range.start) / (30 * 60000));
-    for (let half = 0; half <= halfHourCount; half++) {
-      const timestamp = range.start + half * 30 * 60000;
-      const y = half * hourHeight / 2;
-      const line = document.createElement('div');
-      line.className = `guide-grid-line${half % 2 === 0 ? ' is-hour' : ''}`;
-      line.style.top = `${HEADER_HEIGHT + y - (half === halfHourCount ? 1 : 0)}px`;
-      line.style.left = `${AXIS_WIDTH}px`;
-      line.style.width = `${canvasWidth - AXIS_WIDTH}px`;
-      canvas.append(line);
-      if (half % 2 === 0 && half < halfHourCount) {
-        const label = document.createElement('time');
-        label.style.top = `${y}px`;
-        label.textContent = formatTime(timestamp);
-        axis.append(label);
-      }
+      canvas.append(axis);
+      structureSignature = nextStructure;
     }
-    canvas.append(axis);
+    const activeKeys = new Set();
     columns.forEach(({ channel, start, end }, channelIndex) => {
       let programCount = 0;
       (channel.programs || []).forEach(program => {
@@ -406,10 +417,23 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
         programCount += 1;
         const displayProgram = {
           ...program,
-          channel: { ...channel, ...(program.channel || {}) }
+          channel: { ...channel, programs: undefined, ...(program.channel || {}) }
         };
         const state = programState(program, data.reserves, data.recording);
-        const cell = document.createElement('button');
+        const key = `${channel.id}|${start}|${program.id}|${program.start}`;
+        activeKeys.add(key);
+        let entry = programCells.get(key);
+        if (!entry) {
+          entry = { cell: document.createElement('button'), signature: null };
+          programCells.set(key, entry);
+        }
+        entry.program = program;
+        entry.displayProgram = displayProgram;
+        const cell = entry.cell;
+        const signature = JSON.stringify([displayProgram, state, position]);
+        if (entry.signature === signature) return;
+        const initial = entry.signature === null;
+        entry.signature = signature;
         cell.type = 'button';
         cell.className = `guide-program category-${text(program.category, 'etc')} is-${state.key}`;
         cell.style.left = `${AXIS_WIDTH + channelIndex * channelWidth + 1}px`;
@@ -431,65 +455,76 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
         cell.setAttribute('aria-label', `${formatTime(program.start)} ${state.key === 'none' ? '' : `${state.label} `}${displayTitle}`);
         setProgramHover(cell, programHoverInfo(displayProgram, { channelLogoUrl: logoUrl(channel),
           statuses: state.key === 'none' ? [] : [state.label] }));
-        cell.addEventListener('click', () => openProgramDetailDialog({ id: program.id, onChanged: refreshState }));
-        cell.addEventListener('contextmenu', event => {
-          programHover.close();
-          event.preventDefault();
-          event.stopPropagation();
-          createGuideProgramMenu({ program: displayProgram, x: event.clientX, y: event.clientY,
-            onChanged: () => refreshState(['recording', 'reserves']),
-            resolveRule: async () => {
-              invalidateResources(['rules']);
-              const rules = await loadResource('rules');
-              const linked = ruleProgram(displayProgram, data.reserves);
-              if (linked === null) return { mode: 'unavailable', label: '関連する予約を一意に特定できません' };
-              const action = ruleAction(linked, rules, preferredRuleUids.get(program.id));
-              // A deleted rule's UID must never select another rule by list position.
-              if (action.mode === 'unavailable' && action.ruleUid &&
-                  action.label === '関連ルールは現在の一覧にありません') return { mode: 'create' };
-              return action;
-            },
-            onRule: action => {
-              if (action.mode === 'unavailable') {
-                location.hash = programDetailUrl({ id: program.id });
-                return;
-              }
-              ruleDialog = openRuleDialog(displayProgram, async result => {
-                if (result.mode === 'create' && text(result.rule?.ruleUid)) {
-                  preferredRuleUids.set(program.id, result.rule.ruleUid);
+        if (initial) {
+          cell.addEventListener('click', () => openProgramDetailDialog({ id: entry.program.id, onChanged: refreshState }));
+          cell.addEventListener('contextmenu', event => {
+            const program = entry.program;
+            const displayProgram = entry.displayProgram;
+            programHover.close();
+            event.preventDefault();
+            event.stopPropagation();
+            createGuideProgramMenu({ program: displayProgram, x: event.clientX, y: event.clientY,
+              onChanged: () => refreshState(['recording', 'reserves']),
+              resolveRule: async () => {
+                invalidateResources(['rules']);
+                const rules = await loadResource('rules');
+                const linked = ruleProgram(displayProgram, data.reserves);
+                if (linked === null) return { mode: 'unavailable', label: '関連する予約を一意に特定できません' };
+                const action = ruleAction(linked, rules, preferredRuleUids.get(program.id));
+                // A deleted rule's UID must never select another rule by list position.
+                if (action.mode === 'unavailable' && action.ruleUid &&
+                    action.label === '関連ルールは現在の一覧にありません') return { mode: 'create' };
+                return action;
+              },
+              onRule: action => {
+                if (action.mode === 'unavailable') {
+                  location.hash = programDetailUrl({ id: program.id });
+                  return;
                 }
-                await refreshState();
-              }, async () => {
-                preferredRuleUids.delete(program.id);
-                await refreshState();
-              }, action);
-            } });
-        });
-        canvas.append(cell);
+                ruleDialog = openRuleDialog(displayProgram, async result => {
+                  if (result.mode === 'create' && text(result.rule?.ruleUid)) {
+                    preferredRuleUids.set(program.id, result.rule.ruleUid);
+                  }
+                  await refreshState();
+                }, async () => {
+                  preferredRuleUids.delete(program.id);
+                  await refreshState();
+                }, action);
+              } });
+          });
+        }
+        if (cell.parentElement !== canvas) canvas.append(cell);
       });
-      if (weeklyChannel && programCount === 0) {
+      if (weeklyChannel && programCount === 0 && !canvas.querySelector(`[data-empty-column="${channelIndex}"]`)) {
         const empty = document.createElement('p');
         empty.className = 'guide-week-empty';
+        empty.dataset.emptyColumn = String(channelIndex);
         empty.textContent = 'データ未取得';
         empty.style.left = `${AXIS_WIDTH + channelIndex * channelWidth}px`;
         empty.style.width = `${channelWidth}px`;
         empty.style.top = `${HEADER_HEIGHT + 12}px`;
         canvas.append(empty);
       }
+      if (programCount > 0) canvas.querySelector(`[data-empty-column="${channelIndex}"]`)?.remove();
     });
+    for (const [key, entry] of programCells) {
+      if (activeKeys.has(key)) continue;
+      if (entry.cell.getAttribute('aria-describedby') === 'program-hover') programHover.close();
+      entry.cell.remove(); programCells.delete(key);
+    }
     const now = Date.now();
     const currentColumn = columns.findIndex(column => now >= column.start && now < column.end);
     if (currentColumn !== -1) {
-      const line = document.createElement('div');
+      const line = canvas.querySelector('.guide-now-line') || document.createElement('div');
       line.className = 'guide-now-line';
       line.style.top = `${HEADER_HEIGHT + (now - columns[currentColumn].start) / 3600000 * hourHeight}px`;
       line.style.left = `${AXIS_WIDTH + (weeklyChannel ? currentColumn * channelWidth : 0)}px`;
       line.style.width = `${weeklyChannel ? channelWidth : canvasWidth - AXIS_WIDTH}px`;
-      canvas.append(line);
-    }
+      if (!line.parentElement) canvas.append(line);
+    } else canvas.querySelector('.guide-now-line')?.remove();
     const host = container.querySelector('.guide-scroll');
-    host.replaceChildren(canvas);
-    if (previous) {
+    if (rebuild) host.replaceChildren(canvas);
+    if (previous && rebuild) {
       host.scrollLeft = previous.left;
       host.scrollTop = previous.top === 0 ? 0 : HEADER_HEIGHT +
         Math.max(0, previous.top - HEADER_HEIGHT) / previous.hourHeight * hourHeight;

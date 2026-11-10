@@ -228,6 +228,38 @@ function createManagement(model, seriesContext, seriesError) {
   return aside;
 }
 
+// Preserve display nodes and key links to other programmes by their target ID.
+// Patch their existing nodes so nested scrollers, open details and focus survive.
+function updateDetailSection(current, next) {
+  const identity = node => node.nodeType === Node.TEXT_NODE ? '#text' :
+    `${node.nodeName}:${node.className}:${node.matches('dt') ? node.textContent :
+      node.matches('details') ? node.querySelector(':scope > summary')?.textContent : node.dataset.programId || ''}`;
+  const available = Array.from(current.childNodes);
+  let cursor = current.firstChild;
+  for (const incoming of Array.from(next.childNodes)) {
+    const index = available.findIndex(node => identity(node) === identity(incoming));
+    const retained = index < 0 ? null : available.splice(index, 1)[0];
+    const node = retained || incoming;
+    if (node === cursor) cursor = cursor.nextSibling;
+    else current.insertBefore(node, cursor);
+    if (!retained) continue;
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.nodeValue !== incoming.nodeValue) node.nodeValue = incoming.nodeValue;
+      continue;
+    }
+    const runtimeAttribute = name => name === 'open' && node.matches('details') ||
+      name === 'style' && node.matches('[popover]');
+    for (const attribute of Array.from(node.attributes)) {
+      if (!runtimeAttribute(attribute.name) && !incoming.hasAttribute(attribute.name)) node.removeAttribute(attribute.name);
+    }
+    for (const attribute of Array.from(incoming.attributes)) {
+      if (!runtimeAttribute(attribute.name) && node.getAttribute(attribute.name) !== attribute.value) node.setAttribute(attribute.name, attribute.value);
+    }
+    updateDetailSection(node, incoming);
+  }
+  for (const node of available) node.remove();
+}
+
 function createThumbnail(model, onPlay, { onError = null, cacheKey = null, liveUrl = null } = {}) {
   const live = Boolean(model.media.livePreviewUrl);
   const url = live ? liveUrl : model.media.kind === 'recording' ? model.media.previewUrl
@@ -288,6 +320,9 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   let latestSeriesError = null;
   let preferredRuleUid = null;
   let boundaryTimer = null;
+  let notificationTimer = null;
+  let lastRenderSignature = null;
+  let lastHeaderSignature = null;
   const thumbnailController = new AbortController();
   let thumbnailTimer = null;
   let thumbnailView = null;
@@ -309,15 +344,16 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     ? initialAction : null;
   const reloadFromNotification = resources => {
     if (disposed || !dialog.open) return;
-    invalidateResources(resources);
-    load();
+    if (resources) invalidateResources(resources);
+    window.clearTimeout(notificationTimer);
+    notificationTimer = window.setTimeout(load, 200);
   };
   const unsubscribeReservation = subscribeReservationNotifications(() => reloadFromNotification(['reserves', 'rules']));
   const unsubscribeRecording = subscribeRecordingNotifications(() => reloadFromNotification(['recording', 'reserves']));
   const unsubscribeRecorded = subscribeRecordedNotifications(() => reloadFromNotification(['recorded', 'recording']));
-  const unsubscribeMatch = subscribeMatchNotifications(() => load());
+  const unsubscribeMatch = subscribeMatchNotifications(() => reloadFromNotification());
   const unsubscribeSeries = subscribeSeriesNotifications(update => {
-    if (update?.generation && !disposed && dialog.open) load();
+    if (update?.generation) reloadFromNotification();
   });
 
   function showFeedback(message, error = false) {
@@ -344,6 +380,11 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   function renderThumbnail() {
     if (!thumbnailView || disposed) return;
     const { model, host } = thumbnailView;
+    const signature = JSON.stringify([thumbnailSourceKey(model.media), livePreviewUrl, livePreviewNotice,
+      thumbnailMissing, thumbnailState?.status, thumbnailState?.updatedAt, thumbnailState?.reason, thumbnailState?.message, thumbnailRequestPending,
+      thumbnailChecking && !['queued', 'processing'].includes(thumbnailState?.status), thumbnailError]);
+    if (host.dataset.thumbnailView === signature) return;
+    host.dataset.thumbnailView = signature;
     host.replaceChildren();
     if (model.media.livePreviewUrl) {
       host.append(createThumbnail(model, () => play(thumbnailView?.model || model).catch(() => {}), {
@@ -620,6 +661,10 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   }
 
   async function render(model, seriesContext = null, seriesError = null) {
+    const renderSignature = JSON.stringify([{
+      ...model, media: { ...model.media, previewUrl: model.media.previewUrl?.split('&_n=')[0] }
+    }, seriesContext, seriesError?.message || null, stopRequested, latestDetail?.program?.abort === true]);
+    if (lastRenderSignature === renderSignature) return;
     const oldArticle = dialog.querySelector('article');
     const oldBody = oldArticle.querySelector(':scope > .program-modal-body');
     const oldRight = oldBody?.querySelector(':scope > .program-modal-right');
@@ -628,6 +673,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     const previousLogo = logo;
     const article = document.createElement('article');
     const header = document.createElement('header');
+    const headerSignature = JSON.stringify([model.channel, model.dateTime, model.phase, model.title]);
     header.innerHTML = '<div class="program-modal-channel"><span></span><div><p></p><div class="program-modal-title"><span class="program-modal-status"></span><span class="program-modal-status-reason" hidden></span><h2></h2></div></div></div><button class="guide-close" type="button" aria-label="閉じる">×</button>';
     const nextLogo = createChannelLogo({ name: model.channel.name, url: model.channel.logoUrl }, { variant: 'list' });
     header.querySelector('.program-modal-channel > span').replaceWith(nextLogo.element);
@@ -809,7 +855,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     if (oldBody && oldRight && oldThumbnailView?.host?.parentElement === oldRight) {
       // スクロール領域と画像要素は維持し、変更部分だけ差し替える。
       const oldHeader = oldArticle.querySelector(':scope > header');
-      if (oldHeader?.outerHTML === header.outerHTML) {
+      if (oldHeader && lastHeaderSignature === headerSignature) {
         nextLogo.dispose();
       } else {
         previousLogo?.dispose();
@@ -820,24 +866,13 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       const oldDescription = oldBody.querySelector(':scope > .program-modal-description');
       if (oldDescription?.outerHTML !== description.outerHTML) {
         if (oldDescription) {
-          const leftScroll = oldDescription.scrollTop;
-          oldDescription.replaceChildren(...description.childNodes);
-          oldDescription.scrollTop = leftScroll;
+          updateDetailSection(oldDescription, description);
         } else oldBody.prepend(description);
       }
       const oldManagement = oldRight.querySelector(':scope > .program-modal-management');
-      const rightScroll = oldRight.scrollTop;
-      const bodyScroll = oldBody.scrollTop;
       if (oldManagement) {
-        const oldDetails = oldManagement.querySelectorAll('details');
-        const nextDetails = management.querySelectorAll('details');
-        oldDetails.forEach((detail, index) => {
-          if (nextDetails[index]) nextDetails[index].open = detail.open;
-        });
-        if (oldManagement.outerHTML !== management.outerHTML) oldManagement.replaceWith(management);
+        updateDetailSection(oldManagement, management);
       } else oldRight.append(management);
-      oldRight.scrollTop = rightScroll;
-      oldBody.scrollTop = bodyScroll;
 
       const oldFooter = oldArticle.querySelector(':scope > footer');
       if (!oldFooter || lastFooterSignature !== nextFooterSignature) {
@@ -859,6 +894,8 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       renderThumbnail();
     }
     lastFooterSignature = nextFooterSignature;
+    lastHeaderSignature = headerSignature;
+    lastRenderSignature = renderSignature;
     if (busy) setMutationControlsDisabled(true);
     scheduleBoundary(model);
   }
@@ -947,6 +984,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     window.clearTimeout(thumbnailTimer);
     thumbnailView = null;
     window.clearTimeout(boundaryTimer);
+    window.clearTimeout(notificationTimer);
     ruleDialog?.close();
     unsubscribeReservation();
     unsubscribeRecording();
