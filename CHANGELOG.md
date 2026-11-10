@@ -12,12 +12,20 @@
 - Add global and per-rule recording-boundary priority settings to choose whether an incoming recording's start or an existing recording's end takes precedence during tuner handoff. Retain compatibility with legacy `allowEndLack` settings.
 - Send CLI recording-stop requests directly to Operator over IPC instead of rewriting `recording.json`, preserving the reservation-skip update for rule-based recordings.
 
+## Match Ledger and Cleaner
+
+- Stop storing recording-file paths in `match.json` during matching, v2 conversion, maintenance, Cleaner, and deletion-history updates. Resolve file locations from `recorded.json` for recording details, CSV, maintenance, TS analysis registration, Cleaner, and file deletion.
+- Keep recording IDs, canonical programme keys, rule associations, and missing/deleted history in match. Continue accepting legacy path-bearing entries, but do not use their paths to locate files or reconstruct match-only history. Retain separate TS analysis file fingerprints.
+- Tighten recording-ID and canonical-key matching to prevent one recording from inheriting another recording's path, analysis, or missing-file state. Correct Cleaner removal and repair targeting so another ledger row sharing the programme key is not altered, while retaining explicit history cleanup and verified file restoration.
+
 ## Web UI and Post-processing
 
-- Preserve program-detail scroll positions and unchanged content during background refreshes. Keep the existing details visible if a refresh fails, showing the error without replacing the dialog.
-- Expand the Task monitor with running and waiting tasks, programme links and hover previews, and up to 20 recent completions.
-- Avoid unnecessary Task monitor redraws during periodic updates, and improve TS analysis progress and result presentation.
-- Expand saved TS analysis details, including CC samples and PCR gap context, and refine automatic-analysis hover controls.
+- Preserve program-detail scroll positions and unchanged content during background refreshes. Keep existing details visible if a refresh fails, showing the error without replacing the dialog.
+- Reduce disruptive redraws and scroll resets during background updates in Next WUI programme and status views.
+- Expand the Task monitor with running and waiting tasks, programme links and hover previews, and up to 20 recent completions. Avoid unnecessary redraws during periodic updates.
+- Expand saved TS analysis details, including CC samples and PCR gap context, and refine automatic-analysis progress, results, and hover controls. Label CC anomalies in saved-TS hover warnings as `DROP疑い` (suspected drops) without changing the underlying analysis.
+- Improve recorded-result warning presentation, distinguishing explicitly deleted recordings from missing-file conditions and showing early recording-end timing when available.
+- Fix shared hover-popup closing and pointer-transition behavior so previews do not remain visible after leaving their targets.
 
 ## Series Management (BETA)
 
@@ -25,6 +33,8 @@
 - Add bulk association of selected programmes requiring review, with target revalidation before applying changes.
 - Load series lists in batches of 25, automatically fetching more near the end of the visible list and offering a manual "Load more" control.
 - Preserve existing series-list entries and visible positions across updates to reduce disruptive redraws.
+- Improve bulk-association control accessibility while scrolling, and correct lingering additional-item hover indicators in series lists.
+- Simplify Series navigation to "一覧" (List) and "要確認" (Needs Review), combining recorded and reserved series in a single list.
 
 Series matching and bulk correction remain experimental and require validation with actual programme data.
 
@@ -34,6 +44,10 @@ Series matching and bulk correction remain experimental and require validation w
 - Allow runtime verification or repair independently of whether a Git source update is needed.
 - Require explicit confirmation before discarding tracked local changes, preserve untracked files, and stop non-interactive updates when that confirmation is required.
 
+## Verification
+
+- Refresh existing regression tests for match path removal, recording identity, and Cleaner history handling; improve diagnostics for an intermittent Operator recording-start test timeout without changing its timing.
+- The last reported full `npm test` run passed 165 tests across 30 suites with no failures; subsequent WUI edits were not covered by that run.
 
 # Chinachu 0.10.7-thorn.36
 
