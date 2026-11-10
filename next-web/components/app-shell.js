@@ -214,7 +214,17 @@ export function createAppShell(root) {
     tsCloseTimer = setTimeout(() => {
       tsCloseTimer = null;
       tsHeader.open = false;
-    }, 10000);
+    }, 1000);
+  });
+  document.addEventListener('pointerdown', event => {
+    if (!tsHeader.open || tsHeader.contains(event.target)) return;
+    cancelTsClose();
+    tsHeader.open = false;
+  }, true);
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !tsHeader.open) return;
+    cancelTsClose();
+    tsHeader.open = false;
   });
   tsHeader.querySelectorAll('a').forEach(link => link.addEventListener('click', event => {
     event.stopPropagation();

@@ -1,5 +1,5 @@
-const DEFAULT_OPEN_DELAY_MS = 200;
-const DEFAULT_CLOSE_DELAY_MS = 10000;
+const DEFAULT_OPEN_DELAY_MS = 5;
+const DEFAULT_CLOSE_DELAY_MS = 10;
 
 export function createHoverPopupController({
   root,
@@ -52,7 +52,7 @@ export function createHoverPopupController({
     if (event?.pointerType && event.pointerType !== 'mouse') return;
     clearOpenTimer();
     clearCloseTimer();
-    if (!opened || root.contains(document.activeElement)) return;
+    if (!opened || openSource === 'click' || root.contains(document.activeElement)) return;
     closeTimer = window.setTimeout(() => {
       closeTimer = null;
       if (!root.matches(':hover') && !root.contains(document.activeElement)) setOpen(false, 'timeout');

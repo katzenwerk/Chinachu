@@ -23,7 +23,7 @@ html:has(.reserves-page) { min-width: 0; }
 .reserves-date-jump-button { display: grid; width: var(--header-control-height); height: var(--header-control-height); padding: 0; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); color: var(--text); cursor: pointer; }
 .reserves-date-jump-button:hover { border-color: var(--brand); background: var(--brand-soft); }
 .list-control-popup { position: relative; }
-.list-control-popup-panel { position: absolute; top: calc(100% + 6px); z-index: 35; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); box-shadow: var(--shadow); }
+.list-control-popup-panel { position: absolute; top: 100%; z-index: 35; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); box-shadow: var(--shadow); }
 .list-control-popup.is-open .list-control-popup-trigger { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb,var(--focus) 32%,transparent); }
 .month-calendar { left: 0; width: 286px; padding: 10px; color: var(--text); }
 .month-calendar-header { display: grid; grid-template-columns: 32px minmax(0,1fr) 32px; align-items: center; gap: 6px; margin-bottom: 7px; }

@@ -105,13 +105,13 @@ export function openCleanerDialog() {
     const held = ['ambiguous', 'review', 'uninspected', 'deletedMatchHeld', 'recordedMissingHistoryHeld',
       'recordedMissingUninspected', 'skippedHistoryHeld', 'missedHistoryHeld']
       .reduce((total, key) => total + Number(summary[key] || 0), 0);
-    const repair = result.results.filter(item => item.automatic && (item.action === 'normalize-location' || item.action === 'sync-match-path')).length;
+    const repair = result.results.filter(item => item.automatic && item.action === 'normalize-location').length;
     const recordedRemovals = result.results.filter(item => item.automatic && item.action === 'remove-history').length;
     const actionable = result.results.filter(item => item.automatic).length;
     const canApply = result.applyAvailable && result.index.complete && !result.options.selectedIds && actionable > 0;
     const cleanupItems = [
       { label: '存在状態の記録・復帰', count: Number(summary.fileStates || 0), classes: [], actions: ['mark-file-missing', 'restore-file'] },
-      { label: 'パス修復候補', count: repair, classes: [], actions: ['normalize-location', 'sync-match-path'] },
+      { label: 'パス修復候補', count: repair, classes: [], actions: ['normalize-location'] },
       { label: 'recorded整理候補', count: recordedRemovals, classes: ['missing'] },
       { label: '録画台帳不整合履歴候補', count: Number(summary.recordedMissingHistory || 0), classes: ['recorded-missing-history'] },
       { label: '削除済みmatch候補', count: Number(summary.deletedMatch || 0), classes: ['deleted-match'] },
