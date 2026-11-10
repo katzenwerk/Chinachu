@@ -11,11 +11,28 @@ const reservationStore = require('../lib/reservation-store');
 
 const repositoryRoot = path.resolve(__dirname, '..');
 
-function waitForCondition(predicate, message, timeoutMs) {
+function waitForCondition(predicate, message, timeoutMs, fixture) {
 	return new Promise((resolve, reject) => {
 		const startedAt = Date.now();
+		function failure(reason) {
+			if (!fixture) return new Error(reason);
+			const child = fixture.child;
+			return new Error(reason + '\n' + JSON.stringify({
+				elapsedMs: Date.now() - startedAt,
+				pid: child.pid,
+				exitCode: child.exitCode,
+				signalCode: child.signalCode,
+				spawnError: fixture.childError && fixture.childError.message,
+				streamRequests: fixture.requests.map(item => ({ id: item.id, index: item.index }))
+			}) + '\nOperator output:\n' + fixture.output());
+		}
 		const interval = setInterval(() => {
 			try {
+				if (fixture && (fixture.childError || fixture.child.exitCode !== null || fixture.child.signalCode !== null)) {
+					clearInterval(interval);
+					reject(failure(message + ': Operator failed before the condition was met'));
+					return;
+				}
 				if (predicate()) {
 					clearInterval(interval);
 					resolve();
@@ -31,7 +48,7 @@ function waitForCondition(predicate, message, timeoutMs) {
 
 			if (Date.now() - startedAt >= timeoutMs) {
 				clearInterval(interval);
-				reject(new Error(message));
+				reject(failure(message));
 			}
 		}, 20);
 	});
@@ -175,6 +192,7 @@ async function createOperatorFixture(programs, onStream, options) {
 
 	let output = '';
 	let child = null;
+	let childError = null;
 	let recordedLock = null;
 	const lockEventsPath = path.join(temporaryDir, 'recorded-lock-events.jsonl');
 	const operatorArgs = [ 'app-operator.js' ];
@@ -208,6 +226,7 @@ async function createOperatorFixture(programs, onStream, options) {
 	}
 
 	function startOperator() {
+		childError = null;
 		child = childProcess.spawn(process.execPath, operatorArgs, {
 			cwd: temporaryDir,
 			stdio: [ 'ignore', 'pipe', 'pipe' ],
@@ -218,13 +237,14 @@ async function createOperatorFixture(programs, onStream, options) {
 					CHINACHU_RUNTIME_DIR: path.join(temporaryDir, 'runtime')
 			})
 		});
+		child.once('error', error => { childError = error; });
 		child.stdout.on('data', chunk => { output += chunk.toString(); });
 		child.stderr.on('data', chunk => { output += chunk.toString(); });
 		return child;
 	}
 
 	async function stopOperator() {
-		if (!child || child.exitCode !== null || child.signalCode !== null) {
+		if (!child || !child.pid || child.exitCode !== null || child.signalCode !== null) {
 			return;
 		}
 
@@ -268,6 +288,9 @@ async function createOperatorFixture(programs, onStream, options) {
 		get child() {
 			return child;
 		},
+		get childError() {
+			return childError;
+		},
 		output: () => output,
 		read(name) {
 			return JSON.parse(fs.readFileSync(path.join(dataDir, name + '.json'), 'utf8'));
@@ -308,7 +331,7 @@ describe('Operator recording preparation attempts', function() {
 			await waitForCondition(
 				() => fixture.requests.filter(item => item.id === '2').length >= 2,
 				'active reserve was not retried after the normal cleanup interval',
-				10000
+				10000, fixture
 			);
 			assert.ok(fixture.read('recording').some(item => item.id === '2'));
 			assert.doesNotMatch(fixture.output(), /DROP STREAM ERROR: #2\b/);
@@ -343,7 +366,7 @@ describe('Operator recording preparation attempts', function() {
 				await waitForCondition(
 					() => fs.existsSync(recordedPath) && fs.readFileSync(recordedPath, 'utf8') === 'PART1',
 					'initial ' + scenario.name + ' recording did not start',
-					7000
+					7000, fixture
 				);
 
 				const exit = await fixture.gracefulStop('SIGINT');
@@ -367,7 +390,7 @@ describe('Operator recording preparation attempts', function() {
 				await waitForCondition(
 					() => fixture.requests.length === 2 && fs.readFileSync(recordedPath, 'utf8') === 'PART1PART2',
 					'interrupted ' + scenario.name + ' recording did not append at the same path',
-					7000
+					7000, fixture
 				);
 				responses[1].end();
 
@@ -412,7 +435,7 @@ describe('Operator recording preparation attempts', function() {
 			await waitForCondition(
 				() => fs.existsSync(releasedPath) && fs.readFileSync(releasedPath, 'utf8') === 'PART1',
 				'initial released manual recording did not start',
-				7000
+				7000, releasedFixture
 			);
 			fs.writeFileSync(path.join(releasedFixture.dataDir, 'reserves.json'), '[]');
 			await waitForCondition(
@@ -456,7 +479,7 @@ describe('Operator recording preparation attempts', function() {
 			await waitForCondition(() => responses.length === 8 && programs.every(program =>
 				fs.existsSync(path.join(fixture.recordedDir, program.id + '.m2ts')) &&
 				fs.readFileSync(path.join(fixture.recordedDir, program.id + '.m2ts'), 'utf8') === 'PART1'),
-			'all eight fixture streams did not start', 7000);
+			'all eight fixture streams did not start', 7000, fixture);
 			responses.forEach(response => response.end('PART2'));
 			await waitForCondition(() => fixture.lockEvents().length > 0 &&
 				fixture.read('recording').filter(program => program._operatorHistoryPending).length === 8,
@@ -520,7 +543,7 @@ describe('Operator recording preparation attempts', function() {
 		try {
 			await waitForCondition(() => response && fs.existsSync(path.join(fixture.recordedDir, '2.m2ts')) &&
 				fs.readFileSync(path.join(fixture.recordedDir, '2.m2ts'), 'utf8') === 'PART1',
-			'fixture recording did not start', 7000);
+			'fixture recording did not start', 7000, fixture);
 			response.end('PART2');
 			await waitForCondition(() => /recording finalization incomplete #2:/.test(fixture.output()),
 			'failed save was not reported after bounded retries', 10000);
