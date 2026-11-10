@@ -496,13 +496,13 @@ describe('Match detail resolver', function() {
 		const secondKey = `channel-b|${secondStart}|${seconds}`;
 		const thirdKey = `channel-c|${thirdStart}|${seconds}`;
 		const fourthKey = `channel-d|${fourthStart}|${seconds}`;
-		const recordedA = program({ ruleUid: 'rule-a' });
+		const recordedA = program({ id: 'recorded-a', ruleUid: 'rule-a' });
 		const deletedA = program({
 			ruleUid: 'rule-a', start: secondStart, end: secondStart + seconds * 1000,
 			channel: { id: 'channel-b', name: 'Channel B', type: 'GR' }
 		});
 		const recordedB = program({
-			ruleUid: 'rule-b', start: thirdStart, end: thirdStart + seconds * 1000,
+			id: 'recorded-b', ruleUid: 'rule-b', start: thirdStart, end: thirdStart + seconds * 1000,
 			channel: { id: 'channel-c', name: 'Channel C', type: 'GR' }
 		});
 		const detailResolver = resolver.createDetailResolver({
@@ -648,7 +648,7 @@ describe('Match detail resolver', function() {
 		assert.strictEqual(ambiguous.resolution.error, 'ambiguous-recorded-id');
 	});
 
-	it('keeps recorded preview fallback gated by current file existence for v2 path-only history', function() {
+	it('rejects match-only preview history before probing its former recording path', function() {
 		const script = fs.readFileSync(path.resolve(__dirname, '../api/script-recorded-program-preview.vm.js'), 'utf8');
 		let errorCode = null;
 		const matchFile = '/fixture/match.json';
@@ -661,7 +661,10 @@ describe('Match detail resolver', function() {
 				end() {}
 			},
 			fs: {
-				existsSync(filename) { return filename === matchFile || filename === reserves2File; },
+				existsSync(filename) {
+					assert.ok(filename === matchFile || filename === reserves2File, 'must not probe a match recording path');
+					return true;
+				},
 				readFileSync(filename) {
 					if (filename === matchFile) return JSON.stringify([v2()]);
 					if (filename === reserves2File) return JSON.stringify([program({ id: 'reserve-a' })]);
@@ -681,6 +684,6 @@ describe('Match detail resolver', function() {
 		};
 
 		vm.runInNewContext(script, context, { filename: 'api/script-recorded-program-preview.vm.js' });
-		assert.strictEqual(errorCode, 410);
+		assert.strictEqual(errorCode, 404);
 	});
 });

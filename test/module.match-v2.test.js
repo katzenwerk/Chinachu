@@ -98,7 +98,10 @@ describe('Match v2 writer and migration', function () {
 
 	it('recovers only the same recorded-missing entry while preserving explicit or ambiguous deletion', function () {
 		const old = v2({ deletion: { deletedAt: nowMs - 1000, reason: 'manual' } });
-		const missing = v2({ deletion: { deletedAt: null, reason: 'recorded-missing' } });
+		const missing = v2({
+			recording: { recordedId: 'recorded-a' },
+			deletion: { deletedAt: null, reason: 'recorded-missing' }
+		});
 		const same = v2({ deletion: null });
 		const sameWithoutReservation = v2({ status: 'RECORDED_UNTRACKED', deletion: null });
 		const replaced = v2({
@@ -109,8 +112,10 @@ describe('Match v2 writer and migration', function () {
 		assert.deepStrictEqual(matching.mergeOldNew(old, same, null, null, { recordedReadOk: true }).deletion, old.deletion);
 		assert.equal(matching.mergeOldNew(missing, same, null, null, { recordedReadOk: true }).deletion, null);
 		assert.deepStrictEqual(matching.mergeOldNew(missing, same).deletion, missing.deletion);
-		assert.equal(matching.mergeOldNew(missing, replaced, null, null, { recordedReadOk: true }).recording.recordedId,
-			'recorded-a');
+		const rejectedReplacement = matching.mergeOldNew(missing, replaced, null, null, { recordedReadOk: true });
+		assert.equal(rejectedReplacement.recording.recordedId, 'recorded-a');
+		assert.deepStrictEqual(rejectedReplacement.deletion, missing.deletion);
+		assert.equal(rejectedReplacement.recording.path, undefined);
 		assert.equal(matching.mergeOldNew(old, sameWithoutReservation).status, 'RECORDED');
 		assert.equal(matching.mergeOldNew(old, replaced).deletion, null);
 		assert.equal(matching.mergeOldNew(v2({ ruleUid: 'rule-old' }), v2({ ruleUid: null })).ruleUid, 'rule-old');

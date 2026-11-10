@@ -485,6 +485,12 @@ function mergeOldNew(oldEntry, newEntry, logger, config, options) {
 	}
 
 	if (isRecordedStatus(oldEntry.status) && isRecordedStatus(newEntry.status)) {
+		var oldDeletion = matchDetailResolver.normalizeMatchEntry(oldEntry).deletion;
+		// A missing ledger reference cannot be recovered by a different recording ID.
+		if (oldDeletion && oldDeletion.reason === "recorded-missing" &&
+			isClearlyDifferentRecording(oldEntry, newEntry)) {
+			return oldEntry;
+		}
 		if (!isClearlyDifferentRecording(oldEntry, newEntry)) {
 			var continuedEntry = preserveDeletion(oldEntry, newEntry, options);
 			var oldMissing = matchDetailResolver.normalizeMatchEntry(oldEntry).fileMissing;

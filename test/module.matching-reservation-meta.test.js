@@ -57,7 +57,7 @@ describe('Matching reservation snapshots', function() {
 		assert.strictEqual(JSON.stringify(original), before);
 	});
 
-	it('uses only matching current metadata while preserving recorded and final-path protection', function() {
+	it('uses only matching current metadata and preserves recorded status without retaining match paths', function() {
 		const old = ledger({ recordedList: [recorded], reserves2List: [reservation] });
 		[
 			{ ...program, ruleId: 'new-rule', ruleIdSource: 'id', recordedDirId: 'recorded-b', recordedDir: '/fixture/recorded-b/' },
@@ -81,6 +81,12 @@ describe('Matching reservation snapshots', function() {
 		const temporary = ledger({
 			recordedList: [{ ...recorded, recorded: '/fixture/temp/program.m2ts' }], reserves2List: [reservation]
 		})[0];
-		assert.strictEqual(matching.mergeOldNew(previous, temporary, null, { temporaryDir: '/fixture/temp/' }), previous);
+		const merged = matching.mergeOldNew(previous, temporary, null, { temporaryDir: '/fixture/temp/' });
+		assert.deepStrictEqual(merged, temporary);
+		assert.strictEqual(merged.status, 'RECORDED');
+		assert.strictEqual(merged.recordingResult.id, recorded.id);
+		assert.strictEqual(merged.recordingResult.path, undefined);
+		assert.strictEqual(merged.program.recorded, undefined);
+		assert.strictEqual(merged.recordingResult.snapshot.recorded, undefined);
 	});
 });
