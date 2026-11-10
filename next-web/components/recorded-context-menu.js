@@ -106,6 +106,7 @@ export function createRecordedContextMenu({ onAction }) {
     clearMenuFocus();
     selected = item;
     toggleFilters(false);
+    menu.querySelector('[data-action="filter"]').hidden = item?.hideFilter === true;
     const playable = isRecordedResultPlayable(item);
     menu.querySelector('[data-action="play"]').disabled = !playable;
     menu.querySelector('[data-action="download"]').disabled = !playable;

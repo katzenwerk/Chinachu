@@ -4,6 +4,9 @@ import { appendMobileContextButton } from '../components/mobile-layout.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { openSeriesBulkCorrectionDialog, openSeriesCorrectionDialog } from '../components/series-correction-dialog.js';
 import { createSeriesContextMenu } from '../components/series-context-menu.js';
+import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
+import { createHomeProgramContextMenu } from '../components/home-program-context-menu.js';
+import { openRecordedPlaybackOverlay } from '../services/live-player-adapter.js';
 import { recordedResultWarnings } from '../services/recorded-result-warnings.js';
 import { loadSeriesProjection, loadSeriesStatus, removeSeriesOverride, setSeriesHidden } from '../services/series-client.js';
 import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
@@ -379,7 +382,7 @@ function appendAttentionSelection(entry, state) {
     state.context.changeAttentionSelection(state.selection.keys, checkbox.checked);
   });
   state.selection = { host, checkbox, labelText, keys: [], signature: null, details: null, individual: [] };
-  entry.append(host);
+  entry.prepend(host);
 }
 
 function updateAttentionSelection(state, item) {
@@ -415,7 +418,10 @@ function updateAttentionSelection(state, item) {
         selection.individual.push([event.key, input]);
         return label;
       });
-      details.replaceChildren(summary, ...labels);
+      const options = document.createElement('div');
+      options.className = 'series-attention-select-options';
+      options.append(...labels);
+      details.replaceChildren(summary, options);
     } else if (selection.details) {
       selection.details.remove();
       selection.details = null;
@@ -427,6 +433,7 @@ function updateAttentionSelection(state, item) {
 function createSeriesListEntry(cardMode, tab) {
   const entry = document.createElement(cardMode ? 'article' : 'div');
   entry.className = cardMode ? 'series-list-card-entry' : 'series-list-entry';
+  if (tab === 'attention') entry.classList.add('is-attention');
   const link = document.createElement('a');
   link.className = cardMode ? 'series-list-card' : 'series-list-row';
   const state = { item: null, context: null, link, title: null, summary: null, menuButton: null, media: null, tid: null, thumbnailUrl: undefined, selection: null };
@@ -652,13 +659,13 @@ function appendEventLogo(host, event, context, options = {}) {
   button.addEventListener('click', () => context.openDetail(context.eventIndex?.get(event.key) || seriesEventContext(event, context)));
   button.addEventListener('contextmenu', eventObject => {
     eventObject.preventDefault();
-    context.openMenu(context.eventIndex?.get(event.key) || seriesEventContext(event, context), { x: eventObject.clientX, y: eventObject.clientY });
+    context.openEventMenu(context.eventIndex?.get(event.key) || seriesEventContext(event, context), { x: eventObject.clientX, y: eventObject.clientY }, options.kind);
   });
   button.addEventListener('keydown', eventObject => {
     if (eventObject.key === 'ContextMenu' || eventObject.key === 'F10' && eventObject.shiftKey) {
       eventObject.preventDefault();
       const rect = button.getBoundingClientRect();
-      context.openMenu(context.eventIndex?.get(event.key) || seriesEventContext(event, context), { x: rect.left + 16, y: rect.top + 16 });
+      context.openEventMenu(context.eventIndex?.get(event.key) || seriesEventContext(event, context), { x: rect.left + 16, y: rect.top + 16 }, options.kind);
     }
   });
   wrapper.append(button);
@@ -1060,8 +1067,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     });
   }
 
-  const contextMenu = createSeriesContextMenu({
-    onAction(action, context) {
+  function handleSeriesAction(action, context) {
       if (action === 'detail') return openDetail(context);
       if (action === 'series-view') {
         const href = seriesEventHref(context, tab === 'attention' ? 'recordings' : tab);
@@ -1078,8 +1084,66 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
       if (action === 'series-hidden' && context.kind === 'series') {
         updateHidden(context.tid, !context.hidden);
       }
+  }
+  const contextMenu = createSeriesContextMenu({ onAction: handleSeriesAction });
+  const showMenuError = error => window.alert(String(error?.message || error));
+  function copyEventTitle(title) {
+    if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(title).catch(showMenuError);
+    else window.prompt('タイトルをコピー', title);
+  }
+  function searchEventTitle(action, title) {
+    const url = action === 'search-google'
+      ? `https://www.google.com/search?q=${encodeURIComponent(title)}`
+      : `https://ja.wikipedia.org/wiki/${encodeURIComponent(title)}`;
+    window.open(url, '_blank', 'noopener');
+  }
+  const recordedContextMenu = createRecordedContextMenu({
+    onAction(action, item) {
+      if (action.startsWith('series-')) return handleSeriesAction(action, item.seriesContext);
+      if (action === 'detail' || action === 'rule' || action === 'delete') {
+        openProgramDetailDialog({ key: item.key, id: item.recordedId,
+          initialAction: action === 'detail' ? null : action, onChanged: () => scheduleRefresh(0) });
+      } else if (action === 'play') {
+        void openRecordedPlaybackOverlay({ playable: true, recordedId: item.recordedId,
+          title: item.fullTitle || item.title || 'タイトル未取得' }).catch(showMenuError);
+      } else if (action === 'download') {
+        const anchor = document.createElement('a');
+        anchor.href = `/api/recorded/${encodeURIComponent(item.recordedId)}/file.m2ts`;
+        anchor.download = '';
+        anchor.hidden = true;
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+      } else if (action === 'copy-title') copyEventTitle(item.fullTitle || item.title || '');
+      else if (action === 'search-google' || action === 'search-wikipedia')
+        searchEventTitle(action, item.title || item.fullTitle || '');
     }
   });
+  const programContextMenu = createHomeProgramContextMenu({
+    onAction(action, item) {
+      if (action === 'rule') openProgramDetailDialog({ id: item.id, initialAction: 'rule',
+        onChanged: () => scheduleRefresh(0) });
+      else if (action === 'copy-title') copyEventTitle(item.title || '');
+      else if (action === 'search-google' || action === 'search-wikipedia')
+        searchEventTitle(action, item.title || '');
+    }
+  });
+  function openEventMenu(context, point, kind) {
+    contextMenu.close();
+    recordedContextMenu.close();
+    programContextMenu.close();
+    const event = context?.event;
+    const recordings = event?.recordings || [];
+    if (kind === 'recording' && recordings.length === 1 &&
+        recordings[0].recordedId && !recordings[0].deleted) {
+      recordedContextMenu.open({ ...recordings[0], key: event.key,
+        recordedId: recordings[0].recordedId, title: event.title, fullTitle: event.fullTitle,
+        channel: event.channel, seriesContext: context, hideFilter: true }, point);
+    } else if (kind === 'reservation' && event?.reservation && event.ids?.length === 1) {
+      programContextMenu.open({ id: event.ids[0], title: event.fullTitle || event.title,
+        program: { channel: { id: event.channel?.id } }, refresh: () => scheduleRefresh(0) }, point);
+    } else contextMenu.open(context, point);
+  }
 
   async function updateHidden(tid, hidden) {
     if (hidden && !window.confirm('このシリーズを録画・予約の一覧から非表示にしますか？')) return;
@@ -1365,6 +1429,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
         selectedEventKey: eventKey,
         openDetail,
         openMenu: contextMenu.open,
+        openEventMenu,
         openBulk,
         setHidden: updateHidden
       };
@@ -1474,6 +1539,8 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     if (!autoLoadObserver) window.removeEventListener('scroll', maybeAutoLoad);
     unsubscribers.forEach(unsubscribe => unsubscribe());
     contextMenu.destroy();
+    recordedContextMenu.destroy();
+    programContextMenu.destroy();
     dataDialog?.remove();
     hiddenDialog?.remove();
     setHeaderActions();
