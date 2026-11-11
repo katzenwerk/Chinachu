@@ -172,6 +172,7 @@ describe('Operator low-storage handling', function() {
 			storageLoggedPhases: new Map(), storageCleanupState: {}, storageLow,
 			storageLowSpaceThresholdMB: 3000, storageLowSpaceWarningThresholdMB: 10000,
 			storageLowSpaceAction: 'stop', operatorLog: line => logs.push(line),
+			externalNotifier: { storage() {} },
 			notifyStorageGroup: () => { notifications += 1; }, persistStorageRuntimeState() {},
 			stopRecordingsOnFilesystem: () => { stops += 1; }
 		};

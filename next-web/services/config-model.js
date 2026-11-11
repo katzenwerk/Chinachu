@@ -6,7 +6,7 @@ export const DROP_DETECTION_MODES = [
 ];
 
 const KNOWN_KEYS = new Set([
-  'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs',
+  'externalNotifications', 'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs',
   'recordedFormat', 'recordedCommand', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
   'recordingFilenamePrefixEnabled', 'recordedFolderOrganizeEnabled', 'recordedFolderOrganizeOrder',
   'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm',
@@ -207,6 +207,11 @@ export function validateConfig(config) {
 export function formatChangeValue(value, removed = false, key) {
   if (removed) return '（未指定へ変更）';
   if (value === undefined) return '（未指定）';
+  if (key === 'externalNotifications') {
+    const publicValue = configPreview({ externalNotifications: value }).externalNotifications;
+    const hasSecrets = Object.values(value.routes).some(route => ['webhook', 'token', 'user', 'password'].some(key => route[key]));
+    return JSON.stringify(publicValue) + (hasSecrets ? '（接続情報の変更あり）' : '');
+  }
   if (key === 'dropDetectionMode') {
     if (value === null) return '（未指定・Mirakurun監視（標準））';
     const mode = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -215,4 +220,14 @@ export function formatChangeValue(value, removed = false, key) {
   }
   if (typeof value === 'string') return value === '' ? '（空文字）' : value;
   return JSON.stringify(value);
+}
+
+export function configPreview(config) {
+  const result = cloneConfig(config);
+  if (result.externalNotifications) {
+    for (const route of Object.values(result.externalNotifications.routes)) {
+      for (const key of ['webhook', 'token', 'user', 'password']) delete route[key];
+    }
+  }
+  return result;
 }

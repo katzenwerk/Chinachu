@@ -21,13 +21,23 @@
 				return response.error(400);
 			}
 			
-			//var json = JSON.stringify(obj, null, '  ');
-			var json = request.query.json;
-			
-			fs.writeFileSync(define.CONFIG_FILE, json);
-			
-			response.head(200);
-			response.end(json);
+			try {
+				if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return response.error(400);
+				// Refuse to replace a config that became invalid after the page was loaded.
+				JSON.parse(fs.readFileSync(define.CONFIG_FILE, 'utf8'));
+				delete obj.externalNotifications;
+				var persistConfig = function () { wuiConfigStore.writeAtomic(define.CONFIG_FILE, obj); };
+				if (request.query.notifications !== undefined) {
+					if (typeof externalNotification.saveSettings !== 'function') return response.error(503);
+					var settings = JSON.parse(request.query.notifications);
+					var savedNotifications = externalNotification.saveSettings(define.REPOSITORY_ROOT, settings, persistConfig);
+					obj.externalNotifications = savedNotifications;
+				} else persistConfig();
+				response.head(200);
+				response.end(JSON.stringify(obj));
+			} catch (error) {
+				return response.error(error.statusCode === 400 || error instanceof SyntaxError ? 400 : 500);
+			}
 			return;
 	}
 

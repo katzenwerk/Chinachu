@@ -3,14 +3,16 @@ const CONFIG_PATH = '/api/config.json';
 async function parseJsonResponse(response) {
   let value = null;
   try { value = await response.json(); } catch (_) {}
+  if (response.status === 503) throw new Error('保存APIの更新が必要です。WUIの再起動後に保存をやり直してください。');
   if (!response.ok) throw new Error(`設定APIがHTTP ${response.status}を返しました`);
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('設定APIの応答形式が不正です');
   return value;
 }
 
 export async function loadConfig(signal) {
-  const response = await fetch(CONFIG_PATH, { method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store', signal });
-  return parseJsonResponse(response);
+  const responses = await Promise.all([CONFIG_PATH, '/api/notification.json'].map(url =>
+    fetch(url, { method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store', signal }).then(parseJsonResponse)));
+  return { ...responses[0], externalNotifications: responses[1] };
 }
 
 export async function loadClockRuntime(signal) {
@@ -19,16 +21,21 @@ export async function loadClockRuntime(signal) {
   return value.runtime && typeof value.runtime === 'object' ? value.runtime : {};
 }
 
-export async function saveConfig(config, signal) {
-  const json = JSON.stringify(config, null, '\t');
+export async function saveConfig(config, signal, original) {
+  const { externalNotifications, ...mainConfig } = config;
+  const json = JSON.stringify(mainConfig, null, '\t');
   const body = new URLSearchParams({ json });
+  const notificationsChanged = JSON.stringify(externalNotifications) !== JSON.stringify(original?.externalNotifications);
+  if (externalNotifications && notificationsChanged) body.set('notifications', JSON.stringify(externalNotifications));
   const response = await fetch(CONFIG_PATH, {
     method: 'PUT',
     headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
     body,
     signal
   });
-  return parseJsonResponse(response);
+  const saved = await parseJsonResponse(response);
+  if (notificationsChanged && externalNotifications && !saved.externalNotifications) throw new Error('通知設定の保存結果を確認できませんでした。画面を更新してください。');
+  return { ...saved, externalNotifications: saved.externalNotifications || externalNotifications };
 }
 
 export async function loadRuntimeMode(signal) {

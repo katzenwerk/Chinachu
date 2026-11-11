@@ -1,3 +1,4 @@
+import { createNotificationSettings } from '../components/notification-settings.js';
 import { loadClockRuntime, loadConfig, loadMirakurunServices, loadRuntimeMode, saveConfig } from '../services/config-client.js';
 import {
   beginTotpSetup,
@@ -12,6 +13,7 @@ import {
   DROP_DETECTION_MODES,
   cloneConfig,
   configForSave,
+  configPreview,
   configChanges,
   formatChangeValue,
   normalizeRecordedDirs,
@@ -26,7 +28,7 @@ import QrCreator from '../vendor/qr-creator.es6.min.js';
 const TABS = [
   ['basic', '基本設定'], ['recording', '録画設定'], ['storage', 'Storage'],
   ['history', '履歴管理'], ['services', 'サービス'], ['series', 'シリーズ'], ['auth', 'ログイン認証'],
-  ['clock', '時計'], ['advanced', '詳細設定']
+  ['clock', '時計'], ['notification', '通知'], ['advanced', '詳細設定']
 ];
 
 const FIELD = {
@@ -169,6 +171,7 @@ export function renderSettingsPage(container) {
   let clockRuntime = {};
   let authSettings = null;
   let activeTab = 'basic';
+  let notificationView;
   let services = null;
   let broadcastClockChannels = null;
   let broadcastClockChannelsRequest = null;
@@ -892,7 +895,7 @@ export function renderSettingsPage(container) {
     const unknown = document.createElement('p');
     unknown.className = 'settings-muted';
     const update = () => {
-      details.querySelector('pre').textContent = JSON.stringify(draft, null, 2);
+      details.querySelector('pre').textContent = JSON.stringify(configPreview(draft), null, 2);
       const keys = unknownConfigKeys(draft);
       unknown.textContent = keys.length ? `この画面では編集しない設定: ${keys.join(', ')}` : '画面に入力欄がない設定はありません。';
     };
@@ -1207,14 +1210,15 @@ export function renderSettingsPage(container) {
       button.disabled = true;
       status.textContent = '保存しています…';
       try {
-        const saved = await saveConfig(saveDraft, controller.signal);
+        const saved = await saveConfig(saveDraft, controller.signal, original);
         original = cloneConfig(saved);
         draft = cloneConfig(saved);
         fieldErrors.clear();
         dialog.close();
-        render();
+        notificationView.refresh();
+        markChanged();
         const message = container.querySelector('.settings-page-message');
-        message.textContent = '設定を保存しました。必要なサービス再起動は自動では行いません。';
+        message.textContent = '設定を保存しました。通知設定は反映済みです。他の設定に必要なサービス再起動は自動では行いません。';
         message.hidden = false;
       } catch (error) {
         status.textContent = error.message;
@@ -1237,8 +1241,10 @@ export function renderSettingsPage(container) {
       fieldErrors.clear();
       services = null;
       broadcastClockChannels = null;
+      const scroll = { x: window.scrollX, y: window.scrollY };
       dialog.close();
       render();
+      window.scrollTo(scroll.x, scroll.y);
     });
     dialog.addEventListener('close', () => dialog.remove(), { once: true });
     document.body.append(dialog);
@@ -1247,7 +1253,7 @@ export function renderSettingsPage(container) {
 
   function render() {
     dependentUpdates.length = 0;
-    container.innerHTML = `<div class="settings-page"><div class="settings-intro"><div><h2>Chinachu設定</h2><p>Chinachuの接続先、録画、Storage、履歴、Web画面の動作を設定します。</p></div><span class="settings-change-count"></span></div><p class="settings-page-message" role="status" hidden></p><div class="settings-tabs" role="tablist" aria-label="設定カテゴリ"></div><div class="settings-content"></div><div class="settings-actions"><span>保存した設定は、必要なサービスを再起動した後に反映されます。</span><button class="button settings-discard" type="button">変更を破棄</button><button class="button primary settings-save" type="button">変更を確認して保存</button></div></div>`;
+    container.innerHTML = `<div class="settings-page"><div class="settings-intro"><div><h2>Chinachu設定</h2><p>Chinachuの接続先、録画、Storage、履歴、Web画面の動作を設定します。</p></div><span class="settings-change-count"></span></div><p class="settings-page-message" role="status" hidden></p><div class="settings-tabs" role="tablist" aria-label="設定カテゴリ"></div><div class="settings-content"></div><div class="settings-actions"><span>通知設定は保存後すぐに反映されます。他の設定は必要なサービスの再起動後に反映されます。</span><button class="button settings-discard" type="button">変更を破棄</button><button class="button primary settings-save" type="button">変更を確認して保存</button></div></div>`;
     const tabs = container.querySelector('.settings-tabs');
     const content = container.querySelector('.settings-content');
     TABS.forEach(([key, label]) => {
@@ -1270,7 +1276,10 @@ export function renderSettingsPage(container) {
       });
       tabs.append(button);
     });
-    content.append(createBasicTab(), createRecordingTab(), createStorageTab(), createHistoryTab(), createServicesTab(), createSeriesTab(), createAuthTab(), createClockTab(), createAdvancedTab());
+    notificationView = createNotificationSettings({ signal: controller.signal,
+      getSettings: () => draft.externalNotifications, getSaved: () => original.externalNotifications, onChange: markChanged });
+    notificationView.hidden = activeTab !== 'notification';
+    content.append(createBasicTab(), createRecordingTab(), createStorageTab(), createHistoryTab(), createServicesTab(), createSeriesTab(), createAuthTab(), createClockTab(), notificationView, createAdvancedTab());
     if (activeTab === 'clock' && draft.broadcastClockEnabled === true) {
       const select = content.querySelector('[data-broadcast-clock-channel]');
       const button = select?.parentElement?.querySelector('button');

@@ -136,4 +136,87 @@ test('settings model preserves unknown and untouched values while validating exp
 	assert.ok(!homeSource.includes('data-home-layout'));
 
 
+	// Notification drafts share the ordinary change/restore model; secrets never enter previews.
+	const notification = require('../lib/external-notification');
+	const os = require('os');
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-settings-'));
+	try {
+		fs.mkdirSync(path.join(root, 'data'));
+		const configFile = path.join(root, 'config.json');
+		fs.writeFileSync(configFile, JSON.stringify(original));
+		notification.update(root, { route: 'slack', values: { webhook: 'https://hooks.slack.com/services/fixture/only/secret' } });
+		const saved = { ...original, externalNotifications: notification.publicSettings(notification.read(root)) };
+		const pending = model.cloneConfig(saved);
+		pending.externalNotifications.routes.slack.enabled = true;
+		pending.externalNotifications.events.start = true;
+		assert.deepStrictEqual(model.configChanges(saved, pending).map(item => item.key), ['externalNotifications']);
+		pending.externalNotifications.routes.slack.enabled = false;
+		pending.externalNotifications.events.start = false;
+		assert.deepStrictEqual(model.configChanges(saved, pending), []);
+		pending.externalNotifications.routes.slack.webhook = 'https://hooks.slack.com/services/fixture/new/new-secret';
+		assert.ok(!JSON.stringify(model.configPreview(pending)).includes('new-secret'));
+		assert.ok(!model.formatChangeValue(pending.externalNotifications, false, 'externalNotifications').includes('new-secret'));
+		const apiSource = fs.readFileSync(path.join(__dirname, '../api/script-config.vm.js'), 'utf8');
+		function put(config, notifications) {
+			let status, body;
+			const query = { json: JSON.stringify(config) };
+			if (notifications) query.notifications = JSON.stringify(notifications);
+			vm.runInNewContext(apiSource, { fs, data: { status: { feature: { configurator: true } } },
+				define: { CONFIG_FILE: configFile, REPOSITORY_ROOT: root }, request: { method: 'PUT', query },
+				wuiConfigStore: require('../lib/wui-config'), externalNotification: notification,
+				response: { head: code => { status = code; }, end: text => { body = JSON.parse(text); }, error: code => { status = code; } } });
+			return { status, body };
+		}
+		const combined = put({ ...original, recordedFormat: 'new-format' }, pending.externalNotifications);
+		assert.strictEqual(combined.status, 200);
+		assert.strictEqual(combined.body.recordedFormat, 'new-format');
+		assert.ok(!JSON.stringify(combined.body).includes('new-secret'));
+		assert.ok(!fs.readFileSync(configFile, 'utf8').includes('externalNotifications'));
+		assert.ok(notification.read(root).routes.slack.webhook.endsWith('new-secret'));
+		put({ ...original, recordedFormat: 'other-tab' });
+		assert.ok(notification.read(root).routes.slack.webhook.endsWith('new-secret'));
+		const clientSource = fs.readFileSync(path.join(__dirname, '../next-web/services/config-client.js'), 'utf8');
+		const client = await import('data:text/javascript;base64,' + Buffer.from(clientSource).toString('base64'));
+		const realFetch = globalThis.fetch, calls = [];
+		globalThis.fetch = async (url, init) => {
+			calls.push({ url, init });
+			let value;
+			if (init.method === 'GET') value = url.includes('notification') ? notification.publicSettings(notification.read(root)) : JSON.parse(fs.readFileSync(configFile, 'utf8'));
+			else {
+				assert.strictEqual(url, '/api/config.json');
+				assert.ok(!init.body.get('json').includes('externalNotifications'));
+				const result = put(JSON.parse(init.body.get('json')), init.body.has('notifications') ? JSON.parse(init.body.get('notifications')) : null);
+				return { ok: result.status === 200, status: result.status, json: async () => result.body };
+			}
+			return { ok: true, status: 200, json: async () => value };
+		};
+		try {
+			const loaded = await client.loadConfig();
+			assert.ok(loaded.externalNotifications.routes.slack.configured);
+			const edited = model.cloneConfig(loaded);
+			edited.externalNotifications.events.start = !edited.externalNotifications.events.start;
+			edited.externalNotifications.routes.slack.webhook = 'https://hooks.slack.com/services/fixture/edited/new-secret';
+			const result = await client.saveConfig(edited, undefined, loaded);
+			assert.strictEqual(result.externalNotifications.events.start, edited.externalNotifications.events.start);
+			assert.strictEqual(result.externalNotifications.routes.slack.webhook, undefined);
+			assert.deepStrictEqual(model.configChanges(result, model.cloneConfig(result)), []);
+			const onlyOtherTab = { ...result, recordedFormat: 'unchanged-notification' };
+			await client.saveConfig(onlyOtherTab, undefined, result);
+			assert.strictEqual(calls.at(-1).init.body.has('notifications'), false);
+		} finally { globalThis.fetch = realFetch; }
+		const deleted = model.cloneConfig(combined.body.externalNotifications);
+		deleted.routes.slack = { configured: false, enabled: false };
+		assert.ok(notification.read(root).routes.slack); // Staging deletion makes no server change.
+		assert.strictEqual(put(original, deleted).status, 200);
+		assert.strictEqual(notification.read(root).routes.slack, undefined);
+		const invalid = model.cloneConfig(deleted);
+		invalid.routes.mail = { configured: true, enabled: true }; // No SMTP connection information.
+		assert.strictEqual(put({ recordedDir: '/should-not-save' }, invalid).status, 400);
+		assert.strictEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')).recordedDir, original.recordedDir);
+		fs.writeFileSync(configFile, '{invalid');
+		assert.strictEqual(put(original, deleted).status, 400);
+		assert.strictEqual(fs.readFileSync(configFile, 'utf8'), '{invalid');
+	} finally { fs.rmSync(root, { recursive: true, force: true }); }
+
+
 });

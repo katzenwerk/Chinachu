@@ -190,3 +190,28 @@ textarea.settings-input { min-height: 86px; resize: vertical; font-family: ui-mo
 .settings-auto-ts-controls { display: grid; gap: 9px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); justify-items: start; }
 .settings-auto-ts-controls[hidden] { display: none; }
 .settings-auto-ts-controls > p { margin: 0; }
+
+.settings-notification-table { display: grid; grid-template-columns: minmax(88px,.65fr) repeat(3,minmax(0,1fr)); padding: 4px 18px 16px; }
+.settings-notification-heading { display: grid; grid-template-columns: subgrid; grid-column: 1/-1; }
+.settings-notification-heading > strong { padding: 12px 4px; text-align: center; border-bottom: 1px solid var(--border); }
+.settings-notification-row-labels,.settings-notification-controls { display: grid; grid-template-rows: repeat(3,58px); }
+.settings-notification-row-labels > strong,.settings-notification-cell { display: flex; align-items: center; justify-content: center; border-bottom: 1px solid var(--border); font-size: 13px; }
+.settings-notification-cell .button { padding: 7px 12px; white-space: nowrap; }
+.settings-notification-mobile-title { display: none; }
+.settings-notification-events { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px 20px; padding: 14px 18px 18px; }
+.settings-notification-event { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.settings-notification-dialog { width: min(36rem, calc(var(--wui-viewport-width) - 2rem)); max-height: calc(var(--wui-viewport-dynamic-height) * 0.9); overflow: auto; }
+.settings-notification-dialog input,.settings-notification-dialog select { width: 100%; min-width: 0; box-sizing: border-box; }
+.settings-notification-dialog form { display: block; max-height: none; }
+.settings-notification-dialog .settings-field { gap: .5rem; }
+@media (max-width: 640px) {
+  .settings-notification-table { grid-template-columns: minmax(0,1fr); gap: 12px; padding-top: 12px; }
+  .settings-notification-heading,.settings-notification-row-labels { display: none; }
+  .settings-notification-column { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 12px; }
+  .settings-notification-mobile-title { display: block; margin: 12px 0 4px; font-size: 14px; }
+  .settings-notification-controls { grid-template-rows: repeat(3,50px); }
+  .settings-notification-cell { justify-content: space-between; gap: 12px; }
+  .settings-notification-cell::before { content: attr(data-label); color: var(--muted); }
+  .settings-notification-cell:last-child { border-bottom: 0; }
+  .settings-notification-events { grid-template-columns: minmax(0,1fr); }
+}

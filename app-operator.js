@@ -70,6 +70,7 @@ process.on('uncaughtException', (err) => {
 const dateFormat = require('dateformat').default;
 // Node.js 18.15.0 以降の fs.statfs() を使用するため diskusage は不要
 const notification = require('./lib/notification');
+const externalNotifier = require('./lib/external-notification').createNotifier(__dirname, operatorLog);
 const recordingAttempt = require('./lib/recording-attempt');
 const storageLow = require('./lib/storage-low');
 const storageHealth = require('./lib/storage-health');
@@ -922,6 +923,7 @@ function startScheduler() {
 		// Its synchronous match worker may have timed out on our match lock,
 		// while our earlier snapshot missed the Scheduler's new reservations.
 		if (overlappedMatch) scheduleMatchLedgerUpdate('scheduler overlap');
+		if (code === 0 && signal === null) externalNotifier.refreshOutcomes();
 		wakePostProcessing();
 		schedulerRequest.onSchedulerExit({
 			successful: code === 0 && signal === null,
@@ -1230,6 +1232,12 @@ function saveCompletedRecording(program, recovering, originalRecordedPath = prog
 					operatorLog('ERROR: recorded hook could not start: ' + error.message);
 				}
 			}
+		}
+		if (!recovering && !isResumePending) {
+			externalNotifier.recordingResult(completedProgram);
+			const sendResult = completedProgram.operatorAbort ? externalNotifier.finish : externalNotifier.notify;
+			sendResult(completedProgram.operatorAbort ? 'abort' : 'complete', completedProgram,
+				completedProgram.operatorAbortReason || (completedProgram.operatorEndLack ? '尻切れ許可による終了' : '録画結果を保存しました。'));
 		}
 		if (recovering) operatorLog('RECOVERED HISTORY: ' + printProgram(program));
 		else if (isResumePending) operatorLog('FIN INTERRUPTED: resume pending: ' + printProgram(program));
@@ -1639,6 +1647,8 @@ function updateMatchLedger(reason) {
 		if (spawnError || code !== 0 || signal) {
 			operatorLog('WARNING: match.json update failed: ' +
 				(spawnError ? spawnError.message : 'code=' + code + ' signal=' + signal));
+		} else {
+			externalNotifier.refreshOutcomes();
 		}
 		wakePostProcessing();
 		recordedThumbnailGenerator.resume();
@@ -2035,6 +2045,7 @@ function markRecordingNg(program, reason) {
 		return;
 	}
 
+	if (!program._operatorNg) externalNotifier.finish(program.operatorAbort ? 'abort' : 'failure', program, reason || 'NG RECORDING');
 	try {
 		Object.defineProperty(program, '_operatorNg', {
 			enumerable: false,
@@ -3431,6 +3442,7 @@ function doRecord(program, stream) {
 	});
 
 	stream.pipe(recFile);
+	recFile.once('open', () => externalNotifier.notify('start', program, '録画出力を開始しました。'));
 	if (tsDropAnalyzer) {
 		// 録画pipeを先に接続し、同じchunkを読み取り専用で観測する。
 		// Transformを録画経路へ挟まないため、recFile側のbackpressure経路は維持される。
@@ -3883,6 +3895,7 @@ function handleStorageGroup(group, recordingEvent) {
 		writable: true,
 		value: group.capacityCheckedAt
 	});
+	externalNotifier.storage(group);
 	notifyStorageGroup(group);
 	if (group.phase !== 'cleanup') {
 		const previous = storageCleanupState[group.filesystemKey];
@@ -4277,6 +4290,7 @@ chinachu.jsonWatcher(
 		}
 
 		reserves = data;
+		externalNotifier.conflicts(data);
 		operatorLog(mes);
 		wakePostProcessing();
 		recordedThumbnailGenerator.resume();
@@ -4325,6 +4339,7 @@ chinachu.jsonWatcher(
 	{ create: [], now: false }
 );
 
+externalNotifier.refreshOutcomes();
 recoverRecordingHistory();
 reserveCheckLoop();
 startBroadcastClockMonitor();

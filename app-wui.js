@@ -108,6 +108,7 @@ const logHistory = require('./lib/log-history');
 const ledgerCleaner = require('./lib/ledger-cleaner');
 const ledgerCleanerJobsModule = require('./lib/ledger-cleaner-jobs');
 const wuiConfigStore = require('./lib/wui-config');
+const externalNotification = require('./lib/external-notification');
 const wuiAuthModule = require('./lib/wui-auth');
 const wuiRuntime = Object.freeze({
 	instanceId: Date.now().toString(36) + '-' + process.pid.toString(36) + '-' + Math.random().toString(36).slice(2, 10),
@@ -1194,6 +1195,7 @@ function httpServerMain(req, res, query) {
 				ledgerCleaner : ledgerCleaner,
 					ledgerCleanerJobs: ledgerCleanerJobs,
 					wuiConfigStore: wuiConfigStore,
+					externalNotification: externalNotification,
 				define: {
 					REPOSITORY_ROOT   : __dirname,
 					NODE_EXECUTABLE    : process.execPath,

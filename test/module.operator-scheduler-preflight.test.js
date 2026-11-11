@@ -188,6 +188,7 @@ function createOperatorLaunchFixture(store) {
 		operatorLog: message => logs.push(message),
 		scheduleMatchLedgerUpdate: () => assert.fail('No overlapping match was started by this fixture'),
 		wakePostProcessing: () => {},
+		externalNotifier: { refreshOutcomes() {} },
 		child_process: {
 			spawn() {
 				if (runtime.throwNext) { runtime.throwNext = false; throw new Error('spawn failed synchronously'); }

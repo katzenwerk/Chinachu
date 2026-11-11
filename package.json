@@ -34,6 +34,7 @@
     "easy-table": "~0.2.0",
     "fast-xml-parser": "5.11.1",
     "mirakurun": "4.2.1",
+    "nodemailer": "10.5.0",
     "opts": "^1.2.7",
     "socket.io": "^4.8.4"
   },
