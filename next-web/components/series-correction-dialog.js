@@ -16,6 +16,11 @@ function dateTime(value) {
   return Number.isFinite(number) && number > 0 ? dateTimeFormatter.format(new Date(number)) : '日時未取得';
 }
 
+function selectionValue(value) {
+  return /^local:[a-f0-9]{24}$/u.test(String(value)) ? String(value) : positiveInteger(value);
+}
+function selectionInput(value) { return typeof value === 'string' ? { seriesId: value } : { tid: value }; }
+function candidateId(item) { return item.id?.startsWith('local:') ? item.id : Number(item.tid); }
 function positiveInteger(value) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : null;
@@ -45,6 +50,10 @@ function candidateOptions(event, candidates) {
     const number = Number(tid);
     if (Number.isInteger(number) && !values.has(number)) values.set(number, { tid: number, title: `TID ${number}`, firstYear: null });
   }
+  if (event.resolution?.manual?.seriesId?.startsWith('local:')) {
+    const manual = event.resolution.manual; values.set(manual.seriesId, { id: manual.seriesId, tid: null, title: manual.title || 'オリジナルシリーズ' });
+  }
+  for (const item of candidates || []) if (item.id?.startsWith('local:')) values.set(item.id, item);
   return Array.from(values.values());
 }
 
@@ -64,11 +73,9 @@ function createTitlePicker({ initialCandidates = [], currentTid = null, initialQ
   const tidSelect = document.createElement('select');
   tidSelect.required = true;
   tidLabel.append(tidSelect);
-  const initial = initialCandidates.map(item => ({
-    tid: Number(item.tid), title: text(item.title, `TID ${item.tid}`), firstYear: item.firstYear || null
-  })).filter(item => Number.isInteger(item.tid) && item.tid > 0);
-  const known = new Map(initial.map(item => [item.tid, item]));
-  let selectedTid = positiveInteger(currentTid);
+  const initial = initialCandidates.filter(item => selectionValue(candidateId(item)) !== null);
+  const known = new Map(initial.map(item => [candidateId(item), item]));
+  let selectedTid = selectionValue(currentTid);
   let searchTimer = null;
   let searchSequence = 0;
 
@@ -76,9 +83,9 @@ function createTitlePicker({ initialCandidates = [], currentTid = null, initialQ
     const current = [];
     const seen = new Set();
     for (const source of items || []) {
-      const tid = Number(source.tid);
-      if (!Number.isInteger(tid) || tid <= 0 || seen.has(tid)) continue;
-      const item = { tid, title: text(source.title, `TID ${tid}`), firstYear: source.firstYear || null };
+      const tid = candidateId(source);
+      if (selectionValue(tid) === null || seen.has(tid)) continue;
+      const item = { ...source, title: text(source.title, `TID ${tid}`) };
       known.set(tid, item);
       seen.add(tid);
       current.push(item);
@@ -89,7 +96,7 @@ function createTitlePicker({ initialCandidates = [], currentTid = null, initialQ
     tidSelect.replaceChildren(new Option('作品を選択してください', ''));
     for (const item of current) {
       const suffix = item.firstYear ? ` (${item.firstYear})` : '';
-      tidSelect.add(new Option(`${item.title}${suffix} · TID ${item.tid}`, String(item.tid)));
+      tidSelect.add(new Option(`${item.title}${suffix} · ${item.id?.startsWith('local:') ? 'オリジナル' : 'TID ' + item.tid}`, String(candidateId(item))));
     }
     tidSelect.value = selectedTid === null ? '' : String(selectedTid);
   }
@@ -116,7 +123,11 @@ function createTitlePicker({ initialCandidates = [], currentTid = null, initialQ
     }
   }
 
-  search.addEventListener('input', () => {
+  let composing = false;
+  search.addEventListener('compositionstart', () => { composing = true; searchSequence++; window.clearTimeout(searchTimer); });
+  search.addEventListener('compositionend', () => { composing = false; runSearch(); });
+  search.addEventListener('input', event => {
+    if (composing || event.isComposing) return;
     window.clearTimeout(searchTimer);
     searchSequence++;
     if (!search.value.trim()) {
@@ -126,7 +137,7 @@ function createTitlePicker({ initialCandidates = [], currentTid = null, initialQ
     searchTimer = window.setTimeout(runSearch, 250);
   });
   tidSelect.addEventListener('change', () => {
-    selectedTid = positiveInteger(tidSelect.value);
+    selectedTid = selectionValue(tidSelect.value);
     onSelection(selectedTid, selectedTid === null ? null : known.get(selectedTid) || null);
   });
   replaceCandidates(initial);
@@ -174,7 +185,7 @@ export function openSeriesCorrectionDialog({
     evidence.append(dt, dd);
   }
 
-  const currentTid = event.resolution?.manual?.tid ?? autoTid;
+  const currentTid = event.resolution?.manual?.seriesId?.startsWith('local:') ? event.resolution.manual.seriesId : event.resolution?.manual?.tid ?? autoTid;
   const picker = createTitlePicker({
     initialCandidates: candidateOptions(event, candidates),
     currentTid,
@@ -227,7 +238,7 @@ export function openSeriesCorrectionDialog({
     save.disabled = true;
     remove.disabled = true;
     removeWorkRule.disabled = true;
-    const tid = positiveInteger(tidSelect.value);
+    const tid = selectionValue(tidSelect.value);
     if (tid === null) {
       subtitlePreview.textContent = '';
       return;
@@ -246,10 +257,12 @@ export function openSeriesCorrectionDialog({
         eventKey: event.key,
         generation: event.generation,
         contextToken,
-        tid,
+        ...selectionInput(tid),
         episode: episodeExplicit && episode.value ? Number(episode.value) : null
       });
       if (sequence !== previewSequence || !dialog.isConnected) return;
+      episode.disabled = typeof tid === 'string';
+      if (typeof tid === 'string') episodeExplicit = false;
       if (!episodeExplicit && !preview.episodeConfirmed) episode.value = '';
       if (!episodeExplicit && preview.episodeConfirmed) {
         episode.value = String(preview.episode);
@@ -387,8 +400,8 @@ export function openSeriesCorrectionDialog({
       eventKey: event.key,
       generation: event.generation,
       validationToken,
-      tid: Number(tidSelect.value),
-      episode: episodeExplicit && episode.value !== '' ? Number(episode.value) : null
+      ...selectionInput(selectionValue(tidSelect.value)),
+      episode: typeof selectionValue(tidSelect.value) !== 'string' && episodeExplicit && episode.value !== '' ? Number(episode.value) : null
     }));
   });
   remove.addEventListener('click', () => run(() => removeSeriesOverride(event.key, { generation: event.generation, contextToken })));
@@ -426,9 +439,9 @@ export function openSeriesBulkCorrectionDialog({ group, onChanged = () => {} }) 
   confirmation.className = 'series-bulk-confirmation';
   function updateConfirmation() {
     const selected = picker.selectedCandidate();
-    const tid = selected && selected.tid;
+    const tid = selected && candidateId(selected);
     confirmation.textContent = selected ?
-      `${events.length}件を「${text(selected.title, `TID ${tid}`)}」（TID ${tid}）へ紐づけます。EPはイベントごとに再評価します。` :
+      `${events.length}件を「${text(selected.title, `TID ${tid}`)}」（${typeof tid === 'string' ? 'オリジナル' : 'TID ' + tid}）へ紐づけます。${typeof tid === 'string' ? 'EP指定は不要です。' : 'EPはイベントごとに再評価します。'}` :
       '一括指定する作品を選択してください。';
   }
   picker = createTitlePicker({
@@ -515,7 +528,7 @@ export function openSeriesBulkCorrectionDialog({ group, onChanged = () => {} }) 
 
   form.addEventListener('submit', async submitEvent => {
     submitEvent.preventDefault();
-    const tid = positiveInteger(tidSelect.value);
+    const tid = selectionValue(tidSelect.value);
     if (tid === null) {
       message.textContent = '作品を選択してください。';
       tidSelect.focus();
@@ -524,7 +537,7 @@ export function openSeriesBulkCorrectionDialog({ group, onChanged = () => {} }) 
     for (const button of actions.querySelectorAll('button')) button.disabled = true;
     message.textContent = '';
     try {
-      await saveSeriesOverridesBulk({ groupId: group.id, eventKeys, tid, generation: group.generation, dictionaryGeneration: group.dictionaryGeneration });
+      await saveSeriesOverridesBulk({ groupId: group.id, eventKeys, ...selectionInput(tid), generation: group.generation, dictionaryGeneration: group.dictionaryGeneration });
       dialog.close();
       await onChanged({ conflict: false });
     } catch (error) {

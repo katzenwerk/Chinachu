@@ -142,6 +142,7 @@ function createTsDropSummary(summary) {
 
 function seriesDecisionLabel(context, error) {
   if (error) return 'シリーズ情報取得失敗';
+  if (context?.seriesId?.startsWith('local:')) return 'オリジナルシリーズ・手動関連付け';
   if (!context?.tidConfirmed) return 'TID未確定';
   if (context.manual) {
     const automaticTid = Number(context.event?.resolution?.automatic?.tid);
@@ -195,7 +196,7 @@ function createManagement(model, seriesContext, seriesError) {
     addFact(facts, '録画終了（Operator）', model.operatorRecording.endLabel);
   }
   addFact(facts, '所属作品', seriesContext?.seriesTitle || '未確定');
-  addFact(facts, 'TID', seriesContext?.tidConfirmed ? String(seriesContext.tid) : '未確定');
+  addFact(facts, 'TID', seriesContext?.seriesId?.startsWith('local:') ? '対象外（オリジナル）' : seriesContext?.tidConfirmed ? String(seriesContext.tid) : '未確定');
   addFact(facts, '話数', seriesContext?.episodeConfirmed ? seriesContext.episodeLabel :
     seriesContext?.episodeHint ? `未確定（EPG #${seriesContext.episodeHint}）` : '未確定');
   addFact(facts, '判定', seriesDecisionLabel(seriesContext, seriesError));

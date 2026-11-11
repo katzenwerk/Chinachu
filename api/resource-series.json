@@ -4,6 +4,11 @@
     "methods": ["get"],
     "types": ["json"]
   },
+  "/dictionary": {
+    "script": "series",
+    "methods": ["get"],
+    "types": ["json"]
+  },
   "/search": {
     "script": "series",
     "methods": ["get"],
@@ -62,6 +67,11 @@
   "/status": {
     "script": "series",
     "methods": ["get"],
+    "types": ["json"]
+  },
+  "/local": {
+    "script": "series",
+    "methods": ["get", "post", "delete"],
     "types": ["json"]
   }
 }

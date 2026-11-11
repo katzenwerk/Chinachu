@@ -1,7 +1,9 @@
+import { openOriginalSeriesDialog, createSeriesRegistryView } from '../components/series-registry-dialog.js';
 import { createChannelLogo } from '../components/channel-logo.js';
 import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
 import { appendMobileContextButton, headerCompactMedia } from '../components/mobile-layout.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
+import { deleteRecordedFromContext } from '../services/recorded-delete-action.js';
 import { openSeriesBulkCorrectionDialog, openSeriesCorrectionDialog } from '../components/series-correction-dialog.js';
 import { createSeriesContextMenu } from '../components/series-context-menu.js';
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
@@ -653,11 +655,13 @@ function appendEventLogo(host, event, context, options = {}) {
   button.addEventListener('click', () => context.openDetail(context.eventIndex?.get(event.key) || seriesEventContext(event, context)));
   button.addEventListener('contextmenu', eventObject => {
     eventObject.preventDefault();
+    eventObject.stopPropagation();
     context.openEventMenu(context.eventIndex?.get(event.key) || seriesEventContext(event, context), { x: eventObject.clientX, y: eventObject.clientY }, options.kind);
   });
   button.addEventListener('keydown', eventObject => {
     if (eventObject.key === 'ContextMenu' || eventObject.key === 'F10' && eventObject.shiftKey) {
       eventObject.preventDefault();
+      eventObject.stopPropagation();
       const rect = button.getBoundingClientRect();
       context.openEventMenu(context.eventIndex?.get(event.key) || seriesEventContext(event, context), { x: rect.left + 16, y: rect.top + 16 }, options.kind);
     }
@@ -775,7 +779,7 @@ function renderSeriesDetail(host, series, tab, context) {
   let cardSize = readPreference(SIZE_KEY, ['small', 'medium', 'large'], 'medium');
   let columns = readPreference(COLUMNS_KEY, ['auto', '3', '4', '5', '6'], 'auto');
   let currentSeries = series;
-  const eventContext = { ...context, seriesId: series.id, candidates: [{ tid: series.tid, title: series.title }] };
+  const eventContext = { ...context, seriesId: series.id, candidates: [{ id: series.id, tid: series.tid, title: series.title }] };
   const episodeCards = new Map();
   host.replaceChildren();
   const back = link(`#series?tab=${tab}`, '← 一覧へ戻る', 'series-back-link');
@@ -914,7 +918,7 @@ function renderSeriesDetail(host, series, tab, context) {
       const anchor = seriesScrollAnchor(grid);
       currentSeries = nextSeries;
       Object.assign(eventContext, nextContext, {
-        seriesId: nextSeries.id, candidates: [{ tid: nextSeries.tid, title: nextSeries.title }]
+        seriesId: nextSeries.id, candidates: [{ id: nextSeries.id, tid: nextSeries.tid, title: nextSeries.title }]
       });
       updateHeader();
       renderGrid(false, anchor);
@@ -991,7 +995,10 @@ function renderAttentionDetail(host, group, context) {
   return { root: list, groupId: group.id, update };
 }
 
-export function renderSeriesPage(container, query = new URLSearchParams(), options = {}) {
+export function renderSeriesPage(rootContainer, query = new URLSearchParams(), options = {}) {
+  const container = document.createElement('div');
+  rootContainer.replaceChildren(container);
+  let registryView = null, registryVisible = false, seriesScroll = 0, registryScroll = 0;
   const controller = new AbortController();
   const setHeaderActions = typeof options.setHeaderActions === 'function' ? options.setHeaderActions : () => {};
   let tab = TABS.has(query.get('tab')) ? query.get('tab') : 'all';
@@ -1005,7 +1012,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   let hiddenDialog = null;
   let headerActions = null;
   let headerControls = null;
-  const compactHeader = headerCompactMedia(1100);
+  const compactHeader = headerCompactMedia(1320);
   const syncCompactHeader = () => { if (headerControls) headerControls.open = !compactHeader.matches; };
   compactHeader.addEventListener('change', syncCompactHeader);
   let availabilityKey = null;
@@ -1098,7 +1105,15 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   const recordedContextMenu = createRecordedContextMenu({
     onAction(action, item) {
       if (action.startsWith('series-')) return handleSeriesAction(action, item.seriesContext);
-      if (action === 'detail' || action === 'rule' || action === 'delete') {
+      if (action === 'delete') {
+        void deleteRecordedFromContext({ key: item.key, recordedId: item.recordedId }).then(result => {
+          if (!result || controller.signal.aborted) return;
+          scheduleRefresh(0);
+          if (result.storageRefreshError) {
+            showMenuError(`録画ファイルは削除しました。容量表示の更新に失敗しました: ${result.storageRefreshError}`);
+          }
+        }).catch(showMenuError);
+      } else if (action === 'detail' || action === 'rule') {
         openProgramDetailDialog({ key: item.key, id: item.recordedId,
           initialAction: action === 'detail' ? null : action, onChanged: () => scheduleRefresh(0) });
       } else if (action === 'play') {
@@ -1118,6 +1133,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     }
   });
   const programContextMenu = createHomeProgramContextMenu({
+    waitForReady: true,
     onAction(action, item) {
       if (action === 'rule') openProgramDetailDialog({ id: item.id, initialAction: 'rule',
         onChanged: () => scheduleRefresh(0) });
@@ -1178,6 +1194,25 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
     }
   }
 
+  function registryChanged() {
+    registryView?.refreshLocal();
+    renderedGeneration = null; scheduleRefresh(0);
+  }
+  function showRegistry(visible) {
+    if (visible === registryVisible) return;
+    if (visible) {
+      seriesScroll = window.scrollY;
+      if (!registryView) {
+        registryView = createSeriesRegistryView({ signal: controller.signal, onChanged: () => { renderedGeneration = null; scheduleRefresh(0); }, onBack: () => showRegistry(false) });
+        rootContainer.append(registryView.root);
+      }
+    } else registryScroll = window.scrollY;
+    registryVisible = visible;
+    container.hidden = visible; registryView.root.hidden = !visible;
+    headerActions?.querySelector('.series-registry-button')?.setAttribute('aria-pressed', String(visible));
+    window.scrollTo(0, visible ? registryScroll : seriesScroll);
+  }
+
   function installHeader(data, config = {}) {
     if (!dataDialog) {
       dataDialog = createAvailabilityDialog(data.availability);
@@ -1208,6 +1243,17 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
         config.onViewChange?.();
       },
       detailControls: config.detailControls || []
+    });
+    const registryButton = document.createElement('button'); registryButton.type = 'button';
+    registryButton.className = 'button series-data-button series-registry-button'; registryButton.textContent = '登録一覧';
+    registryButton.setAttribute('aria-pressed', String(registryVisible));
+    registryButton.addEventListener('click', () => showRegistry(!registryVisible));
+    const addButton = document.createElement('button'); addButton.type = 'button'; addButton.className = 'button series-data-button'; addButton.textContent = 'オリジナル追加';
+    addButton.addEventListener('click', () => openOriginalSeriesDialog({ signal: controller.signal, onChanged: registryChanged }));
+    (actions.querySelector('.series-header-secondary') || actions).append(registryButton, addButton);
+    actions.addEventListener('click', event => {
+      const anchor = event.target.closest('a');
+      if (registryVisible && anchor?.getAttribute('href') === `#series?tab=${tab}`) { event.preventDefault(); showRegistry(false); }
     });
     headerActions = actions;
     headerControls = document.createElement('details');
@@ -1246,6 +1292,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   }
 
   function maybeAutoLoad() {
+    if (registryVisible) return;
     if (controller.signal.aborted || loading || autoLoadBlocked || !overviewView || !listData ||
         renderedQuery !== listKey() || renderedGeneration !== listData.generation) return;
     if (visibleCount >= seriesRows(listData, tab).length && !listData.pagination?.hasMore) return;
@@ -1542,6 +1589,7 @@ export function renderSeriesPage(container, query = new URLSearchParams(), optio
   return () => {
     compactHeader.removeEventListener('change', syncCompactHeader);
     programHover.dispose();
+    registryView?.dispose();
     controller.abort();
     window.clearTimeout(refreshTimer);
     window.clearTimeout(searchTimer);

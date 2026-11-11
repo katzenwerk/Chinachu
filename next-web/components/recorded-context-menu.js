@@ -124,8 +124,8 @@ export function createRecordedContextMenu({ onAction }) {
     menu.querySelector('[data-action="series-view"]').disabled = !series?.seriesId;
     const change = menu.querySelector('[data-action="series-change"]');
     change.disabled = !series?.eventKey;
-    change.textContent = series?.tidConfirmed ? 'シリーズを変更' : 'シリーズに紐づけ';
-    menu.querySelector('[data-action="series-episode"]').disabled = !series?.seriesId;
+    change.textContent = series?.tidConfirmed || series?.seriesId?.startsWith('local:') ? 'シリーズを変更' : 'シリーズに紐づけ';
+    menu.querySelector('[data-action="series-episode"]').disabled = !series?.seriesId || series.seriesId.startsWith('local:');
     menu.querySelector('[data-action="series-remove"]').hidden = series?.manual !== true;
     menu.hidden = false;
     position(x, y);

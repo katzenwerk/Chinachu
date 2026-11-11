@@ -13,10 +13,12 @@
 			command = 'view';
 			input = Object.assign({}, input, { mode: views[route] });
 		} else if (route === '/api/series/status.json') command = 'status';
+		else if (route === '/api/series/dictionary.json') command = 'dictionary';
 		else if (route === '/api/series/search.json') {
-			if (typeof input.q !== 'string' || !input.q.trim()) return response.error(400);
+			if (typeof input.q !== 'string') return response.error(400);
 			command = 'searchTitles';
-		} else if (route === '/api/series/preview.json') command = 'previewManualSelection';
+		} else if (route === '/api/series/local.json') command = request.method === 'GET' ? 'listLocalSeries' : request.method === 'DELETE' ? 'removeLocalSeries' : 'createLocalSeries';
+		else if (route === '/api/series/preview.json') command = 'previewManualSelection';
 		else if (route === '/api/series/override.json') command = request.method === 'DELETE' ? 'removeManualOverride' : 'setManualOverride';
 		else if (route === '/api/series/override-bulk.json') command = 'setManualOverrides';
 		else if (route === '/api/series/work-rule.json') command = 'removeWorkRule';

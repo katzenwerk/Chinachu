@@ -18,8 +18,8 @@ export function reservationActionLabel(action) {
 export function seriesCorrectionActions(context) {
   if (!context?.event?.key) return [];
   return [
-    { action: 'series-change', label: context.tidConfirmed ? 'シリーズを変更' : 'シリーズに紐づけ' },
-    { action: 'series-episode', label: '話数を修正' },
+    { action: 'series-change', label: context.tidConfirmed || context.seriesId?.startsWith('local:') ? 'シリーズを変更' : 'シリーズに紐づけ' },
+    ...(!context.seriesId?.startsWith('local:') ? [{ action: 'series-episode', label: '話数を修正' }] : []),
     ...(context.manual === true ? [{ action: 'series-remove', label: '手動指定を解除' }] : [])
   ];
 }

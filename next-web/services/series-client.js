@@ -136,17 +136,17 @@ async function requestJson(path, options = {}) {
   }
 }
 
-export async function searchSeriesTitles(query, { signal } = {}) {
-  const result = await requestJson(`/api/series/search.json?q=${encodeURIComponent(query)}`, { method: 'GET', signal });
+export async function searchSeriesTitles(query, { signal, kind } = {}) {
+  const result = await requestJson(`/api/series/search.json?q=${encodeURIComponent(query)}${kind ? '&kind=' + encodeURIComponent(kind) : ''}`, { method: 'GET', signal });
   if (!result || result.schemaVersion !== 1 || !Array.isArray(result.results)) {
     throw new Error('作品辞書検索APIの応答形式が不正です');
   }
   return result.results;
 }
 
-export async function previewSeriesSelection({ eventKey, tid, episode = null, generation, contextToken }, { signal } = {}) {
+export async function previewSeriesSelection({ eventKey, tid, seriesId, episode = null, generation, contextToken }, { signal } = {}) {
   const result = await requestJson('/api/series/preview.json', {
-    method: 'POST', signal, body: JSON.stringify({ eventKey, tid, episode, generation, contextToken })
+    method: 'POST', signal, body: JSON.stringify({ eventKey, tid, seriesId, episode, generation, contextToken })
   });
   if (!result || result.schemaVersion !== 1 || !result.result) {
     throw new Error('シリーズ補正プレビューAPIの応答形式が不正です');
@@ -154,15 +154,15 @@ export async function previewSeriesSelection({ eventKey, tid, episode = null, ge
   return result.result;
 }
 
-export async function saveSeriesOverride({ eventKey, tid, episode, generation, validationToken }, { signal } = {}) {
+export async function saveSeriesOverride({ eventKey, tid, seriesId, episode, generation, validationToken }, { signal } = {}) {
   return requestJson('/api/series/override.json', {
-    method: 'POST', signal, body: JSON.stringify({ eventKey, tid, episode, generation, validationToken })
+    method: 'POST', signal, body: JSON.stringify({ eventKey, tid, seriesId, episode, generation, validationToken })
   });
 }
 
-export async function saveSeriesOverridesBulk({ groupId, eventKeys, tid, generation, dictionaryGeneration }, { signal } = {}) {
+export async function saveSeriesOverridesBulk({ groupId, eventKeys, tid, seriesId, generation, dictionaryGeneration }, { signal } = {}) {
   return requestJson('/api/series/override-bulk.json', {
-    method: 'POST', signal, body: JSON.stringify({ groupId, eventKeys, tid, generation, dictionaryGeneration })
+    method: 'POST', signal, body: JSON.stringify({ groupId, eventKeys, tid, seriesId, generation, dictionaryGeneration })
   });
 }
 
@@ -187,4 +187,20 @@ export async function setSeriesHidden(tid, hidden, { signal, generation } = {}) 
     throw new Error('シリーズ表示設定APIの応答形式が不正です');
   }
   return response.result;
+}
+
+export function listLocalSeries(q = '', { signal } = {}) {
+  return requestJson('/api/series/local.json?q=' + encodeURIComponent(q), { method: 'GET', signal });
+}
+export function createLocalSeries(title, { signal } = {}) {
+  return requestJson('/api/series/local.json', { method: 'POST', body: JSON.stringify({ title }), signal });
+}
+export function deleteLocalSeries(ids, manualGeneration, { signal } = {}) {
+  return requestJson('/api/series/local.json', { method: 'DELETE', body: JSON.stringify({ ids, manualGeneration }), signal });
+}
+
+export function loadSeriesDictionary({ q = '', page = 1, tid, dictionaryGeneration, signal } = {}) {
+  const query = tid === undefined ? new URLSearchParams({ q, page }) : new URLSearchParams({ tid });
+  if (dictionaryGeneration) query.set('dictionaryGeneration', dictionaryGeneration);
+  return requestJson('/api/series/dictionary.json?' + query, { method: 'GET', signal });
 }

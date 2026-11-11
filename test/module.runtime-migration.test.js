@@ -84,7 +84,7 @@ test('TS analysis preserves CC/TEI/sync and owned pending bytes for all packet/c
 
 });
 
-test('series title search index stays with its dictionary snapshot and rebuilds after atomic publication',t=>{
+test('series dictionary search and manual registry preserve projection and publication consistency',async t=>{
 	const {DatabaseSync}=require('node:sqlite');
 	const {createSeriesResolver}=require('../lib/series-resolver');
 	const root=fs.mkdtempSync(path.join(os.tmpdir(),'chinachu-search-index-'));
@@ -92,8 +92,9 @@ test('series title search index stays with its dictionary snapshot and rebuilds 
 	const file=path.join(root,'dictionary.sqlite');
 	function publish(title) {
 		const stage=file+'.new',db=new DatabaseSync(stage);
-		db.exec('CREATE TABLE titles(tid INTEGER PRIMARY KEY,title TEXT,lookup_key TEXT,short_title TEXT,first_year TEXT,first_month TEXT); CREATE TABLE aliases(tid INTEGER,lookup_key TEXT); CREATE TABLE episodes(tid INTEGER,episode INTEGER,subtitle TEXT,lookup_key TEXT)');
+		db.exec('CREATE TABLE titles(tid INTEGER PRIMARY KEY,title TEXT,lookup_key TEXT,short_title TEXT,first_year TEXT,first_month TEXT); CREATE TABLE aliases(tid INTEGER,lookup_key TEXT); CREATE TABLE episodes(tid INTEGER,episode INTEGER,subtitle TEXT,lookup_key TEXT); CREATE TABLE dictionary_meta(key TEXT PRIMARY KEY,value TEXT)');
 		db.prepare('INSERT INTO titles VALUES (1,?,?,NULL,NULL,NULL)').run(title,title.toLowerCase());
+		db.prepare('INSERT INTO dictionary_meta VALUES (?,?)').run('published',JSON.stringify({generation:title,source:'syobocal-official-titlelookup'}));
 		db.close();fs.renameSync(stage,file);
 	}
 	publish('Ａｌｐｈａ 番組');
@@ -111,4 +112,126 @@ test('series title search index stays with its dictionary snapshot and rebuilds 
 	fs.writeFileSync(file+'.bad','invalid SQLite');
 	assert.throws(()=>createSeriesResolver({dictionaryPath:file+'.bad'}));
 	assert.equal(next.searchDictionaryTitles('Beta',20)[0].tid,1);
+
+	const {createSeriesManualStore,parseState}=require('../lib/series-manual-store');
+	const {createSeriesService}=require('../lib/series-service');
+	const {eventKey}=require('../lib/series-projector');
+	const manualPath=path.join(root,'manual.json');
+	const manual=createSeriesManualStore({path:manualPath});
+	const local=manual.createLocalSeries('Beta'); // A TID with the same title remains a different series.
+	assert.match(local.id,/^local:[a-f0-9]{24}$/);
+	assert.equal(manual.createLocalSeries(' Ｂｅｔａ ').id,local.id);
+	const empty=manual.createLocalSeries('録画なし');
+	assert.equal(manual.listLocalSeries().length,2);
+	const program={id:'recording-a',title:'Beta',fullTitle:'Beta',start:1794350000000,end:1794351800000,seconds:1800,
+		channel:{id:'ch1',name:'Fixture',type:'GR',nid:1,sid:1},recorded:'/fixture/unopened.ts'};
+	const key=eventKey(program);
+	const ledgerPaths={};
+	for(const name of ['recorded','reserves','match']) {
+		ledgerPaths[name]=path.join(root,name+'.json'); fs.writeFileSync(ledgerPaths[name],JSON.stringify(name==='recorded'?[program]:[]));
+	}
+	const options={manualPath,ledgerPaths,dictionaryPath:file,channelMapPath:path.join(root,'map.json'),throwOnFailure:true};
+	const service=createSeriesService({...options,manualStore:manual});t.after(()=>service.close());
+	assert.equal(service.searchTitles('Beta',20).filter(item=>item.kind==='local').length,1);
+	assert.equal(service.searchTitles('1',20,'tid')[0].tid,1);
+	assert.equal(service.searchTitles('',20,'tid')[0].tid,1);
+	service.setManualOverride({eventKey:key,tid:1,episode:null});
+	assert.equal(service.getSnapshot().series[0].id,'syobocal:1');
+	manual.setHiddenTid(1,true);service.invalidate();
+	assert.equal(service.getSnapshot().hiddenSeries.length,1);
+	const recordedGood=fs.readFileSync(ledgerPaths.recorded,'utf8');
+	fs.writeFileSync(ledgerPaths.recorded,'{invalid');service.invalidate();
+	assert.throws(()=>service.getSnapshot());assert.deepEqual(manual.getHiddenTids(),[1]);
+	fs.writeFileSync(ledgerPaths.recorded,recordedGood);service.invalidate();
+	const reserveOnly={...program,id:'reserve-only',start:program.start+7200000,end:program.end+7200000};
+	fs.writeFileSync(ledgerPaths.reserves,JSON.stringify([reserveOnly]));service.invalidate();
+	service.setManualOverride({eventKey:eventKey(reserveOnly),tid:1});
+	assert.ok(service.getSnapshot().series.some(item=>item.id==='syobocal:1'));
+	fs.writeFileSync(ledgerPaths.reserves,'[]');manual.remove(eventKey(reserveOnly));service.invalidate();
+	const preview=service.previewManualSelection({eventKey:key,seriesId:local.id});
+	assert.equal(preview.episodeConfirmed,false);
+	assert.notEqual(service.getCorrectionRevision({eventKey:key,seriesId:local.id}),service.getCorrectionRevision({eventKey:key,tid:1}));
+	service.setManualOverride({eventKey:key,seriesId:local.id});
+	const projected=service.getSnapshot();
+	assert.equal(projected.series.length,1); assert.equal(projected.series[0].id,local.id);
+	assert.equal(projected.series[0].tid,null); assert.equal(projected.series[0].title,'Beta'); assert.equal(projected.series[0].counts.currentRecordings,1);
+	assert.equal(projected.series[0].episodes[0].events[0].resolution.manual.seriesId,local.id);
+	assert.equal(projected.hiddenSeries.length,0); assert.deepEqual(manual.getHiddenTids(),[]);
+	const unknown={...program,id:'unknown',title:'辞書にない番組',fullTitle:'辞書にない番組',start:program.start+3600000,end:program.end+3600000};
+	const unknownKey=eventKey(unknown);
+	fs.writeFileSync(ledgerPaths.recorded,JSON.stringify([program,unknown]));service.invalidate();
+	assert.equal(service.setManualOverrides({eventKeys:[unknownKey],tid:1}).count,1);
+	assert.equal(manual.get(unknownKey).tid,1);manual.remove(unknownKey);service.invalidate();
+	assert.equal(service.setManualOverrides({eventKeys:[unknownKey],seriesId:local.id}).count,1);
+	assert.equal(manual.get(unknownKey).seriesId,local.id);
+	fs.writeFileSync(ledgerPaths.recorded,JSON.stringify([program]));service.invalidate();
+	const reloaded=createSeriesManualStore({path:manualPath});
+	assert.equal(reloaded.get(key).seriesId,local.id);assert.equal(reloaded.getLocalSeries(empty.id).title,'録画なし');
+	assert.equal(reloaded.listLocalSeries('Beta',[program])[0].recordingCount,1);
+	fs.writeFileSync(ledgerPaths.recorded,'[]');
+	fs.writeFileSync(ledgerPaths.match,JSON.stringify([{schemaVersion:2,key,status:'RECORDED',fullTitle:'Beta',start:program.start,end:program.end,recording:{recordedId:program.id}}]));
+	service.invalidate();assert.equal(service.getSnapshot().series.filter(item=>item.counts.currentRecordings>0).length,0);
+	assert.ok(manual.getLocalSeries(local.id));assert.ok(manual.getLocalSeries(empty.id));
+	fs.writeFileSync(ledgerPaths.recorded,JSON.stringify([program]));service.invalidate();
+	service.setManualOverride({eventKey:key,tid:1});manual.setHiddenTid(1,true);service.invalidate();
+	assert.equal(service.getSnapshot().hiddenSeries.length,1);
+	fs.writeFileSync(ledgerPaths.recorded,'[]');service.invalidate();
+	assert.equal(service.getSnapshot().hiddenSeries.length,0);assert.deepEqual(manual.getHiddenTids(),[]);
+	fs.writeFileSync(ledgerPaths.recorded,JSON.stringify([program]));service.invalidate();
+	assert.equal(service.getSnapshot().series[0].hidden,false);
+	service.setManualOverride({eventKey:key,seriesId:local.id});
+	assert.throws(()=>manual.removeLocalSeries([local.id],manual.getGeneration()-1),/更新/);
+	assert.throws(()=>manual.removeLocalSeries(['syobocal:1'],manual.getGeneration()),/不正/);
+	const recordedBefore=fs.readFileSync(ledgerPaths.recorded,'utf8'),matchBefore=fs.readFileSync(ledgerPaths.match,'utf8');
+	manual.removeLocalSeries([local.id],manual.getGeneration());
+	assert.equal(manual.get(key),null);assert.equal(manual.get(unknownKey),null);assert.ok(manual.getLocalSeries(empty.id));
+	assert.equal(parseState(fs.readFileSync(manualPath,'utf8')).localSeries[local.id],undefined);
+	assert.equal(fs.readFileSync(ledgerPaths.recorded,'utf8'),recordedBefore);
+	assert.equal(fs.readFileSync(ledgerPaths.match,'utf8'),matchBefore);
+	assert.throws(()=>manual.set(key,{seriesId:local.id}),/存在しません/);
+	const legacy=parseState(JSON.stringify({version:3,generation:2,overrides:{[key]:{tid:1,episode:null}},workRules:{},hiddenTids:[1]}));
+	assert.equal(legacy.overrides[key].tid,1);assert.deepEqual(legacy.localSeries,{});
+	service.close();
+	manual.setHiddenTid(1,true);
+	fs.writeFileSync(ledgerPaths.recorded,'[]');
+
+	// Exercise the actual Worker publication, cleanup and local-ID correction token path.
+	const {createProgLookupStore}=require('../lib/proglookup-store');
+	const {createSeriesService:createBackground}=require('../lib/series-background-service');
+	const progLookupPath=path.join(root,'prog.json');
+	let background;const waiting=new Set();
+	const changed=()=>{for(const check of waiting)check();};
+	background=createBackground({...options,progLookupPath,progLookupStore:createProgLookupStore({path:progLookupPath}),onStatus:changed});
+	t.after(()=>background.close());
+	async function ready(generation=0) {
+		await background.request('status');
+		await new Promise((resolve,reject)=>{
+			const timeout=setTimeout(()=>{waiting.delete(check);reject(new Error('Series worker did not publish: '+JSON.stringify(background.getSnapshot())));},5000);
+			function check(){const state=background.getSnapshot();if(state.generation&& !state.building && (state.manualGeneration||0)>=generation){clearTimeout(timeout);waiting.delete(check);resolve();}}
+			waiting.add(check);check();
+		});
+	}
+	await ready();
+	assert.deepEqual(createSeriesManualStore({path:manualPath}).getHiddenTids(),[]);
+	assert.deepEqual(background.getSnapshot().hiddenSeries,[]);
+	assert.equal(JSON.parse(await background.request('view',{mode:'overview'})).series.length,0);
+	fs.writeFileSync(ledgerPaths.recorded,JSON.stringify([program]));
+	await ready();
+	const added=JSON.parse(await background.request('createLocalSeries',{title:'Worker original'})).result;
+	await ready(added.manualGeneration);
+	const search=JSON.parse(await background.request('searchTitles',{q:'Worker'}));
+	assert.equal(search.results[0].id,added.id);
+	const eventView=JSON.parse(await background.request('view',{mode:'event',event:key}));
+	const event=[...eventView.attention.flatMap(group=>group.events),...eventView.series.flatMap(item=>item.episodes.flatMap(episode=>episode.events))].find(row=>row.key===key);
+	assert.ok(event);
+	const selection={eventKey:key,seriesId:added.id,contextToken:event.correctionToken};
+	const validated=JSON.parse(await background.request('previewManualSelection',selection)).result;
+	const saved=JSON.parse(await background.request('setManualOverride',{...selection,validationToken:validated.validationToken})).result;
+	await ready(saved.manualGeneration);
+	const detail=JSON.parse(await background.request('view',{mode:'series',id:added.id}));
+	assert.equal(detail.series[0].id,added.id);assert.equal(detail.series[0].tid,null);
+	const listed=JSON.parse(await background.request('listLocalSeries',{q:'Worker'}));
+	assert.equal(listed.results[0].recordingCount,1);
+	await background.request('removeLocalSeries',{ids:[added.id],manualGeneration:listed.manualGeneration});
+	assert.equal(createSeriesManualStore({path:manualPath}).get(key),null);
 });

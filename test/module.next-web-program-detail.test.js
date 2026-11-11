@@ -198,7 +198,11 @@ function detail(overrides = {}) {
 }
 
 test('common programme detail maps reservation, rule and recorded actions without merging phase/file/history state', async function () {
-	const { buildProgramDetailModel } = await programDetailModel();
+	const { buildProgramDetailModel, seriesCorrectionActions } = await programDetailModel();
+	const localActions = seriesCorrectionActions({ event: { key: 'local-fixture' }, seriesId: 'local:' + 'a'.repeat(24), manual: true, tidConfirmed: false });
+	assert.deepStrictEqual(localActions.map(item => item.action), ['series-change', 'series-remove']);
+	assert.strictEqual(localActions[0].label, 'シリーズを変更');
+	assert.ok(seriesCorrectionActions({ event: { key: 'tid-fixture' }, seriesId: 'syobocal:1', tidConfirmed: true }).some(item => item.action === 'series-episode'));
 	// The WUI must not override a resolved history with a recording whose ID or key conflicts.
 	const clientSource = fs.readFileSync(path.join(__dirname, '../next-web/services/program-detail-client.js'), 'utf8');
 	const identityCode = clientSource.slice(clientSource.indexOf('function validText('), clientSource.indexOf('function selectCurrentProgram('));

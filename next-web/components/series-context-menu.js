@@ -35,7 +35,7 @@ export function createSeriesContextMenu({ onAction }) {
     menu.querySelector('[data-action="series-change"]').hidden = seriesOnly;
     menu.querySelector('[data-action="series-change"]').disabled = !item?.event?.key;
     menu.querySelector('[data-action="series-episode"]').hidden = seriesOnly;
-    menu.querySelector('[data-action="series-episode"]').disabled = !item?.seriesId;
+    menu.querySelector('[data-action="series-episode"]').disabled = !item?.seriesId || item.seriesId.startsWith('local:');
     menu.querySelector('[data-action="series-remove"]').hidden = seriesOnly || item?.manual !== true;
     menu.querySelector('.recorded-context-separator').hidden = seriesOnly;
     const hiddenButton = menu.querySelector('[data-action="series-hidden"]');
