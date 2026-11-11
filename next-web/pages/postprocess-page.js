@@ -1,4 +1,5 @@
 import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
+import { requestAutoThumbnailAction } from '../services/auto-ts-analysis-client.js';
 
 const REFRESH_MS = 5000;
 const TYPES = [
@@ -10,6 +11,7 @@ const TYPES = [
 
 const SECTIONS = [
   ['tasks', 'タスク状態', renderTasks],
+  ['thumbnails', 'サムネイル自動補完', renderAutoThumbnail],
   ['waiting', '実行中・待機中のタスク', renderWaiting],
   ['completed', '直近の完了タスク', renderCompleted],
   ['current', '現在のTS解析状況', renderCurrentTs],
@@ -79,13 +81,16 @@ function empty(message) { return node('p', 'postprocess-empty', message); }
 function renderTasks(data) {
   const rows = (data.queues || []).map(item => {
     const auto = data.auto || {};
-    const waiting = item.pending > 0 || item.type === 'ts' && auto.enabled && !auto.paused && item.remaining > 0;
+    const waiting = item.pending > 0 || item.type === 'ts' && auto.enabled && !auto.paused && item.remaining > 0 ||
+      item.type === 'thumbnail' && !data.autoThumbnail?.paused && item.remaining > 0;
+    const paused = item.type === 'ts' && auto.paused || item.type === 'thumbnail' && data.autoThumbnail?.paused;
     const current = item.active ? status('running', '実行中') :
       waiting ? status('waiting', '待機中') :
       item.type === 'ts' && !auto.enabled ? status('idle', '無効') :
-      item.type === 'ts' && auto.paused ? status('idle', '一時停止') : status('idle', '空き');
+      paused ? status('idle', '一時停止') : status('idle', '空き');
     const note = item.type === 'ts'
       ? `未解析残 ${number(item.remaining)}件（自動解析候補・キュー未投入）`
+      : item.type === 'thumbnail' && data.autoThumbnail ? `未生成 ${item.remaining === null ? '取得不能' : number(item.remaining) + '件'}（キュー未投入を含む）`
       : item.type === 'match' ? '更新要求を集約' : '';
     return [typeName(item.type), current, `${number(item.pending)}件`, note];
   });
@@ -97,6 +102,20 @@ function renderTasks(data) {
     '録画や他の処理に支障がないときに、順次解析します。';
   box.append(node('p', 'postprocess-muted',
     `※ TS未解析残数は待機ジョブ数ではありません。${explanation}`));
+  return box;
+}
+function renderAutoThumbnail(data) {
+  const auto = data.autoThumbnail;
+  if (!auto) return empty('Operatorが自動補完の状態表示に対応していません。');
+  const box = node('div');
+  const labels = { running: '実行中', waiting: '待機中', complete: '完了', paused: '一時停止' };
+  box.append(status(auto.state === 'running' ? 'running' : auto.state === 'waiting' ? 'waiting' : 'idle', labels[auto.state] || '待機中'));
+  box.append(node('p', 'postprocess-muted', `未生成: ${auto.remaining === null ? '取得不能' : number(auto.remaining) + '件'}`));
+  if (auto.current) box.append(detailLink(auto.current.id, auto.current.title || auto.current.id, data.programs));
+  if (auto.error) { const error = node('p', '', auto.error); error.setAttribute('role', 'alert'); box.append(error); }
+  const control = node('button', 'button', auto.paused ? '再開' : '一時停止');
+  control.type = 'button'; control.dataset.thumbnailAutoAction = auto.paused ? 'thumbnail-auto-resume' : 'thumbnail-auto-pause';
+  box.append(control);
   return box;
 }
 function renderCurrentTs(data) {
@@ -237,7 +256,8 @@ export function renderPostprocessPage(container) {
       if (disposed) return;
       for (const [id, section] of sections) {
         // Retain unchanged rows and HOVER targets across the 5-second refresh.
-        const snapshot = id === 'tasks' ? [data.queues, data.auto?.enabled, data.auto?.paused] :
+        const snapshot = id === 'tasks' ? [data.queues, data.auto?.enabled, data.auto?.paused, data.autoThumbnail?.paused] :
+          id === 'thumbnails' ? [data.autoThumbnail, data.programs] :
           id === 'waiting' ? [data.running, data.waiting, data.queuedTotal, data.programs] :
           id === 'completed' ? [data.completed, data.programs] :
           id === 'results' ? [data.recentTs, data.programs] : [data.currentTs, data.auto?.state];
@@ -301,6 +321,14 @@ export function renderPostprocessPage(container) {
       error.hidden = false;
     } finally { fetching = false; }
   }
+  root.addEventListener('click', async event => {
+    const button = event.target.closest('[data-thumbnail-auto-action]');
+    if (!button || button.disabled) return;
+    button.disabled = true;
+    try { await requestAutoThumbnailAction(button.dataset.thumbnailAutoAction, controller.signal); await refresh(); }
+    catch (cause) { if (!disposed) { error.textContent = cause.message; error.hidden = false; } }
+    finally { if (!disposed && button.isConnected) button.disabled = false; }
+  });
   const timer = window.setInterval(refresh, REFRESH_MS);
   document.addEventListener('visibilitychange', refresh);
   void refresh();

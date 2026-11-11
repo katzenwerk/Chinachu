@@ -6,7 +6,7 @@
   // Old Operators recognize only status/generate: keep the outer action read-only
   // so an unsupported maintenance request can never fall through to generation.
   var message = { maintenance: true, id: id, action: 'status', maintenanceAction: input.action, tasks: input.tasks, redo: input.redo,
-    path: input.path, token: input.token, confirm: input.confirm, selectedIds: input.selectedIds };
+    path: input.path, token: input.token, confirm: input.confirm, selectedIds: input.selectedIds, percent: input.percent };
   // Uses the existing authenticated API dispatcher and private Operator socket.
   storageRefreshIpc.request({ socketPath: define.RECORDED_THUMBNAIL_SOCKET, timeoutMs: 5000 }, message)
     .then(function(result) {

@@ -153,6 +153,7 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
   let disposed = false, pending = false, pendingInput = null, state = null, timer = null, error = '', refreshError = '', manualPath = '', announced = '';
   let selectedRoots = null, confirmed = false, confirmedToken = null;
   let analysisOpen = null, searchOpen = false, manualOpen = false, recoveryRequested = false;
+  let thumbnailPercentText = '', thumbnailPercentInvalid = false, thumbnailPercentError = '';
   const failures = {};
   const busy = () => pending || ['queued', 'running'].includes(state?.job?.status);
   function button(label, fn, disabled = false) {
@@ -237,7 +238,15 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
     }
   }
   function runTask(task, acquired) {
-    return perform({ action: 'run', [acquired ? 'redo' : 'tasks']: { [task]: true } });
+    const input = { action: 'run', [acquired ? 'redo' : 'tasks']: { [task]: true } };
+    if (task === 'thumbnail') {
+      const text = thumbnailPercentText.trim();
+      if (thumbnailPercentInvalid || text !== '' && (!/^\d+$/.test(text) || Number(text) > 99)) {
+        thumbnailPercentError = '0〜99の整数を入力してください。'; render(); return;
+      }
+      input.percent = text === '' ? 35 : Number(text);
+    }
+    return perform(input);
   }
   function render() {
     const previous = dialog.querySelector('.recorded-maintenance-content');
@@ -342,7 +351,25 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
     }
     const thumbnailStatus = { queued: '作成待ち', processing: '生成中', failed: '生成失敗' }[state?.thumbnail?.status];
     row('thumbnail', 'サムネイル', progress('thumbnail') || (thumbnailDone ? '作成済み' : thumbnailStatus || (failures.thumbnail ? '生成失敗' : '未作成')),
-      button(thumbnailDone ? '再生成' : '生成する', () => runTask('thumbnail', thumbnailDone), !canProcess), { warning: !!failures.thumbnail || state?.thumbnail?.status === 'failed' });
+      button(thumbnailDone ? '再生成' : '生成する', () => runTask('thumbnail', state?.thumbnail?.available === true), !canProcess), { warning: !!failures.thumbnail || state?.thumbnail?.status === 'failed' });
+    const thumbnailActions = body.querySelector('[data-maintenance-row="thumbnail"] .recorded-maintenance-actions');
+    const position = document.createElement('label'); position.className = 'recorded-maintenance-position';
+    const percentInput = document.createElement('input');
+    percentInput.type = 'number'; percentInput.min = '0'; percentInput.max = '99'; percentInput.step = '1';
+    percentInput.inputMode = 'numeric'; percentInput.placeholder = '35'; percentInput.value = thumbnailPercentText;
+    percentInput.disabled = !canProcess; percentInput.dataset.maintenanceControl = 'thumbnail-percent';
+    percentInput.setAttribute('aria-label', 'サムネイル抽出位置（パーセント）');
+    percentInput.setAttribute('aria-describedby', 'recorded-thumbnail-percent-error');
+    percentInput.addEventListener('input', () => {
+      thumbnailPercentText = percentInput.value; thumbnailPercentInvalid = percentInput.validity.badInput;
+      thumbnailPercentError = '';
+      const message = dialog.querySelector('#recorded-thumbnail-percent-error');
+      if (message) { message.textContent = ''; message.hidden = true; }
+    });
+    position.append(percentInput, document.createTextNode('%')); thumbnailActions.prepend(position);
+    const percentError = document.createElement('p'); percentError.id = 'recorded-thumbnail-percent-error';
+    percentError.className = 'recorded-maintenance-row-note'; percentError.setAttribute('role', 'alert');
+    percentError.textContent = thumbnailPercentError; percentError.hidden = !thumbnailPercentError; body.append(percentError);
     if (failures.thumbnail) {
       const reason = document.createElement('p'); reason.className = 'recorded-maintenance-row-note'; reason.textContent = failures.thumbnail; body.append(reason);
     }
@@ -401,6 +428,13 @@ export function openRecordedMaintenanceDialog({ id, title, onUpdated, getRecordi
         if (incoming.dataset.maintenanceRow) {
           Array.from(incoming.children).forEach((child, position) => {
             const current = retained.children[position];
+            if (incoming.dataset.maintenanceRow === 'thumbnail' && position === 2) {
+              // Keep the live number input (including badInput and focus) across polling.
+              current.querySelector('input').disabled = child.querySelector('input').disabled;
+              const button = current.querySelector('button'), nextButton = child.querySelector('button');
+              button.disabled = nextButton.disabled; button.textContent = nextButton.textContent;
+              return;
+            }
             if (current.outerHTML === child.outerHTML) return;
             if (current.tagName === 'SPAN' && child.tagName === 'SPAN') {
               current.className = child.className;

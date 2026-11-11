@@ -3,6 +3,7 @@ let latest = null;
 const listeners = new Set();
 
 async function request(action, signal) {
+  const thumbnail = action.startsWith('thumbnail-auto-');
   const reading = action === 'auto-status';
   const response = await fetch(URL, {
     method: reading ? 'GET' : 'POST',
@@ -10,16 +11,19 @@ async function request(action, signal) {
     cache: 'no-store', signal, ...(!reading ? { body: JSON.stringify({ action }) } : {})
   });
   const value = await response.json();
-  if (!response.ok || value?.autoAnalysisVersion !== 1) {
-    throw new Error(value?.message || '自動TS解析の状態を取得できませんでした。');
+  if (!response.ok || (thumbnail ? value?.autoThumbnailVersion !== 1 : value?.autoAnalysisVersion !== 1)) {
+    throw new Error(value?.message || (thumbnail ? 'サムネイル自動補完の状態を取得できませんでした。' : '自動TS解析の状態を取得できませんでした。'));
   }
-  latest = value;
-  listeners.forEach(listener => listener(value));
+  if (!thumbnail) {
+    latest = value;
+    listeners.forEach(listener => listener(value));
+  }
   return value;
 }
 
 export const loadAutoTsStatus = signal => request('auto-status', signal);
 export const requestAutoTsAction = action => request(action);
+export const requestAutoThumbnailAction = (action, signal) => request(action, signal);
 export const getAutoTsStatus = () => latest;
 export function subscribeAutoTsStatus(listener) {
   listeners.add(listener);

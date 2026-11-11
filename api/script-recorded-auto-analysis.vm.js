@@ -4,7 +4,7 @@
     ? 'monitor-status' : 'auto-status';
   if (request.method === 'POST') {
     action = request.query && request.query.action;
-    if (action !== 'auto-pause' && action !== 'auto-resume') return response.error(400);
+    if (['auto-pause', 'auto-resume', 'thumbnail-auto-pause', 'thumbnail-auto-resume'].indexOf(action) === -1) return response.error(400);
   } else if (request.method !== 'GET') {
     return response.error(405);
   }
@@ -12,7 +12,8 @@
   storageRefreshIpc.request({ socketPath: define.RECORDED_THUMBNAIL_SOCKET, timeoutMs: 5000 },
     { maintenance: true, action: 'status', maintenanceAction: action })
     .then(function(result) {
-      if (!result || (action === 'monitor-status' ? result.monitorVersion !== 1 : result.autoAnalysisVersion !== 1)) {
+      if (!result || (action === 'monitor-status' ? result.monitorVersion !== 1 :
+          action.indexOf('thumbnail-auto-') === 0 ? result.autoThumbnailVersion !== 1 : result.autoAnalysisVersion !== 1)) {
         response.head(503);
         response.end(JSON.stringify({ message: 'Operatorは自動TS解析に未対応です。' }));
         return;

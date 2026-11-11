@@ -231,3 +231,12 @@ button.program-modal-thumbnail.is-empty span { top: 50%; left: 50%; transform: t
   .recorded-maintenance-actions .button { min-width: 0; }
   .recorded-maintenance-inline-details,.recorded-maintenance-body .recorded-maintenance-row-note { margin-left: 0; }
 }
+
+/* Keep the extraction position compact, including the shared mobile form rules. */
+.recorded-maintenance-row[data-maintenance-row="thumbnail"] { grid-template-columns: 100px minmax(0,1fr) auto; }
+.recorded-maintenance-row[data-maintenance-row="thumbnail"] .recorded-maintenance-actions { flex-wrap: nowrap; }
+.recorded-maintenance-position { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; }
+.recorded-maintenance-position input[type="number"] { box-sizing: border-box; width: 64px; min-width: 64px; max-width: 64px; flex: 0 0 64px; padding: 4px; font: inherit; }
+@media (max-width:640px) {
+  .recorded-maintenance-row[data-maintenance-row="thumbnail"] { grid-template-columns: auto minmax(0,1fr) auto; gap: 6px; }
+}

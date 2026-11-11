@@ -434,7 +434,8 @@ let pendingRecordedLedgerWrites = 0;
 const failedRecordingSaves = new Set();
 let lastRecordingTransitionAt = 0;
 let recordedMaintenance = null;
-let autoTsReviewTimer = null;
+let autoPostProcessingReviewTimer = null;
+let lastAutomaticPostProcessing = 'ts';
 // Dashboard-only, bounded in-memory history; never writes to recording ledgers.
 const recentPostProcessing = [];
 const thumbnailProcessingStarts = new Map();
@@ -459,6 +460,8 @@ const recordedThumbnailGenerator = recordedThumbnail.createGenerator({
 	timeoutMs: 30000,
 	maxPending: 64,
 	maxQueueAgeMs: 10 * 60 * 1000,
+	probe: filePath => new Promise(resolve => startDurationProbe({ filePath, queuedAt: Date.now(), maintenance: true,
+		callback: duration => resolve(duration) })),
 	getRunDelay: job => {
 		if (recordedMaintenance && recordedMaintenance.isBusy() && !recordedMaintenance.currentThumbnail(job)) return Infinity;
 		if (shutdownStarted || matchLedgerProcess || activeDurationProbes.size !== 0 ||
@@ -484,6 +487,8 @@ const recordedThumbnailGenerator = recordedThumbnail.createGenerator({
 recordedMaintenance = recordedMaintenanceModule.createMaintenance({
 	root: __dirname, config, thumbnail: recordedThumbnailGenerator,
 	autoEnabled: autoTsAnalysisEnabled,
+	getThumbnailSummary: () => getAutoThumbnailSummary(),
+	thumbnailAllowed: () => postProcessingDelay() === 0,
 	getAutoSummary: () => recordedAutoAnalysis.summarize(recorded),
 	autoAllowed: () => autoTsAnalysisEnabled && postProcessingDelay() === 0 &&
 		Math.max(activeRecordingOutputs.size,
@@ -984,9 +989,9 @@ function shutdownOperator(signal) {
 		clearInterval(operatorInterval);
 		operatorInterval = null;
 	}
-	if (autoTsReviewTimer !== null) {
-		clearTimeout(autoTsReviewTimer);
-		autoTsReviewTimer = null;
+	if (autoPostProcessingReviewTimer !== null) {
+		clearTimeout(autoPostProcessingReviewTimer);
+		autoPostProcessingReviewTimer = null;
 	}
 	stopBroadcastClockMonitor();
 	if (storageRefreshServer) {
@@ -1419,7 +1424,34 @@ function nextAutoTsCandidate() {
 	return recordedAutoAnalysis.summarize(recorded, Date.now(), entry => openFiles.has(path.resolve(__dirname, entry.recorded))).candidate;
 }
 
+function getAutoThumbnailSummary() {
+	const resolver = require('./lib/match-detail-resolver');
+	const blockedById = new Map(), blockedKeys = new Set();
+	for (const item of reservationStore.readArray(MATCH_DATA_FILE)) {
+		const entry = resolver.normalizeMatchEntry(item);
+		if (!resolver.isExplicitDeletion(item) && !entry.fileMissing) continue;
+		const id = (entry.recording || entry.fileMissing)?.recordedId;
+		if (id) {
+			if (!blockedById.has(id)) blockedById.set(id, []);
+			blockedById.get(id).push(entry.key);
+		} else if (entry.key) blockedKeys.add(entry.key);
+	}
+	const recordingIds = new Set(recording.map(item => String(item.id)));
+	const openPaths = new Set(Array.from(activeRecordingOutputs, output => String(output.path || '')));
+	for (const item of recording) if (item.recorded) openPaths.add(path.resolve(__dirname, item.recorded));
+	return recordedThumbnail.summarizeMissing(recorded, RECORDED_THUMBNAIL_DIR, {
+		taskStatus: id => recordedThumbnailGenerator.getTaskStatus(id),
+		excluded: entry => {
+			const key = resolver.makeCanonicalKey(entry);
+			return entry.deleted === true || entry.cleanupState === 'deleted' || recordingIds.has(String(entry.id)) ||
+				openPaths.has(path.resolve(__dirname, entry.recorded)) || blockedKeys.has(key) ||
+				(blockedById.get(String(entry.id)) || []).some(value => !value || !key || value === key);
+		}
+	});
+}
+
 function stopAutoIfRecordingLimitExceeded() {
+	if (postProcessingDelay() > 0) recordedMaintenance.interruptAutoThumbnail('録画開始・終了付近のため自動補完を中断しました。');
 	if (!autoTsAnalysisEnabled) return;
 	const actual = recording.filter(program => program && !program.operatorRecordingEnd &&
 		!program.operatorResumePending && !program._operatorManualRemovalPending).length;
@@ -1428,12 +1460,12 @@ function stopAutoIfRecordingLimitExceeded() {
 	}
 }
 
-function scheduleAutoTsReview() {
-	if (!autoTsAnalysisEnabled || shutdownStarted) return;
-	autoTsReviewTimer = setTimeout(() => {
-		autoTsReviewTimer = null;
+function scheduleAutoPostProcessingReview() {
+	if (shutdownStarted) return;
+	autoPostProcessingReviewTimer = setTimeout(() => {
+		autoPostProcessingReviewTimer = null;
 		wakePostProcessing();
-		scheduleAutoTsReview();
+		scheduleAutoPostProcessingReview();
 	}, recordedAutoAnalysis.nextReviewDelay());
 }
 
@@ -1508,12 +1540,19 @@ function runPostProcessing() {
 		recordedThumbnailGenerator.resume();
 		recordedMaintenance.runNext();
 		// Optional full-file reads run only after existing post-processing work.
-		if (autoTsAnalysisEnabled && !recordedMaintenance.isBusy() &&
+		if (!recordedMaintenance.isBusy() &&
 			!recordedThumbnailGenerator.getState().pending && !recordedThumbnailGenerator.getState().active &&
 			!durationProbeQueue.length && !matchLedgerUpdateReason && scheduler === null &&
 			!Number.isFinite(recordedMaintenance.nextRequestedAt())) {
-			const candidate = nextAutoTsCandidate();
-			if (candidate) recordedMaintenance.startAuto(candidate);
+			const thumbnail = recordedMaintenance.thumbnailSummary().candidate;
+			const ts = autoTsAnalysisEnabled ? nextAutoTsCandidate() : null;
+			const kinds = lastAutomaticPostProcessing === 'ts' ? ['thumbnail', 'ts'] : ['ts', 'thumbnail'];
+			for (const kind of kinds) {
+				const started = kind === 'thumbnail' ? thumbnail && recordedMaintenance.startAutoThumbnail(thumbnail) :
+					ts && recordedMaintenance.startAuto(ts);
+				if (started) { lastAutomaticPostProcessing = kind; break; }
+			}
+			if (!recordedMaintenance.isBusy() && thumbnail && delay > 0) wakePostProcessing(delay);
 		}
 	}
 }
@@ -4126,6 +4165,7 @@ function getRecordedThumbnailDuration(entry) {
 // Read-only snapshot. All queue data are already in Operator memory; do not stat TS files.
 function postProcessingMonitorStatus() {
 	const auto = recordedMaintenance.request({ action: 'auto-status' });
+	const autoThumbnail = recordedMaintenance.autoThumbnailStatus();
 	const manual = recordedMaintenance.monitorState();
 	const thumbnail = recordedThumbnailGenerator.getState();
 	const thumbnailPending = recordedThumbnailGenerator.getPendingJobs();
@@ -4159,6 +4199,9 @@ function postProcessingMonitorStatus() {
 		title: recordedTitleForId(manual.active.id), startedAt: manual.active.startedAt });
 	if (auto.current) running.push({ type: 'ts', id: auto.current.id,
 		title: auto.current.title || recordedTitleForId(auto.current.id) });
+	if (autoThumbnail.current && !running.some(job => String(job.id) === autoThumbnail.current.id)) {
+		running.push({ type: 'thumbnail', ...autoThumbnail.current });
+	}
 	const recentTs = [];
 	for (const entry of recorded) {
 		const analysis = entry?.savedTsAnalysis;
@@ -4197,7 +4240,8 @@ function postProcessingMonitorStatus() {
 		queues: [
 			{ type: 'match', active: Boolean(matchLedgerProcess), pending: counts.match },
 			{ type: 'ffprobe', active: activeDurationProbes.size > 0 || manual.active?.type === 'ffprobe', pending: counts.ffprobe },
-			{ type: 'thumbnail', active: Boolean(thumbnail.active) || manual.active?.type === 'thumbnail', pending: counts.thumbnail },
+			{ type: 'thumbnail', active: Boolean(thumbnail.active) || manual.active?.type === 'thumbnail' || Boolean(autoThumbnail.current),
+				pending: counts.thumbnail, remaining: autoThumbnail.remaining },
 			{ type: 'ts', active: Boolean(auto.current) || manual.active?.type === 'ts', pending: counts.ts,
 				remaining: auto.counts?.remaining || 0 }
 		],
@@ -4208,6 +4252,7 @@ function postProcessingMonitorStatus() {
 		recentTs,
 		programs,
 		auto,
+		autoThumbnail,
 		currentTs
 	};
 }
@@ -4343,7 +4388,7 @@ chinachu.jsonWatcher(
 
 		if (pendingRecordedLedgerWrites === 0) recorded = data;
 		operatorLog(mes);
-		if (autoTsAnalysisEnabled) wakePostProcessing();
+		wakePostProcessing();
 	},
 	{ create: [], now: true }
 );
@@ -4371,5 +4416,5 @@ externalNotifier.refreshOutcomes();
 recoverRecordingHistory();
 reserveCheckLoop();
 startBroadcastClockMonitor();
-scheduleAutoTsReview();
-if (autoTsAnalysisEnabled) wakePostProcessing();
+scheduleAutoPostProcessingReview();
+wakePostProcessing();
