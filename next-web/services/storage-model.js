@@ -455,3 +455,23 @@ export function buildStorageViewModels(resources, now = Date.now()) {
     };
   });
 }
+
+// Home consumes the same Warning/Low classification as the storage screen.
+// This is a view of the Operator snapshot, never a new capacity check.
+export function buildHomeStorageWarning(storageData, snapshotUnavailable = false) {
+  if (!storageData || !Array.isArray(storageData.storages)) return null;
+  const models = buildStorageViewModels({ storage: storageData, rules: [], reserves: [] });
+  const entries = models.flatMap((model, index) => {
+    if (!['warning', 'low'].includes(model.state.key)) return [];
+    const storage = storageData.storages[index];
+    const control = !snapshotUnavailable && !model.state.stale && storage.lowSpaceCurrent === true && storage.stopNewRecordings === true
+      ? '新規録画の開始を停止中' : '';
+    return [{ id: model.id, name: model.name, level: model.state.key,
+      free: storage.capacityReliable === true ? formatCapacity(storage.available, Math.max(storage.available, 1)) : '未取得',
+      usagePercent: model.usagePercent,
+      note: snapshotUnavailable ? '参考値・最新の取得状態を確認できません' : model.state.stale ? `参考値・${model.checkedAgo}` : control }];
+  }).sort((a, b) => Number(b.level === 'low') - Number(a.level === 'low') || a.name.localeCompare(b.name, 'ja'));
+  if (!entries.length) return null;
+  return { level: entries[0].level, title: entries[0].level === 'low' ? 'ストレージ容量不足' : 'ストレージ容量低下',
+    entries: entries.slice(0, 2), remaining: Math.max(0, entries.length - 2), href: '#storage' };
+}

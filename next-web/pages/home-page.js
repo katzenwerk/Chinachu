@@ -6,12 +6,11 @@ import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
 import { deleteRecordedFromContext } from '../services/recorded-delete-action.js';
 import { ruleAction } from '../services/program-detail-model.js';
-import { buildNextReservationTimelineView, buildNextReservationView, nextReservationDisplayBoundaryDelay } from '../services/reservation-model.js';
+import { buildNextReservationTimelineView, nextReservationDisplayBoundaryDelay } from '../services/reservation-model.js';
 import { subscribeMatchNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
 import { subscribeStorageData } from '../services/storage-store.js';
-import { buildStorageWarnings } from '../services/storage-model.js';
+import { buildStorageWarnings, buildHomeStorageWarning } from '../services/storage-model.js';
 import { mountRecordingList } from '../components/recording-list.js';
-import { createReservationCard } from '../components/reservation-card.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { createChannelLogo } from '../components/channel-logo.js';
 import { createProgramHover, setProgramHover } from '../components/program-hover.js';
@@ -33,16 +32,7 @@ const HOME_CUSTOM_DEFAULTS = Object.freeze({
 const HOME_CUSTOM_RESERVATION_MIN_WIDTH = 280;
 
 // Home layout is a per-browser preference; it does not modify server config or recordings.
-const HOME_LAYOUT_STORAGE_KEY = 'chinachu.home.layout.v1';
 const HOME_CUSTOM_STORAGE_KEY = 'chinachu.home.c-settings.v1';
-
-function readHomeLayout() {
-  try {
-    return window.localStorage.getItem(HOME_LAYOUT_STORAGE_KEY) === 'a' ? 'a' : 'c';
-  } catch (_) {
-    return 'c';
-  }
-}
 
 function readHomeCustomSettings() {
   try {
@@ -80,13 +70,8 @@ function createHomeHeaderSettings() {
         <span>UI表示倍率 <output data-ui-scale-output>100%</output></span>
         <input type="range" min="70" max="120" step="5" value="100" data-ui-scale aria-label="UI表示倍率">
       </label>
-      <div class="home-header-settings-title">ホームのレイアウト</div>
-      <div class="home-layout-switch" role="group" aria-label="ホームレイアウト">
-        <button type="button" data-home-layout="c" aria-pressed="true">C（標準）</button>
-        <button type="button" data-home-layout="a" aria-pressed="false">A</button>
-      </div>
       <div class="home-layout-customizer">
-        <div class="home-header-settings-title">レイアウトCの調整</div>
+        <div class="home-header-settings-title">ホームの表示調整</div>
         <div class="home-layout-customize-panel">
           <label class="home-layout-customize-field">
             <span>録画中の幅 <output data-custom-output="recordingWidth">350px</output></span>
@@ -363,9 +348,6 @@ function mountReservationSection(container, isActive, onContextMenu) {
   let forceQueued = false;
   let displayBoundaryTimer = null;
   const timelineRenderer = createReservationTimelineRenderer();
-  const reservationCards = new Map();
-  const reservationGrid = document.createElement('div');
-  reservationGrid.className = 'reservation-grid';
   let hasReservationSnapshot = false;
 
   timelineRenderer.element.addEventListener('click', event => {
@@ -378,7 +360,7 @@ function mountReservationSection(container, isActive, onContextMenu) {
 
   container.replaceChildren(panel);
   const openContext = event => {
-    const row = event.target.closest?.('.reservation-card[data-reservation-key], .home-reservation-timeline-row[data-reservation-key]');
+    const row = event.target.closest?.('.home-reservation-timeline-row[data-reservation-key]');
     if (!row || !content.contains(row)) return;
     const program = latestPrograms.find(value => value?.id && value.id === row.dataset.reservationKey);
     if (!program) return;
@@ -403,7 +385,6 @@ function mountReservationSection(container, isActive, onContextMenu) {
       windowMs: HOME_RESERVATION_WINDOW_MS,
       maxItems: HOME_RESERVATION_DISPLAY_LIMIT
     };
-    const view = buildNextReservationView(programs, now, options);
     const timelineView = buildNextReservationTimelineView(programs, now, {
       ...options,
       maxGroups: HOME_RESERVATION_DISPLAY_LIMIT
@@ -420,31 +401,11 @@ function mountReservationSection(container, isActive, onContextMenu) {
       remaining -= items.length;
     }
     timelineRenderer.render(visibleGroups);
-    const keys = new Set(view.items.map(model => model.key));
-    for (const [key, card] of reservationCards) {
-      if (keys.has(key)) continue;
-      card.dispose(); card.element.remove(); reservationCards.delete(key);
-    }
-    if (view.total === 0) {
+    if (visibleGroups.length === 0) {
       if (content.firstElementChild?.textContent !== '今後の予約はありません') content.innerHTML = '<p class="home-section-message">今後の予約はありません</p>';
       return;
     }
-    let cursor = reservationGrid.firstChild;
-    view.items.forEach(model => {
-      let card = reservationCards.get(model.key);
-      if (!card) {
-        card = createReservationCard(model, {
-        onOpenDetail: selected => {
-          const query = new URLSearchParams(selected.detailUrl?.split('?')[1] || '');
-          openProgramDetailDialog({ id: query.get('id'), onChanged: () => requestRefresh(true) });
-        }
-        });
-        reservationCards.set(model.key, card);
-      } else card.update(model);
-      if (card.element === cursor) cursor = cursor.nextSibling;
-      else reservationGrid.insertBefore(card.element, cursor);
-    });
-    if (reservationGrid.parentElement !== content) content.replaceChildren(reservationGrid, timelineRenderer.element);
+    if (timelineRenderer.element.parentElement !== content) content.replaceChildren(timelineRenderer.element);
   }
 
   function scheduleDisplayBoundary() {
@@ -519,7 +480,6 @@ function mountReservationSection(container, isActive, onContextMenu) {
 
   return () => {
     disposed = true;
-    reservationCards.forEach(card => card.dispose());
     unsubscribe();
     unsubscribeStorage();
     content.removeEventListener('contextmenu', openContext);
@@ -690,6 +650,62 @@ function mountRecentRecordedSection(container, isActive, onContextMenu) {
   };
 }
 
+export function createHomeStorageWarningRenderer(host) {
+  let card = null, heading, list, link, remaining, signature = null;
+  const rows = new Map();
+  return model => {
+    const next = JSON.stringify(model);
+    if (signature === next) return;
+    signature = next;
+    if (!model) { host.replaceChildren(); card = null; rows.clear(); return; }
+    if (!card) {
+      card = document.createElement('section'); card.setAttribute('role', 'status');
+      const header = document.createElement('div'); header.className = 'home-storage-capacity-heading';
+      const icon = document.createElement('span'); icon.setAttribute('aria-hidden', 'true');
+      icon.innerHTML = '<svg class="icon"><use href="#icon-alert"></use></svg>';
+      heading = document.createElement('h2'); header.append(icon, heading);
+      list = document.createElement('div');
+      link = document.createElement('a'); link.className = 'home-storage-capacity-link';
+      remaining = document.createElement('p'); remaining.className = 'home-storage-capacity-remaining';
+      header.append(link); card.append(header, list, remaining); host.append(card);
+    }
+    card.className = 'panel home-storage-capacity-card is-' + model.level;
+    heading.textContent = model.title;
+    const wanted = new Set(model.entries.map(entry => entry.id));
+    for (const [id, row] of rows) if (!wanted.has(id)) { row.root.remove(); rows.delete(id); }
+    let cursor = list.firstChild;
+    for (const item of model.entries) {
+      let row = rows.get(item.id);
+      if (!row) {
+        const root = document.createElement('div');
+        const info = document.createElement('div'); info.className = 'home-storage-capacity-info';
+        const name = document.createElement('strong'), free = document.createElement('span');
+        const gauge = document.createElement('meter'); gauge.min = 0; gauge.max = 100;
+        const note = document.createElement('p');
+        info.append(name, free); root.append(info, gauge, note); list.append(root);
+        row = { root, name, free, gauge, note }; rows.set(item.id, row);
+      }
+      row.root.className = 'home-storage-capacity-row is-' + item.level;
+      row.name.textContent = item.name; row.name.title = item.name;
+      row.free.textContent = '空き ' + item.free;
+      row.gauge.hidden = item.usagePercent === null;
+      if (item.usagePercent !== null) {
+        row.gauge.value = Number(item.usagePercent);
+        row.gauge.setAttribute('aria-label', `${item.name} 使用率 ${item.usagePercent}%`);
+        row.gauge.title = `使用率 ${item.usagePercent}%`;
+      }
+      const note = item.note?.startsWith('参考値') ? '' : item.note;
+      row.note.textContent = note || ''; row.note.hidden = !note;
+      if (row.root === cursor) cursor = cursor.nextSibling;
+      else list.insertBefore(row.root, cursor);
+    }
+    link.href = model.href;
+    link.textContent = 'ストレージを確認';
+    remaining.textContent = model.remaining ? `ほか${model.remaining}件` : '';
+    remaining.hidden = !model.remaining;
+  };
+}
+
 export function renderHomePage(container, options = {}) {
   let active = true;
   const page = document.createElement('div');
@@ -697,12 +713,17 @@ export function renderHomePage(container, options = {}) {
   const recordingHost = document.createElement('div');
   const reservationHost = document.createElement('div');
   const recordedHost = document.createElement('div');
-  page.className = 'home-page';
+  page.className = 'home-page is-layout-c';
   storageSafetyHost.className = 'home-storage-safety-host';
   recordingHost.className = 'home-recording-host';
-  reservationHost.className = 'home-reservation-host';
+  const reservationColumn = document.createElement('div');
+  reservationColumn.className = 'home-reservation-host';
+  const capacityHost = document.createElement('div');
+  capacityHost.className = 'home-storage-capacity-host';
+  reservationColumn.append(capacityHost, reservationHost);
+  const updateCapacityWarning = createHomeStorageWarningRenderer(capacityHost);
   recordedHost.className = 'home-recorded-host';
-  page.append(storageSafetyHost, recordingHost, reservationHost, recordedHost);
+  page.append(storageSafetyHost, recordingHost, reservationColumn, recordedHost);
   container.replaceChildren(page);
 
   const headerSettings = createHomeHeaderSettings();
@@ -866,6 +887,7 @@ export function renderHomePage(container, options = {}) {
   const disposeRecorded = mountRecentRecordedSection(recordedHost, isActive, openRecentContext);
   const unsubscribeStorageSafety = subscribeStorageData(state => {
     if (!active || !page.isConnected || state.data === null) return;
+    updateCapacityWarning(buildHomeStorageWarning(state.data, state.status === 'error'));
     const issues = buildStorageWarnings(state.data).filter(issue =>
       issue.code === 'system-filesystem' || issue.code === 'storage-safety-unknown'
     );
@@ -893,13 +915,10 @@ export function renderHomePage(container, options = {}) {
     alert.append(body, link);
     storageSafetyHost.replaceChildren(alert);
   });
-  const layoutButtons = Array.from(headerSettings.querySelectorAll('[data-home-layout]'));
-  const customizer = headerSettings.querySelector('.home-layout-customizer');
   const customizeStatus = headerSettings.querySelector('.home-layout-customize-status');
   const customizeReset = headerSettings.querySelector('.home-layout-customize-reset');
   const customInputs = Array.from(headerSettings.querySelectorAll('[data-custom-setting]'));
   let customSettings = readHomeCustomSettings();
-  let currentLayout = 'c';
   let observedLayoutWidth = page.clientWidth;
 
   function customLayoutMetrics(settings) {
@@ -970,21 +989,6 @@ export function renderHomePage(container, options = {}) {
     return true;
   }
 
-  function applyLayout(layout, { save = true } = {}) {
-    currentLayout = layout === 'a' ? 'a' : 'c';
-    page.classList.toggle('is-layout-c', currentLayout === 'c');
-    customizer.hidden = currentLayout !== 'c';
-    if (currentLayout === 'c') applyCustomSettings(customSettings, { allowResponsiveFallback: true });
-    else page.classList.remove('is-custom-narrow');
-    layoutButtons.forEach(button => {
-      button.setAttribute('aria-pressed', String(button.dataset.homeLayout === currentLayout));
-    });
-    if (save) saveHomePreference(HOME_LAYOUT_STORAGE_KEY, currentLayout);
-  }
-
-  layoutButtons.forEach(button => {
-    button.addEventListener('click', () => applyLayout(button.dataset.homeLayout));
-  });
   customInputs.forEach(input => {
     input.addEventListener('input', () => {
       const nextSettings = {
@@ -1019,10 +1023,10 @@ export function renderHomePage(container, options = {}) {
     const nextWidth = Math.round(entries[0]?.contentRect.width || page.clientWidth);
     if (nextWidth === observedLayoutWidth) return;
     observedLayoutWidth = nextWidth;
-    if (currentLayout === 'c') applyCustomSettings(customSettings, { allowResponsiveFallback: true });
+    applyCustomSettings(customSettings, { allowResponsiveFallback: true });
   });
   layoutResizeObserver.observe(page);
-  applyLayout(readHomeLayout(), { save: false });
+  applyCustomSettings(customSettings, { allowResponsiveFallback: true });
 
   return () => {
     active = false;

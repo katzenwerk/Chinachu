@@ -100,7 +100,7 @@
   .month-calendar-day { height: 44px; font-size: 14px; }
   .list-control-popup-panel label { min-height: 44px; font-size: 14px; }
 
-  /* Shared horizontal media cards; no desktop A/C setting is written. */
+  /* Shared horizontal media cards retain the desktop display preferences. */
   .home-page,.home-page.is-layout-c,.home-page.is-layout-c.is-custom-narrow { grid-template-columns: minmax(0,1fr); gap: 16px; }
   .home-page .home-recording-host,.home-page.is-layout-c .home-recording-host { grid-column: 1; order: 1; }
   .home-page .home-reservation-host,.home-page.is-layout-c .home-reservation-host { grid-column: 1; order: 2; }
@@ -124,7 +124,6 @@
   .mobile-recording-state { font-size: 13px; color: var(--brand); }
   .recording-watch-error { grid-column: 1/-1; }
   .mobile-context-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; min-height: 44px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 22px; cursor: pointer; }
-  .home-page .home-reservation-content > .reservation-grid { display: none; }
   .home-page .home-reservation-timeline { display: block; }
   .home-page .home-reservation-timeline-slot,.home-page.is-layout-c .home-reservation-timeline-slot { display: block; margin-bottom: 14px; }
   .home-page .home-reservation-timeline-date,.home-page .home-reservation-timeline-track,.home-page .home-reservation-timeline-separator { display: none; }
