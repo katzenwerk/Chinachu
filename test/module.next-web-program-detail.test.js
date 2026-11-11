@@ -119,6 +119,20 @@ async function checkMaintenanceState() {
 	// Render saved JSON into a minimal DOM; no API requests or media access.
 	const warningSource = fs.readFileSync(path.join(__dirname, '../next-web/services/recorded-result-warnings.js'), 'utf8');
 	const { savedTsResultInfo } = await import('data:text/javascript;base64,' + Buffer.from(warningSource).toString('base64'));
+	const cardSource = fs.readFileSync(path.join(__dirname, '../next-web/components/recorded-card.js'), 'utf8');
+	const cardContext = vm.createContext({ savedTsResultInfo });
+	vm.runInContext(section(cardSource, 'function savedTsCardSummary(', 'function toRecordedCardModel('), cardContext);
+	for (const [field, heading, explanation] of [
+		['ccErrorEvents', 'DROP疑い', '映像や音声が乱れている可能性があります。'],
+		['pcrGapEvents', '時間飛び疑い', '映像や音声が途切れている可能性があります。'],
+		['syncErrorEvents', '同期異常疑い', '映像や音声に異常がある可能性があります。']
+	]) {
+		assert.strictEqual(cardContext.savedTsCardSummary({ result: { completed: true, status: 'SUSPECT', [field]: 4 } }).description,
+			`TS解析：${heading} 4件\n${explanation}`);
+	}
+	assert.strictEqual(cardContext.savedTsCardSummary({ result: { completed: true, status: 'SUSPECT',
+		ccErrorEvents: 4, pcrGapEvents: 1, syncErrorEvents: 1 } }).description,
+		'TS解析：DROP疑い 4件 / 時間飛び疑い 1件 / 同期異常疑い 1件\n映像や音声に異常がある可能性があります。');
 	const summaryContext = vm.createContext({ savedTsResultInfo, document: { createElement: tag => ({
 		tag, children: [], textContent: '', append(...nodes) { this.children.push(...nodes); }, setAttribute() {}
 	}) } });

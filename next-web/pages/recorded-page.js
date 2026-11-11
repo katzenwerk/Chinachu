@@ -36,7 +36,7 @@ const RESULT_OPTIONS = [
 const DEFAULT_RESULTS = ['recorded', 'deleted', 'missing', 'missed'];
 // Attention mode always checks all result categories except intentionally skipped ones.
 const ATTENTION_RESULTS = RESULT_OPTIONS.map(([value]) => value).filter(value => value !== 'skipped');
-const ATTENTION_DESCRIPTION = '録画済み・削除済み・未録画／NG（スキップを除く）の分類から、注意が記録された結果だけを表示します。\n例：未録画、容量不足による中断、DROP検出、録画ファイル欠損。DROPは必ずしも映像破損を意味しません。';
+const ATTENTION_DESCRIPTION = '削除済み・スキップを除き、未録画、録画中断、録画時間不足、録画ファイル欠損などの注意が記録された結果だけを表示します。DROP／TS解析異常だけの結果は含めません。';
 const RESULT_VALUES = new Set(RESULT_OPTIONS.map(([value]) => value));
 const LIST_PAGE_SIZE = 50;
 const CARD_PAGE_SIZE = 25;
@@ -193,7 +193,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   const attentionOption = filter.querySelector('.recorded-results-warning-option');
   const filterLabel = filterTrigger.querySelector('span');
   attentionOption.title = ATTENTION_DESCRIPTION;
-  attentionInput.setAttribute('aria-label', '注意ありのみ（スキップを除く3種類から抽出）');
+  attentionInput.setAttribute('aria-label', '注意ありのみ（削除済み・スキップ・DROP／TS異常のみを除く）');
   const csvButton = toolbar.querySelector('.recorded-results-csv');
   const cleanerButton = toolbar.querySelector('.recorded-results-cleaner');
   const content = page.querySelector('.reserves-list-content');
@@ -259,8 +259,19 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   function matchesScopedResult(item) {
     const storage = resolveStorageFilter(storageData, storageToken);
     return (!channelId || String(item?.channel?.id ?? '') === channelId) &&
-      (!warningsOnly || hasRecordedResultWarnings(item)) &&
       (storageToken === null || storage !== null && resolveRecordedStorage(storageData, item) === storage);
+  }
+
+  async function loadScopedResults(options) {
+    const attention = warningsOnly, ts = tsIssuesOnly;
+    const loadAll = storageToken === null ? loadAllRecordedResults : loadRecordedResultsWithStoragePaths;
+    const [allItems, tsItems] = await Promise.all([
+      loadAll({ ...options, tsIssues: ts && !attention }),
+      attention && ts ? loadAll({ ...options, tsIssues: true }) : []
+    ]);
+    const tsKeys = new Set(tsItems.map(item => item.key));
+    return allItems.filter(item => matchesScopedResult(item) &&
+      (!attention || hasRecordedResultWarnings(item) || ts && tsKeys.has(item.key)));
   }
 
   async function loadResults(options) {
@@ -275,14 +286,13 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     const key = JSON.stringify({ search: options.search || '', ruleUid: options.ruleUid || '',
       results: options.results || [], channelId, warningsOnly, tsIssuesOnly, storageToken });
     if (filteredCache === null || filteredCache.key !== key) {
-      const loadAll = storageToken === null ? loadAllRecordedResults : loadRecordedResultsWithStoragePaths;
-      const promise = loadAll({
+      const promise = loadScopedResults({
         search: options.search,
         ruleUid: options.ruleUid,
         results: options.results,
         limit: 200,
         signal: options.signal
-      }).then(allItems => allItems.filter(matchesScopedResult));
+      });
       filteredCache = { key, promise };
       promise.catch(() => {
         if (filteredCache?.promise === promise) filteredCache = null;
@@ -364,12 +374,12 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     const selectedLabels = RESULT_OPTIONS
       .filter(([value]) => selectedResults.has(value))
       .map(([, label]) => label);
-    filterLabel.textContent = warningsOnly ? '⚠ 注意あり' : tsIssuesOnly ? 'DROP／TS異常' : '対象';
+    filterLabel.textContent = warningsOnly && tsIssuesOnly ? '⚠ 注意／DROP・TS異常' : warningsOnly ? '⚠ 注意あり' : tsIssuesOnly ? 'DROP／TS異常' : '対象';
     filterSummary.hidden = warningsOnly || tsIssuesOnly;
     filterSummary.textContent = warningsOnly || tsIssuesOnly ? '' : `${selectedLabels.length}/${RESULT_OPTIONS.length}`;
-    filterTrigger.title = warningsOnly ? ATTENTION_DESCRIPTION : tsIssuesOnly ? 'Mirakurun DROPまたはTS解析で異常を検出した録画のみ表示します。解析失敗は含めません。' : '';
-    filterTrigger.setAttribute('aria-label', warningsOnly
-      ? '対象フィルター: 注意ありのみ（スキップ以外の分類から抽出）'
+    filterTrigger.title = warningsOnly && tsIssuesOnly ? '録画結果の注意、またはDROP／TS解析異常がある結果を表示します。削除済みはDROP／TS異常条件に該当するものだけ含めます。' : warningsOnly ? ATTENTION_DESCRIPTION : tsIssuesOnly ? 'Mirakurun DROPまたはTS解析で異常を検出した録画のみ表示します。解析失敗は含めません。' : '';
+    filterTrigger.setAttribute('aria-label', warningsOnly && tsIssuesOnly ? '対象フィルター: 注意あり、またはDROP／TS異常あり'
+      : warningsOnly ? '対象フィルター: 注意ありのみ（削除済み・スキップ・DROP／TS異常のみを除く）'
       : tsIssuesOnly ? '対象フィルター: DROP／TS異常ありのみ'
       : `対象フィルター: ${selectedLabels.length === 0 ? '選択なし' : selectedLabels.join('、')}`);
   }
@@ -623,7 +633,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
         if (!Array.isArray(data?.storages)) throw new Error('Storage API response is invalid');
         storageData = data;
       }
-      const allItems = await loadAllRecordedResults({
+      const exportItems = await loadScopedResults({
         search,
         ruleUid,
         results: resultValues(),
@@ -631,7 +641,6 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
         signal: controller.signal
       });
       if (!isActive()) return;
-      const exportItems = allItems.filter(matchesScopedResult);
       downloadCsv(buildRecordedResultsCsv(exportItems), recordedResultsCsvFilename());
       exportFeedback.textContent = `${exportItems.length}件をCSVへ出力しました`;
       exportFeedback.hidden = false;
@@ -841,12 +850,10 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   attentionInput.addEventListener('change', () => {
     // Do not overwrite the user's saved categories. Turning this off restores them.
     warningsOnly = attentionInput.checked;
-    if (warningsOnly) tsIssuesOnly = false;
     onResultsFilterChanged();
   });
   tsIssuesInput.addEventListener('change', () => {
     tsIssuesOnly = tsIssuesInput.checked;
-    if (tsIssuesOnly) warningsOnly = false;
     onResultsFilterChanged();
   });
   viewButtons.forEach(button => button.addEventListener('click', () => {

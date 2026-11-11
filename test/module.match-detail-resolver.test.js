@@ -447,7 +447,7 @@ describe('Match detail resolver', function() {
 		assert.strictEqual(ruleResolved, 0);
 	});
 
-	it('filters, normalizes, sorts, and pages match results deterministically', function() {
+	it('filters, normalizes, sorts, and pages match results deterministically', async function() {
 		const now = start + 10 * 60 * 60 * 1000;
 		const entries = [
 			v2({ key: `channel-z|${start + 3600000}|${seconds}`, start: start + 3600000, end: start + 5400000, fullTitle: 'Other', recording: null }),
@@ -486,6 +486,59 @@ describe('Match detail resolver', function() {
 		assert.strictEqual(resolver.buildPage(entries, detailResolver, { now, results: '' }).total, 0);
 		assert.throws(() => resolver.buildPage(entries, detailResolver, { now, status: 'not-a-status' }), RangeError);
 		assert.throws(() => resolver.buildPage(entries, detailResolver, { now, results: 'recorded,invalid' }), RangeError);
+
+		// The WUI combines recording warnings with the existing API's TS predicate;
+		// deleted history must never enter through the recording-warning branch.
+		const warningSource = fs.readFileSync(path.join(__dirname, '../next-web/services/recorded-result-warnings.js'), 'utf8');
+		const { hasRecordedResultWarnings } = await import('data:text/javascript;base64,' + Buffer.from(warningSource).toString('base64'));
+		const cases = [
+			['normal', false, false, false], ['attention', true, false, false],
+			['ts', false, true, false], ['both', true, true, false],
+			['deleted-normal', false, false, true], ['deleted-attention', true, false, true],
+			['deleted-ts', false, true, true], ['deleted-both', true, true, true]
+		];
+		const recordings = cases.map(([id, attention, ts], index) => program({ id, title: id, fullTitle: id,
+			start: start + index * 1000, end: start + index * 1000 + seconds * 1000,
+			recorded: `/fixture/${id}.ts`, operatorActualSeconds: attention ? 100 : seconds,
+			ruleUid: index < 4 ? 'rule-current' : 'rule-deleted',
+			savedTsAnalysis: { result: { completed: true, status: ts ? 'SUSPECT' : 'NO_FINDINGS', ccErrorEvents: ts ? 4 : 0 } }
+		}));
+		const ledger = cases.map(([id, , , deleted], index) => v2({
+			key: `channel-a|${recordings[index].start}|${seconds}`, start: recordings[index].start, end: recordings[index].end,
+			recording: { recordedId: id }, fullTitle: id, ruleUid: recordings[index].ruleUid,
+			deletion: deleted ? { reason: 'manual', deletedAt: now - 1 } : null,
+			savedTsAnalysis: recordings[index].savedTsAnalysis
+		}));
+		const apiResolver = resolver.createDetailResolver({ recorded: recordings });
+		const loadAll = async options => resolver.buildPage(ledger, apiResolver, { ...options, now, limit: 200 }).items;
+		const pageSource = fs.readFileSync(path.join(__dirname, '../next-web/pages/recorded-page.js'), 'utf8');
+		const context = vm.createContext({ warningsOnly: true, tsIssuesOnly: false, channelId: null, storageToken: null,
+			storageData: {}, hasRecordedResultWarnings, loadAllRecordedResults: loadAll, loadRecordedResultsWithStoragePaths: loadAll,
+			resolveStorageFilter: () => 'fixture-storage', resolveRecordedStorage: () => 'fixture-storage' });
+		vm.runInContext(pageSource.slice(pageSource.indexOf('  function matchesScopedResult('),
+			pageSource.indexOf('  async function loadResults(')), context);
+		const titles = async options => Array.from(await context.loadScopedResults(options), item => item.fullTitle).sort();
+		const options = { results: ['recorded', 'deleted', 'missing', 'missed'] };
+		assert.deepStrictEqual(await titles(options), ['attention', 'both']);
+		assert.strictEqual(hasRecordedResultWarnings({ status: 'MISSED' }), true);
+		assert.strictEqual(hasRecordedResultWarnings({ status: 'MISSED', deletionKind: 'explicit' }), false);
+		for (const tsDrop of [{ ccErrorEvents: 1 }, { teiPackets: 1 }, { scrambledPackets: 1 }, { syncErrorEvents: 1 }]) {
+			assert.strictEqual(hasRecordedResultWarnings({ status: 'RECORDED', tsDrop: { completed: true, ...tsDrop } }), false);
+		}
+		assert.strictEqual(hasRecordedResultWarnings({ status: 'RECORDED', mirakurunDrop: { dropTotal: 1 } }), false);
+		context.warningsOnly = false; context.tsIssuesOnly = true;
+		const tsExpected = ['both', 'deleted-both', 'deleted-ts', 'ts'];
+		assert.deepStrictEqual(await titles(options), tsExpected);
+		context.warningsOnly = true;
+		assert.deepStrictEqual(await titles(options), ['attention', ...tsExpected].sort());
+		assert.deepStrictEqual(await titles({ results: ['deleted'] }), ['deleted-both', 'deleted-ts']);
+		assert.deepStrictEqual(await titles({ ...options, ruleUid: 'rule-current', search: 'attention' }), ['attention']);
+		context.channelId = 'other-channel';
+		assert.deepStrictEqual(await titles(options), []);
+		context.channelId = 'channel-a'; context.storageToken = 'fixture-storage';
+		assert.deepStrictEqual(await titles(options), ['attention', ...tsExpected].sort());
+		context.warningsOnly = false;
+		assert.deepStrictEqual(await titles(options), tsExpected);
 	});
 
 	it('aggregates rule recording counts once without counting failures or duplicate history', function() {

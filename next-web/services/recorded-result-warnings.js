@@ -104,16 +104,17 @@ export function savedTsResultInfo(saved) {
   const parts = [], notes = [];
   if (Number.isFinite(result.ccErrorEvents) && result.ccErrorEvents > 0) {
     parts.push(`CC ${result.ccErrorEvents.toLocaleString('ja-JP')}`);
-    notes.push('映像や音声が乱れている可能性があります');
+    notes.push('映像や音声が乱れている可能性があります。');
   }
   if (Number.isFinite(result.pcrGapEvents) && result.pcrGapEvents > 0) {
-    parts.push('GAPあり'); notes.push('保存TSで検出した時間飛び候補です。発生箇所は解析詳細で確認できます。');
+    parts.push('GAPあり'); notes.push('映像や音声が途切れている可能性があります。');
   }
   for (const [key, name] of [['teiPackets', 'TEI'], ['syncErrorEvents', '同期'], ['invalidHeaderPackets', 'ヘッダー'], ['pcrBackwards', 'PCR逆行']]) {
-    if (Number.isFinite(result[key]) && result[key] > 0) { parts.push(`${name} ${result[key].toLocaleString('ja-JP')}`); notes.push(`${name}を検出しました。`); }
+    if (Number.isFinite(result[key]) && result[key] > 0) { parts.push(`${name} ${result[key].toLocaleString('ja-JP')}`); notes.push('映像や音声に異常がある可能性があります。'); }
   }
-  if (parts.length) return { label: parts.join(' / '), findings: true, description: notes.join('\n') };
-  if (result.status === 'SUSPECT') return { label: '異常検出', findings: true, description: '保存TS解析で異常を検出しました。解析詳細で内容を確認できます。' };
+  if (parts.length) return { label: parts.join(' / '), findings: true,
+    description: notes.length === 1 ? notes[0] : '映像や音声に異常がある可能性があります。' };
+  if (result.status === 'SUSPECT') return { label: '異常検出', findings: true, description: '映像や音声に異常がある可能性があります。' };
   return { label: result.status === 'NO_FINDINGS' ? '異常未検出' : '解析結果なし', findings: false, description: '' };
 }
 
@@ -232,5 +233,7 @@ export function recordedResultWarnings(item) {
 }
 
 export function hasRecordedResultWarnings(item) {
-  return recordedResultWarnings(item).length > 0;
+  if (recordedFileState(item) === 'deleted') return false;
+  return recordedResultWarnings(item).some(value =>
+    !['saved-ts', 'drop', 'ts-cc', 'ts-tei', 'ts-scrambled', 'ts-sync'].includes(value.key));
 }

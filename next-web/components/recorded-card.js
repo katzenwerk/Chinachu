@@ -70,8 +70,8 @@ function savedTsCardSummary(saved) {
   if (!result) return null;
   const info = savedTsResultInfo(saved);
   const parts = [];
-  for (const [key, label] of [['ccErrorEvents', 'DROP疑い'], ['pcrGapEvents', '時間飛び'],
-    ['teiPackets', 'TEI'], ['syncErrorEvents', '同期異常'], ['invalidHeaderPackets', 'ヘッダー異常'], ['pcrBackwards', 'PCR逆行']]) {
+  for (const [key, label] of [['ccErrorEvents', 'DROP疑い'], ['pcrGapEvents', '時間飛び疑い'],
+    ['teiPackets', 'TEI'], ['syncErrorEvents', '同期異常疑い'], ['invalidHeaderPackets', 'ヘッダー異常'], ['pcrBackwards', 'PCR逆行']]) {
     if (Number.isFinite(result[key]) && result[key] > 0) parts.push(`${label} ${result[key].toLocaleString('ja-JP')}件`);
   }
   const labels = { NO_FINDINGS: '解析:OK', SUSPECT: '解析:異常', ERROR: '解析:失敗' };
