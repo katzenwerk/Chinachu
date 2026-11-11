@@ -1,3 +1,4 @@
+import { viewportCssPixels } from '../services/ui-scale.js';
 // 番組・予約・録画中の操作。録画結果には recorded-context-menu を使う。
 import { openProgramDetailDialog } from './program-detail-dialog.js';
 import { loadProgramActionContext } from '../services/program-actions.js';
@@ -98,8 +99,8 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
         if (y + rect.height > window.innerHeight - margin) y = trigger.top - gap - rect.height;
       }
     }
-    submenu.style.left = `${Math.max(margin, Math.min(x, window.innerWidth - rect.width - margin))}px`;
-    submenu.style.top = `${Math.max(margin, Math.min(y, window.innerHeight - rect.height - margin))}px`;
+    submenu.style.left = viewportCssPixels(Math.max(margin, Math.min(x, window.innerWidth - rect.width - margin)));
+    submenu.style.top = viewportCssPixels(Math.max(margin, Math.min(y, window.innerHeight - rect.height - margin)));
   }
 
   function toggleFilters(open, focusFirst = false) {
@@ -122,8 +123,8 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
 
   function positionMenu(x, y) {
     const rect = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
-    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    menu.style.left = viewportCssPixels(Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)));
+    menu.style.top = viewportCssPixels(Math.max(8, Math.min(y, window.innerHeight - rect.height - 8)));
   }
 
   function open(item, { x, y }) {

@@ -1,3 +1,4 @@
+import { viewportCssPixels } from '../services/ui-scale.js';
 // ルール一覧の操作。右クリック直後は自動フォーカスしない。
 export function createRulesContextMenu({ onAction }) {
   const menu = document.createElement('div');
@@ -38,8 +39,8 @@ export function createRulesContextMenu({ onAction }) {
     menu.style.left = '0px';
     menu.style.top = '0px';
     const bounds = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - bounds.width - 8))}px`;
-    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - bounds.height - 8))}px`;
+    menu.style.left = viewportCssPixels(Math.max(8, Math.min(x, window.innerWidth - bounds.width - 8)));
+    menu.style.top = viewportCssPixels(Math.max(8, Math.min(y, window.innerHeight - bounds.height - 8)));
   }
 
   menu.addEventListener('click', event => {

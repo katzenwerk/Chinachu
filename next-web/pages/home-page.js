@@ -1,3 +1,4 @@
+import { getUiScalePercent, getUiZoom, setUiScalePercent } from '../services/ui-scale.js';
 import { invalidateResources, loadResource } from '../services/api-client.js';
 import { appendMobileContextButton } from '../components/mobile-layout.js';
 import { createHomeProgramContextMenu } from '../components/home-program-context-menu.js';
@@ -75,6 +76,10 @@ function createHomeHeaderSettings() {
   details.innerHTML = `
     <summary>⚙ 表示設定</summary>
     <div class="home-header-settings-panel">
+      <label class="home-layout-customize-field">
+        <span>UI表示倍率 <output data-ui-scale-output>100%</output></span>
+        <input type="range" min="70" max="120" step="5" value="100" data-ui-scale aria-label="UI表示倍率">
+      </label>
       <div class="home-header-settings-title">ホームのレイアウト</div>
       <div class="home-layout-switch" role="group" aria-label="ホームレイアウト">
         <button type="button" data-home-layout="c" aria-pressed="true">C（標準）</button>
@@ -108,6 +113,20 @@ function createHomeHeaderSettings() {
         </div>
       </div>
     </div>`;
+  const scaleInput = details.querySelector('[data-ui-scale]');
+  const scaleOutput = details.querySelector('[data-ui-scale-output]');
+  const syncScale = () => {
+    scaleInput.value = String(getUiScalePercent());
+    scaleOutput.textContent = `${getUiScalePercent()}%`;
+  };
+  syncScale();
+  scaleInput.addEventListener('input', () => {
+    scaleOutput.textContent = `${scaleInput.value}%`;
+  });
+  scaleInput.addEventListener('change', () => {
+    setUiScalePercent(Number(scaleInput.value));
+    syncScale();
+  });
   return details;
 }
 
@@ -892,10 +911,10 @@ export function renderHomePage(container, options = {}) {
     const pageStyle = window.getComputedStyle(page);
     const pageGap = Number.parseFloat(pageStyle.columnGap) || 0;
     const recordingChrome = recordingPanel && recordingContent
-      ? Math.max(0, recordingPanel.getBoundingClientRect().width - recordingContent.getBoundingClientRect().width)
+      ? Math.max(0, (recordingPanel.getBoundingClientRect().width - recordingContent.getBoundingClientRect().width) / getUiZoom())
       : 30;
     const recordedChrome = recordedPanel && recordedContent
-      ? Math.max(0, recordedPanel.getBoundingClientRect().width - recordedContent.getBoundingClientRect().width)
+      ? Math.max(0, (recordedPanel.getBoundingClientRect().width - recordedContent.getBoundingClientRect().width) / getUiZoom())
       : 30;
     const cardGap = recordedGrid
       ? Number.parseFloat(window.getComputedStyle(recordedGrid).columnGap) || 0
@@ -993,6 +1012,9 @@ export function renderHomePage(container, options = {}) {
   };
   document.addEventListener('pointerdown', handleOutsidePointer);
   document.addEventListener('keydown', handleEscape);
+  // Root zoom can change measured panel borders without changing the page's CSS width.
+  const handleLayoutResize = () => applyCustomSettings(customSettings, { allowResponsiveFallback: true });
+  window.addEventListener('resize', handleLayoutResize);
   const layoutResizeObserver = new ResizeObserver(entries => {
     const nextWidth = Math.round(entries[0]?.contentRect.width || page.clientWidth);
     if (nextWidth === observedLayoutWidth) return;
@@ -1006,6 +1028,7 @@ export function renderHomePage(container, options = {}) {
     active = false;
     document.removeEventListener('pointerdown', handleOutsidePointer);
     document.removeEventListener('keydown', handleEscape);
+    window.removeEventListener('resize', handleLayoutResize);
     layoutResizeObserver.disconnect();
     headerSettings.remove();
     disposeRecording();

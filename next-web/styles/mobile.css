@@ -24,7 +24,7 @@
   .mobile-page-action { position: relative; }
   .mobile-page-action.is-active,.mobile-page-action[aria-expanded="true"] { background: rgba(255,255,255,.24); }
   .mobile-action-date { position: absolute; right: 2px; bottom: 1px; min-width: 25px; padding: 0 2px; border-radius: 5px; background: #fff; color: var(--brand-strong); font-size: 9px; font-weight: 700; line-height: 13px; }
-  .app-shell,.app-shell[data-sidebar="compact"] { display: block; min-height: calc(100dvh - var(--header-height)); }
+  .app-shell,.app-shell[data-sidebar="compact"] { display: block; min-height: calc(var(--wui-viewport-dynamic-height) - var(--header-height)); }
   .main-content,html:has(.guide-page) .main-content { width: 100%; max-width: none; padding: 12px max(12px,env(safe-area-inset-right)) calc(var(--mobile-nav-height) + 20px) max(12px,env(safe-area-inset-left)); }
   #page-outlet,#page-outlet > * { min-width: 0; }
   .panel { min-width: 0; padding: 12px; }
@@ -34,7 +34,7 @@
   .mobile-bottom-nav a.is-active { background: var(--brand-soft); color: var(--brand); font-weight: 700; }
   .mobile-bottom-nav .icon { width: 23px; height: 23px; }
   .sidebar-track { position: fixed; inset: var(--header-height) auto 0 0; z-index: 100; width: min(320px,88%); visibility: hidden; }
-  #app-shell[data-sidebar] .sidebar { position: static; width: 100%; height: calc(100dvh - var(--header-height)); padding-bottom: max(16px,env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; box-shadow: var(--shadow); }
+  #app-shell[data-sidebar] .sidebar { position: static; width: 100%; height: calc(var(--wui-viewport-dynamic-height) - var(--header-height)); padding-bottom: max(16px,env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; box-shadow: var(--shadow); }
   .app-shell.is-mobile-menu-open .sidebar-track { visibility: visible; }
   #app-shell[data-sidebar] .sidebar .nav-label,#app-shell[data-sidebar] .sidebar .badge:not([hidden]) { display: inline; opacity: 1; }
   .app-shell[data-sidebar] .sidebar .nav-item { width: 100%; justify-content: flex-start; min-height: 48px; padding: 10px 16px; gap: 12px; }
@@ -44,14 +44,14 @@
   .sidebar-bottom #theme-toggle { margin: 10px 16px; width: 44px; height: 44px; color: var(--text); background: var(--panel-subtle); }
   .mobile-drawer-close { margin: 16px; justify-content: center; }
   .mobile-drawer-backdrop:not([hidden]) { display: block; position: fixed; inset: var(--header-height) 0 0; z-index: 90; border: 0; background: #07120d88; touch-action: none; }
-  .notification-panel { top: calc(var(--header-height) + 6px); right: 8px; width: calc(100% - 16px); max-height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 18px); overflow-y: auto; }
+  .notification-panel { top: calc(var(--header-height) + 6px); right: 8px; width: calc(100% - 16px); max-height: calc(var(--wui-viewport-dynamic-height) - var(--header-height) - var(--mobile-nav-height) - 18px); overflow-y: auto; }
   .notification-panel section { padding: 10px; }
   .notification-panel section + section { border-top: 1px solid var(--border); }
   .notification-item { padding: 7px 8px 7px 22px; }
   .toast { max-width: calc(100% - 24px); padding: 9px 12px; bottom: calc(var(--mobile-nav-height) + 10px); white-space: normal; }
 
   /* Existing page controls open as an overlay sheet from compact header icons. */
-  .mobile-page-toolbar { position: fixed; inset: calc(var(--header-height) + 6px) 8px auto; z-index: 86; display: grid; visibility: hidden; min-width: 0; max-height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 20px); overflow: auto; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); color: var(--text); opacity: 0; pointer-events: none; transform: translateY(-5px); transition: opacity .12s ease,transform .12s ease,visibility .12s; }
+  .mobile-page-toolbar { position: fixed; inset: calc(var(--header-height) + 6px) 8px auto; z-index: 86; display: grid; visibility: hidden; min-width: 0; max-height: calc(var(--wui-viewport-dynamic-height) - var(--header-height) - var(--mobile-nav-height) - 20px); overflow: auto; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); color: var(--text); opacity: 0; pointer-events: none; transform: translateY(-5px); transition: opacity .12s ease,transform .12s ease,visibility .12s; }
   .mobile-page-toolbar.is-open { visibility: visible; opacity: 1; pointer-events: auto; transform: translateY(0); }
   .mobile-page-toolbar:has(.header-page-actions:empty) { display: none; }
   .mobile-page-toolbar .header-page-actions { display: block; width: 100%; min-width: 0; }
@@ -80,7 +80,7 @@
   .mobile-page-toolbar .guide-types { flex-wrap: wrap; gap: 4px 12px; min-width: 0; margin: 0; border-color: var(--border); }
   .mobile-page-toolbar .guide-types label { min-height: 44px; font-size: 14px; }
   .mobile-page-toolbar .guide-date-controls { display: contents; }
-  .mobile-page-toolbar .guide-date-controls :is([data-prev],[data-next],[data-date]) { position: fixed; left: -100vw; width: 1px; min-width: 1px; height: 1px; min-height: 1px; padding: 0; opacity: 0; pointer-events: none; }
+  .mobile-page-toolbar .guide-date-controls :is([data-prev],[data-next],[data-date]) { position: fixed; left: -var(--wui-viewport-width); width: 1px; min-width: 1px; height: 1px; min-height: 1px; padding: 0; opacity: 0; pointer-events: none; }
   .mobile-page-toolbar .guide-display-settings { margin-left: 0; }
   .mobile-page-toolbar .program-search-header-form > input { order: -1; flex: 1 1 100%; margin: 0; width: 100%; }
   .app-header .header-program-search { flex: 0 0 44px; width: 44px; border-color: rgba(255,255,255,.3); background: rgba(255,255,255,.12); }
@@ -89,12 +89,13 @@
   .app-header .header-program-search.is-expanded { position: fixed; top: calc(var(--header-height) + 6px); right: 8px; left: 8px; z-index: 87; display: flex; width: auto; background: var(--panel); box-shadow: var(--shadow); }
   .app-header .header-program-search.is-expanded .header-program-search-label { display: block; }
   .app-header .header-program-search.is-expanded .header-program-search-button { color: var(--brand); }
-  .mobile-page-toolbar .home-header-settings { display: none; } /* A/C remains a desktop preference. */
+  .mobile-page-toolbar .home-header-settings { display: block; }
+  .mobile-page-toolbar .home-header-settings-panel { position: static; width: 100%; max-height: none; margin-top: 8px; box-shadow: none; }
   .mobile-page-toolbar .reserves-toolbar { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
   .mobile-page-toolbar .reserves-search { flex: 1 1 100%; width: 100%; max-width: none; }
   .mobile-page-toolbar .reserves-count { display: flex; width: auto; min-width: 0; }
   .mobile-page-toolbar .reserves-date-jump-host { display: block; }
-  .list-control-popup-panel,.home-header-settings-panel { position: fixed; inset: auto 8px calc(var(--mobile-nav-height) + 8px); width: auto; max-width: none; max-height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 24px); overflow: auto; z-index: 88; }
+  .list-control-popup-panel,.home-header-settings-panel { position: fixed; inset: auto 8px calc(var(--mobile-nav-height) + 8px); width: auto; max-width: none; max-height: calc(var(--wui-viewport-dynamic-height) - var(--header-height) - var(--mobile-nav-height) - 24px); overflow: auto; z-index: 88; }
   .mobile-page-toolbar .guide-display-settings > div { position: static; width: 100%; max-width: none; max-height: none; margin-top: 8px; overflow: visible; box-shadow: none; }
   .month-calendar-day { height: 44px; font-size: 14px; }
   .list-control-popup-panel label { min-height: 44px; font-size: 14px; }
@@ -154,7 +155,7 @@
 
   /* Keep EPG overflow inside the existing scroll viewport. */
   html:has(.guide-page) .main-content { padding-top: 6px; padding-bottom: calc(var(--mobile-nav-height) + 6px); }
-  .guide-scroll { height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 12px); min-height: 0; max-width: 100%; touch-action: pan-x pan-y; }
+  .guide-scroll { height: calc(var(--wui-viewport-dynamic-height) - var(--header-height) - var(--mobile-nav-height) - 12px); min-height: 0; max-width: 100%; touch-action: pan-x pan-y; }
   .guide-time-axis { z-index: 14; background: var(--panel); box-shadow: 2px 0 4px color-mix(in srgb,var(--border) 60%,transparent); }
   .guide-corner { z-index: 16; background: var(--panel); }
   .guide-program-title,.guide-program.is-compact .guide-program-title { font-size: 15px; line-height: 1.35; }
@@ -218,7 +219,7 @@
   .settings-change-list > div { grid-template-columns: minmax(0,1fr); font-size: 13px; }
   .log-page { height: auto; min-height: 0; }
   .log-page-panel { height: auto; overflow: visible; }
-  .log-console { flex: auto; height: 55dvh; min-height: 240px; max-width: 100%; font-size: 13px; }
+  .log-console { flex: auto; height: calc(var(--wui-viewport-dynamic-height) * 0.55); min-height: 240px; max-width: 100%; font-size: 13px; }
   .log-toolbar,.log-service-row,.log-service-action { flex-wrap: wrap; min-width: 0; }
   .log-service-action { margin-left: 0; padding-bottom: 8px; }
   .log-search,.log-selection,.log-level { flex: 1 1 100%; min-width: 0; }
@@ -234,8 +235,8 @@
   .chinachu-live-player-close { flex-basis: 44px; width: 44px; height: 44px; }
 
   /* Existing dialogs become sheets; overflow remains local and content is kept. */
-  dialog { max-width: calc(100% - 16px); max-height: calc(100dvh - env(safe-area-inset-top) - 16px); overflow-y: auto; }
-  .program-detail-dialog,.rule-dialog,.cleaner-dialog,.settings-save-dialog,.channel-selector-dialog { position: fixed; inset: auto 0 0; margin: 0; width: 100%; max-width: none; height: calc(100dvh - env(safe-area-inset-top) - 8px); max-height: none; border-radius: 14px 14px 0 0; padding-bottom: env(safe-area-inset-bottom); }
+  dialog { max-width: calc(100% - 16px); max-height: calc(var(--wui-viewport-dynamic-height) - env(safe-area-inset-top) - 16px); overflow-y: auto; }
+  .program-detail-dialog,.rule-dialog,.cleaner-dialog,.settings-save-dialog,.channel-selector-dialog { position: fixed; inset: auto 0 0; margin: 0; width: 100%; max-width: none; height: calc(var(--wui-viewport-dynamic-height) - env(safe-area-inset-top) - 8px); max-height: none; border-radius: 14px 14px 0 0; padding-bottom: env(safe-area-inset-bottom); }
   .program-detail-dialog > article,.rule-dialog > article { height: 100%; max-height: 100%; }
   .program-detail-dialog > article { display: block; overflow-y: auto; }
   .program-detail-dialog > article > header { position: sticky; top: 0; z-index: 2; padding: 14px; background: var(--panel); }
@@ -272,10 +273,10 @@
   .cleaner-dialog-options label.cleaner-dialog-suboption { margin-left: 12px; }
   .cleaner-dialog :is(small,p,code) { font-size: 13px; overflow-wrap: anywhere; }
   .settings-save-dialog form { max-height: 100%; }
-  .guide-context-menu,.rules-context-menu,.recorded-context-menu,.recorded-context-submenu { inset: auto 8px calc(var(--mobile-nav-height) + 8px) !important; width: auto; min-width: 0; max-height: calc(100dvh - var(--header-height) - var(--mobile-nav-height) - 24px); border-radius: 12px; }
+  .guide-context-menu,.rules-context-menu,.recorded-context-menu,.recorded-context-submenu { inset: auto 8px calc(var(--mobile-nav-height) + 8px) !important; width: auto; min-width: 0; max-height: calc(var(--wui-viewport-dynamic-height) - var(--header-height) - var(--mobile-nav-height) - 24px); border-radius: 12px; }
   :is(.guide-context-menu,.rules-context-menu,.recorded-context-menu,.recorded-context-submenu) button { min-height: 44px; font-size: 15px; }
   :is(.main-content,dialog) :is(.button,button:not(.guide-program):not(.guide-channel):not(.recorded-card-thumbnail):not(.program-modal-thumbnail),summary) { min-height: 44px; }
   :is(.main-content,dialog) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),select,textarea) { max-width: 100%; min-width: 0; min-height: 44px; font-size: 16px; }
   :is(.main-content,dialog) :is(input[type="checkbox"],input[type="radio"]) { width: 20px; height: 20px; }
-  .storage-warning .storage-warning-tip { position: fixed; inset: auto 12px calc(var(--mobile-nav-height) + 12px); width: auto; max-width: none; max-height: 45dvh; overflow-y: auto; transform: none; white-space: normal; z-index: 100; font-size: 14px; }
+  .storage-warning .storage-warning-tip { position: fixed; inset: auto 12px calc(var(--mobile-nav-height) + 12px); width: auto; max-width: none; max-height: calc(var(--wui-viewport-dynamic-height) * 0.45); overflow-y: auto; transform: none; white-space: normal; z-index: 100; font-size: 14px; }
 }

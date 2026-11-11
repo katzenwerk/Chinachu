@@ -51,7 +51,7 @@ html:has(.rules-page) { min-width: 0; }
 /* 番組表の右クリックに合わせたルール単位の操作メニュー。 */
 .rules-context-menu {
   position: fixed; z-index: 100020; display: grid; min-width: 210px;
-  max-height: calc(100vh - 16px); overflow: auto; padding: 6px;
+  max-height: calc(var(--wui-viewport-height) - 16px); overflow: auto; padding: 6px;
   border: 1px solid var(--border); border-radius: 9px;
   background: var(--panel); box-shadow: 0 14px 40px #0006;
 }
@@ -72,15 +72,15 @@ html:has(.rules-page) { min-width: 0; }
 .rules-error p { margin: 0 0 4px; }
 .rules-error small { display: block; margin-bottom: 12px; color: var(--muted); }
 
-.rules-action-dialog { width: min(620px,calc(100vw - 32px)); max-height: min(720px,calc(100vh - 32px)); padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+.rules-action-dialog { width: min(620px,calc(var(--wui-viewport-width) - 32px)); max-height: min(720px,calc(var(--wui-viewport-height) - 32px)); padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
 .rules-action-dialog::backdrop { background: rgba(7,14,10,.62); backdrop-filter: blur(2px); }
-.rules-action-dialog article { display: grid; grid-template-rows: auto minmax(0,1fr) auto; max-height: min(720px,calc(100vh - 32px)); }
+.rules-action-dialog article { display: grid; grid-template-rows: auto minmax(0,1fr) auto; max-height: min(720px,calc(var(--wui-viewport-height) - 32px)); }
 .rules-action-dialog header { padding: 16px 18px; border-bottom: 1px solid var(--border); }
 .rules-action-dialog h2,.rules-action-dialog p { margin: 0; }
 .rules-action-dialog h2 { font-size: 17px; }
 .rules-action-dialog-body { display: grid; align-content: start; gap: 12px; min-height: 0; padding: 18px; overflow: auto; }
 .rules-action-dialog footer { display: flex; justify-content: flex-end; gap: 9px; padding: 12px 18px; border-top: 1px solid var(--border); background: var(--panel-subtle); }
-.rules-delete-targets { max-height: min(360px,45vh); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.rules-delete-targets { max-height: min(360px,calc(var(--wui-viewport-height) * 0.45)); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
 .rules-delete-targets ul { display: grid; margin: 0; padding: 0; list-style: none; }
 .rules-delete-targets li { display: grid; gap: 3px; padding: 9px 11px; border-bottom: 1px solid var(--border); }
 .rules-delete-targets li:last-child { border-bottom: 0; }
@@ -94,9 +94,9 @@ html:has(.rules-page) { min-width: 0; }
 @keyframes rules-scheduler-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .rules-scheduler-dialog [data-confirm].is-running::before { animation: none; } }
 
-.rule-dialog { width: min(960px,calc(100vw - 40px)); max-height: calc(100vh - 40px); padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+.rule-dialog { width: min(960px,calc(var(--wui-viewport-width) - 40px)); max-height: calc(var(--wui-viewport-height) - 40px); padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
 .rule-dialog::backdrop { background: rgba(7,14,10,.62); backdrop-filter: blur(2px); }
-.rule-dialog article { display: grid; grid-template-rows: auto minmax(0,1fr); max-height: calc(100vh - 40px); }
+.rule-dialog article { display: grid; grid-template-rows: auto minmax(0,1fr); max-height: calc(var(--wui-viewport-height) - 40px); }
 .rule-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 18px; border-bottom: 1px solid var(--border); }
 .rule-dialog header h2 { margin: 0; font-size: 17px; font-weight: var(--font-heading-weight); }
 .rule-dialog-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
@@ -117,7 +117,7 @@ html:has(.rules-page) { min-width: 0; }
 .button.is-danger { border-color: var(--danger-border); color: var(--danger); }
 
 .rule-form { display: grid; gap: 14px; }
-.rule-editor-form { grid-template-rows: auto minmax(0,1fr) auto auto; height: min(760px,calc(100vh - 112px)); gap: 0; }
+.rule-editor-form { grid-template-rows: auto minmax(0,1fr) auto auto; height: min(760px,calc(var(--wui-viewport-height) - 112px)); gap: 0; }
 .rule-editor-tabs { display: flex; padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .rule-editor-tabs button { min-height: 44px; padding: 0 16px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
 .rule-editor-tabs button.is-active { border-bottom-color: var(--brand); color: var(--brand-strong); font-weight: var(--font-title-weight); }
@@ -192,9 +192,9 @@ html:has(.rules-page) { min-width: 0; }
 .rule-match-empty.is-error { color: var(--danger); }
 .rule-match-more { justify-self: center; margin: 12px; }
 
-.channel-selector-dialog { width: min(980px,calc(100vw - 40px)); max-height: calc(100vh - 40px); padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+.channel-selector-dialog { width: min(980px,calc(var(--wui-viewport-width) - 40px)); max-height: calc(var(--wui-viewport-height) - 40px); padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
 .channel-selector-dialog::backdrop { background: rgba(7,14,10,.68); backdrop-filter: blur(2px); }
-.channel-selector-dialog article { display: grid; grid-template-rows: auto auto auto minmax(0,1fr) auto; height: min(720px,calc(100vh - 40px)); }
+.channel-selector-dialog article { display: grid; grid-template-rows: auto auto auto minmax(0,1fr) auto; height: min(720px,calc(var(--wui-viewport-height) - 40px)); }
 .channel-selector-dialog header { display: flex; align-items: center; gap: 12px; padding: 15px 18px; border-bottom: 1px solid var(--border); }
 .channel-selector-dialog header h2 { margin: 0; font-size: 17px; }
 .channel-selector-dialog header .rule-dialog-close { margin-left: auto; }
@@ -241,8 +241,8 @@ html:has(.rules-page) { min-width: 0; }
   .rules-search { flex-basis: calc(100% - 128px); min-width: 150px; }
   .rules-status { flex-basis: 112px; width: 112px; }
   .rules-shown { flex: 1 1 100%; text-align: left; }
-  .rule-dialog,.channel-selector-dialog { width: calc(100vw - 16px); max-height: calc(100vh - 16px); }
-  .rule-dialog article,.channel-selector-dialog article { max-height: calc(100vh - 16px); }
+  .rule-dialog,.channel-selector-dialog { width: calc(var(--wui-viewport-width) - 16px); max-height: calc(var(--wui-viewport-height) - 16px); }
+  .rule-dialog article,.channel-selector-dialog article { max-height: calc(var(--wui-viewport-height) - 16px); }
   .rule-dialog header { gap: 8px; padding: 12px; }
   .rule-dialog header h2 { font-size: 14px; }
   .rule-enabled-label { display: none; }

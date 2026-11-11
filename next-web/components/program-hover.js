@@ -1,3 +1,4 @@
+import { viewportCssPixels } from '../services/ui-scale.js';
 import { createChannelLogo } from './channel-logo.js';
 import { programTitleParts } from '../services/timetable-model.js';
 
@@ -159,8 +160,8 @@ function showPreview(state) {
     window.innerWidth - state.x >= state.x ? right : left);
   const y = preferred?.[1] ?? (fitsY(below) ? below : fitsY(above) ? above :
     window.innerHeight - state.y >= state.y ? below : above);
-  preview.style.left = `${Math.max(margin, Math.min(x, window.innerWidth - bounds.width - margin))}px`;
-  preview.style.top = `${Math.max(margin, Math.min(y, window.innerHeight - bounds.height - margin))}px`;
+  preview.style.left = viewportCssPixels(Math.max(margin, Math.min(x, window.innerWidth - bounds.width - margin)));
+  preview.style.top = viewportCssPixels(Math.max(margin, Math.min(y, window.innerHeight - bounds.height - margin)));
   state.preview = preview;
   state.logo = logo;
   state.target.setAttribute('aria-describedby', preview.id);

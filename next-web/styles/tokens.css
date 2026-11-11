@@ -1,4 +1,9 @@
 :root {
+  /* Viewport bounds remain screen-sized when the root UI is zoomed. */
+  --wui-zoom: 1;
+  --wui-viewport-width: calc(100vw / var(--wui-zoom));
+  --wui-viewport-height: calc(100vh / var(--wui-zoom));
+  --wui-viewport-dynamic-height: calc(100dvh / var(--wui-zoom));
   color-scheme: light;
   --brand: #246b4c;
   --brand-strong: #1b583d;

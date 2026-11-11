@@ -1,4 +1,5 @@
 import { createAppShell } from './components/app-shell.js';
+import { initializeUiScale } from './services/ui-scale.js';
 import { installProgramDetailDialogLinks } from './components/program-detail-dialog.js';
 import { renderHomePage } from './pages/home-page.js';
 import { renderRecordingPage } from './pages/recording-page.js';
@@ -35,6 +36,7 @@ import { initializeAuthentication, logout } from './services/auth-client.js';
 import { refreshBroadcastClock, subscribeBroadcastClock } from './services/broadcast-clock-store.js';
 
 const appRoot = document.querySelector('#app');
+initializeUiScale();
 const authentication = await initializeAuthentication(appRoot);
 const shell = createAppShell(appRoot);
 shell.setAuthentication(authentication.enabled === true, logout);

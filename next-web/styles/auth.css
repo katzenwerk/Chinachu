@@ -1,4 +1,4 @@
-.auth-page { display: grid; min-height: 100dvh; padding: 24px; place-items: center; background: linear-gradient(145deg,var(--brand-soft),var(--panel-subtle)); }
+.auth-page { display: grid; min-height: var(--wui-viewport-dynamic-height); padding: 24px; place-items: center; background: linear-gradient(145deg,var(--brand-soft),var(--panel-subtle)); }
 .auth-panel { display: grid; gap: 14px; width: min(440px,100%); padding: 28px; }
 .auth-panel h1,.auth-panel p { margin: 0; }
 .auth-brand { color: var(--brand-strong); font-size: 24px; font-weight: var(--font-heading-weight); letter-spacing: -.03em; }

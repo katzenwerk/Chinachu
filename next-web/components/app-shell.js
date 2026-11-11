@@ -288,7 +288,6 @@ export function createAppShell(root) {
     mobileHeaderActions.replaceChildren();
     const pageSearch = headerActions.querySelector('input[type="search"]');
     const guideDate = headerActions.querySelector('.guide-date-controls input[type="date"]');
-    const isHomeSettings = headerActions.querySelector('.home-header-settings') !== null;
     if (pageSearch) {
       const searchButton = mobileActionButton('search', 'このページを検索');
       searchButton.setAttribute('aria-controls', 'header-page-actions');
@@ -320,7 +319,7 @@ export function createAppShell(root) {
       });
       mobileHeaderActions.append(dateButton);
     }
-    if (headerActions.children.length && !isHomeSettings) {
+    if (headerActions.children.length) {
       const optionsButton = mobileActionButton('options', 'ページの表示と操作');
       optionsButton.setAttribute('aria-controls', 'header-page-actions');
       optionsButton.setAttribute('aria-expanded', 'false');

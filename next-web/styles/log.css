@@ -2,7 +2,7 @@
   --log-color-normal: #b8ddc5;
   --log-color-warning: #edc675;
   --log-color-error: #f19a9f;
-  height: calc(100vh - var(--header-height) - var(--layout-page-top) - var(--layout-page-bottom));
+  height: calc(var(--wui-viewport-height) - var(--header-height) - var(--layout-page-top) - var(--layout-page-bottom));
   min-height: 0;
 }
 
@@ -123,7 +123,7 @@
 }
 
 .log-restart-dialog {
-  width: min(440px,calc(100vw - 32px));
+  width: min(440px,calc(var(--wui-viewport-width) - 32px));
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -234,6 +234,6 @@
 }
 
 @media (max-height: 620px) {
-  .log-page { height: auto; min-height: calc(100vh - var(--header-height) - var(--layout-page-top)); }
+  .log-page { height: auto; min-height: calc(var(--wui-viewport-height) - var(--header-height) - var(--layout-page-top)); }
   .log-console { flex: 0 0 280px; }
 }

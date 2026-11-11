@@ -1,3 +1,4 @@
+import { viewportCssPixels } from '../services/ui-scale.js';
 export function createSeriesContextMenu({ onAction }) {
   const menu = document.createElement('div');
   menu.className = 'recorded-context-menu';
@@ -42,8 +43,8 @@ export function createSeriesContextMenu({ onAction }) {
     hiddenButton.textContent = item?.hidden ? 'シリーズを再表示' : 'シリーズを非表示';
     menu.hidden = false;
     const rect = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
-    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    menu.style.left = viewportCssPixels(Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)));
+    menu.style.top = viewportCssPixels(Math.max(8, Math.min(y, window.innerHeight - rect.height - 8)));
     buttons.find(button => !button.disabled && !button.hidden)?.focus({ preventScroll: true });
   }
   menu.addEventListener('click', event => {

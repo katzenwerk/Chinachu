@@ -15,7 +15,7 @@
 .program-live-time-start, .program-live-time-end { flex: 0 0 auto; }
 .program-live-progress { flex: 1 1 auto; min-width: 48px; height: 2px; overflow: hidden; background: rgba(255,255,255,.28); pointer-events: none; }
 .program-live-progress-fill { display: block; width: 0; height: 100%; background: #e05252; transition: width .25s linear; }
-.program-live-stage { position: relative; display: flex; flex-direction: column; width: min(100%,calc((100dvh - 130px) * 16 / 9)); margin: 0 auto; background: #000; }
+.program-live-stage { position: relative; display: flex; flex-direction: column; width: min(100%,calc((var(--wui-viewport-dynamic-height) - 130px) * 16 / 9)); margin: 0 auto; background: #000; }
 .program-live-picture { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; }
 .program-live-picture video { display: block; width: 100%; height: 100%; object-fit: contain; }
 .program-live-picture > svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
@@ -31,7 +31,7 @@
 .recorded-playback-header { align-items: center; padding-bottom: 10px; }
 .recorded-playback-title { overflow: hidden; font-size: 15px; font-weight: 600; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .recorded-playback-status { min-height: 1.4em; color: rgba(255,255,255,.72); font-size: 12px; }
-.recorded-playback-frame { width: min(100%,calc((100dvh - 110px) * 16 / 9)); margin: 0 auto; background: #111; }
+.recorded-playback-frame { width: min(100%,calc((var(--wui-viewport-dynamic-height) - 110px) * 16 / 9)); margin: 0 auto; background: #111; }
 .program-ts-stage { width: 100%; background: #111; }
 .program-ts-picture { --program-ts-aspect: 1.77777778; position: relative; width: 100%; aspect-ratio: var(--program-ts-aspect); }
 .program-ts-picture:focus,.program-ts-picture:focus-visible,.program-ts-picture video:focus,.program-ts-picture video:focus-visible { outline: none; }
@@ -44,12 +44,12 @@
 .program-ts-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px; background: #222; color: #fff; font-size: 12px; }
 .program-ts-controls button { padding: 4px 8px; border: 1px solid #aaa; border-radius: 3px; background: #333; color: #fff; cursor: pointer; }
 .program-ts-stage:fullscreen,.program-ts-stage.program-ts-expanded { display: flex; width: 100%; height: 100%; flex-direction: column; justify-content: center; background: #000; }
-.program-ts-stage.program-ts-expanded { position: fixed; inset: 0; z-index: 100002; width: 100vw; height: 100vh; height: 100dvh; }
-.program-ts-stage:fullscreen .program-ts-picture,.program-ts-expanded .program-ts-picture { width: min(100%,calc((100dvh - 50px) * var(--program-ts-aspect))); align-self: center; flex-shrink: 0; }
+.program-ts-stage.program-ts-expanded { position: fixed; inset: 0; z-index: 100002; width: var(--wui-viewport-width); height: var(--wui-viewport-height); height: var(--wui-viewport-dynamic-height); }
+.program-ts-stage:fullscreen .program-ts-picture,.program-ts-expanded .program-ts-picture { width: min(100%,calc((var(--wui-viewport-dynamic-height) - 50px) * var(--program-ts-aspect))); align-self: center; flex-shrink: 0; }
 .program-ts-stage:fullscreen .program-ts-controls,.program-ts-expanded .program-ts-controls { flex-shrink: 0; padding-bottom: max(4px,env(safe-area-inset-bottom)); }
 .program-live-stage:fullscreen, .program-live-stage.program-live-expanded { justify-content: center; width: 100%; height: 100%; background: #000; }
-.program-live-stage.program-live-expanded { position: fixed; inset: 0; z-index: 100002; width: 100vw; height: 100vh; height: 100dvh; }
-.program-live-stage:fullscreen .program-live-picture, .program-live-expanded .program-live-picture { width: min(100%,calc((100dvh - 52px) * 16 / 9)); align-self: center; flex: 0 1 auto; }
+.program-live-stage.program-live-expanded { position: fixed; inset: 0; z-index: 100002; width: var(--wui-viewport-width); height: var(--wui-viewport-height); height: var(--wui-viewport-dynamic-height); }
+.program-live-stage:fullscreen .program-live-picture, .program-live-expanded .program-live-picture { width: min(100%,calc((var(--wui-viewport-dynamic-height) - 52px) * 16 / 9)); align-self: center; flex: 0 1 auto; }
 .program-live-stage:fullscreen .program-live-controls, .program-live-expanded .program-live-controls { flex: 0 0 auto; }
 
 @media (max-width:640px) {

@@ -1,3 +1,4 @@
+import { getUiZoom } from '../services/ui-scale.js';
 import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
 import { createChannelLogo } from '../components/channel-logo.js';
 import { createMonthCalendar } from '../components/month-calendar.js';
@@ -172,8 +173,8 @@ function enableMouseDragScroll(scroll) {
       scroll.setPointerCapture?.(pointerId);
     }
     event.preventDefault();
-    scroll.scrollLeft = originLeft - dx;
-    scroll.scrollTop = originTop - dy;
+    scroll.scrollLeft = originLeft - dx / getUiZoom();
+    scroll.scrollTop = originTop - dy / getUiZoom();
   };
   const click = event => {
     if (!suppressClick) return;
@@ -296,7 +297,7 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
     scroll.style.maxWidth = weeklyChannel ? `${AXIS_WIDTH + 8 * 190 + 2 + scrollbarWidth}px` : '';
     const main = container.closest('.main-content');
     const bottomPadding = main ? parseFloat(getComputedStyle(main).paddingBottom) || 0 : 12;
-    const availableHeight = Math.max(0, window.innerHeight - scroll.getBoundingClientRect().top - bottomPadding);
+    const availableHeight = Math.max(0, (window.innerHeight - scroll.getBoundingClientRect().top) / getUiZoom() - bottomPadding);
     scroll.style.height = `${availableHeight}px`;
     const range = gridRange();
     const hours = (range.end - range.start) / 3600000;

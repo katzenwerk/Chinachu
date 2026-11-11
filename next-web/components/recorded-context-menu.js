@@ -1,3 +1,4 @@
+import { viewportCssPixels } from '../services/ui-scale.js';
 import { isRecordedResultPlayable } from '../services/recorded-result-warnings.js';
 
 // 録画結果一覧専用。番組情報の取得や削除権限の判定は呼び出し元・詳細モーダルに委ねる。
@@ -66,16 +67,16 @@ export function createRecordedContextMenu({ onAction }) {
       y = trigger.bottom + gap;
       if (y + rect.height > window.innerHeight - margin) y = trigger.top - gap - rect.height;
     }
-    submenu.style.left = `${Math.max(margin, Math.min(x, window.innerWidth - rect.width - margin))}px`;
-    submenu.style.top = `${Math.max(margin, Math.min(y, window.innerHeight - rect.height - margin))}px`;
+    submenu.style.left = viewportCssPixels(Math.max(margin, Math.min(x, window.innerWidth - rect.width - margin)));
+    submenu.style.top = viewportCssPixels(Math.max(margin, Math.min(y, window.innerHeight - rect.height - margin)));
   }
 
   function position(x, y) {
     menu.style.left = '0px';
     menu.style.top = '0px';
     const rect = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
-    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    menu.style.left = viewportCssPixels(Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)));
+    menu.style.top = viewportCssPixels(Math.max(8, Math.min(y, window.innerHeight - rect.height - 8)));
     if (!submenu.hidden) positionSubmenu();
   }
 

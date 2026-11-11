@@ -15,7 +15,7 @@
 .home-header-settings > summary::-webkit-details-marker { display: none; }
 .home-header-settings > summary:hover { background: #fff; }
 .home-header-settings > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.home-header-settings-panel { position: absolute; top: calc(100% + 10px); right: 0; z-index: 70; display: grid; gap: 12px; width: min(330px,calc(100vw - 24px)); max-height: calc(100dvh - var(--header-height) - 24px); padding: 14px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); color: var(--text); }
+.home-header-settings-panel { position: absolute; top: calc(100% + 10px); right: 0; z-index: 70; display: grid; gap: 12px; width: min(330px,calc(var(--wui-viewport-width) - 24px)); max-height: calc(var(--wui-viewport-dynamic-height) - var(--header-height) - 24px); padding: 14px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); color: var(--text); }
 .home-header-settings-title { color: var(--muted); font-size: 12px; font-weight: var(--font-title-weight); }
 .home-layout-switch { display: inline-flex; justify-self: start; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-subtle); }
 .home-layout-switch button { min-width: 55px; height: 28px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }

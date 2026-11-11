@@ -1,3 +1,4 @@
+import { viewportCssPixels } from '../services/ui-scale.js';
 let activeResultTooltip = null;
 
 export function applyStorageWarning(element, notice) {
@@ -29,9 +30,9 @@ export function applyResultWarningTooltip(element, description) {
     activeResultTooltip = tip;
     const anchor = element.getBoundingClientRect(), panel = tip.getBoundingClientRect();
     const margin = 12, gap = 7;
-    tip.style.left = `${Math.max(margin, Math.min(anchor.right - panel.width, window.innerWidth - panel.width - margin))}px`;
+    tip.style.left = viewportCssPixels(Math.max(margin, Math.min(anchor.right - panel.width, window.innerWidth - panel.width - margin)));
     const above = anchor.top - panel.height - gap;
-    tip.style.top = `${Math.max(margin, Math.min(above >= margin ? above : anchor.bottom + gap, window.innerHeight - panel.height - margin))}px`;
+    tip.style.top = viewportCssPixels(Math.max(margin, Math.min(above >= margin ? above : anchor.bottom + gap, window.innerHeight - panel.height - margin)));
   };
   const close = () => {
     if (tip.matches(':popover-open')) tip.hidePopover();

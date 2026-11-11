@@ -111,9 +111,9 @@ textarea.settings-input { min-height: 86px; resize: vertical; font-family: ui-mo
 .settings-actions span { margin-right: auto; color: var(--muted); font-size: 11px; }
 .settings-actions .primary { border-color: var(--brand); background: var(--brand); color: #fff; }
 .settings-actions button:disabled { cursor: not-allowed; opacity: .5; }
-.settings-save-dialog { width: min(760px,calc(100vw - 32px)); max-height: 86vh; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+.settings-save-dialog { width: min(760px,calc(var(--wui-viewport-width) - 32px)); max-height: calc(var(--wui-viewport-height) * 0.86); padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
 .settings-save-dialog::backdrop { background: rgba(8,16,11,.6); }
-.settings-save-dialog form { display: grid; grid-template-rows: auto auto auto minmax(0,1fr) auto auto; max-height: 86vh; }
+.settings-save-dialog form { display: grid; grid-template-rows: auto auto auto minmax(0,1fr) auto auto; max-height: calc(var(--wui-viewport-height) * 0.86); }
 .settings-config-dialog form { grid-template-rows: auto auto minmax(0,1fr) auto auto; }
 .settings-config-dialog .settings-change-list { min-height: 0; }
 .settings-config-dialog .settings-access-warning,.settings-config-dialog .settings-danger-note { margin: 10px; }
@@ -158,7 +158,7 @@ textarea.settings-input { min-height: 86px; resize: vertical; font-family: ui-mo
 .settings-totp-steps h3 span { display: inline-grid; width: 25px; height: 25px; place-items: center; border-radius: 50%; background: var(--brand); color: #fff; font-size: 12px; }
 .settings-totp-steps p { margin: 5px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .settings-totp-qr { display: grid; width: fit-content; margin: 14px auto 9px; padding: 12px; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fff; }
-.settings-totp-qr canvas { display: block; width: min(240px,calc(100vw - 92px)); height: auto; }
+.settings-totp-qr canvas { display: block; width: min(240px,calc(var(--wui-viewport-width) - 92px)); height: auto; }
 .settings-totp-account { text-align: center; }
 .settings-totp-steps details { margin-top: 12px; }
 .settings-totp-steps summary { cursor: pointer; color: var(--brand-strong); font-size: 12px; }
