@@ -12,7 +12,7 @@ var it = test.it;
 var chinachu = require("chinachu-common");
 
 describe("formatRecordedName", function() {
-	it("preserves episode padding in recording names and subdirectories", function() {
+	it("preserves episode padding and explicit filename character compatibility", function() {
 		var baseProgram = {
 			start: 0,
 			channel: {}
@@ -37,6 +37,37 @@ describe("formatRecordedName", function() {
 				path.join("series", entry.expected, "program.m2ts")
 			);
 		});
+
+		// Preserve every original mapping, including replacements that differ from NFKC.
+		var originalMarks = "🈀🈁🈂🈐🈑🈒🈓🈔🈕🈖🈗🈘🈙🈚🈛🈜🈝🈞🈟🈠🈡🈢🈣🈤🈥🈦🈧🈨🈩🈪🈫🈬🈭🈮🈯🈰🈱🈲🈳🈴🈵🈶🈷🈸🈹🈺🈻🉐🉑㊙㊗";
+		var originalLabels = "ほか ココ サ 手 字 双 デ 二 多 解 天 交 映 無 料 前 後 再 新 初 終 生 販 声 吹 演 投 捕 一 三 遊 左 中 右 指 走 打 禁 空 合 満 有 月 申 割 営 配 得 可 秘 祝".split(" ");
+		assert.strictEqual(chinachu.replaceEnclosingCharacters(originalMarks), originalLabels.map(function(label) { return "[" + label + "]"; }).join(""));
+		var broadcastMarks = "🅊🅌🄿🅆🅋🅂🅍🄱🄽🅎🆛🆜🆝🆞🆟🆠🆡🆢🆣🆤🆥🆦🆧🆨🆩🆪🆫🆬⚿";
+		var broadcastLabels = "HV SD P W MV S SS B N PPV 3D 2ndScr 2K 4K 8K 5.1 7.1 22.2 60P 120P d HC HDR Hi-Res Lossless SHV UHD VOD 鍵".split(" ");
+		assert.strictEqual(chinachu.replaceEnclosingCharacters(broadcastMarks), broadcastLabels.map(function(label) { return "[" + label + "]"; }).join(""));
+		assert.strictEqual(chinachu.replaceEnclosingCharacters("①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"),
+			"[1][2][3][4][5][6][7][8][9][10][11][12][13][14][15][16][17][18][19][20]");
+		assert.strictEqual(chinachu.replaceEnclosingCharacters("㈱㈲㈹㈳㈶㈽㈾㈿"), "[株][有][代][社][財][企][資][協]");
+		var program = { start: 0, channel: {}, title: "ＡＢＣ ｶﾞ ㍑ Ⅳ 🆞⚿①㈱", fullTitle: "🈑🆧", subTitle: "㈶⑳" };
+		var before = JSON.stringify(program);
+		assert.strictEqual(chinachu.formatRecordedName(program, "<title>.m2ts"), program.title + ".m2ts");
+		assert.strictEqual(chinachu.formatRecordedName(program, "<title>.m2ts", { replaceEnclosingCharacters: false }), program.title + ".m2ts");
+		assert.strictEqual(chinachu.formatRecordedName(program, "<title>.m2ts", { replaceEnclosingCharacters: true }), "ＡＢＣ ｶﾞ ㍑ Ⅳ [4K][鍵][1][株].m2ts");
+		assert.strictEqual(chinachu.formatRecordedName(program, "<fulltitle>/<subtitle>.m2ts", { replaceEnclosingCharacters: true }), path.join("[字][HDR]", "[財][20].m2ts"));
+		assert.strictEqual(chinachu.formatRecordedName(program, "<title>.m2ts", {
+			needToReplaceEnclosingCharacters: true, enclosingCharacterMap: { "🆞": "4K", "⚿": "", "①": "(1)", "🈑": "字幕" }
+		}), "ＡＢＣ ｶﾞ ㍑ Ⅳ 4K(1)[株].m2ts");
+		assert.strictEqual(chinachu.replaceEnclosingCharacters("🈑①🈑①", { "🈑": "字幕", "①": "(1)" }), "字幕(1)字幕(1)");
+		assert.strictEqual(JSON.stringify(program), before);
+		var expanded = "[2ndScr]".repeat(80);
+		var limited = chinachu.formatRecordedName({ start: 0, channel: {}, title: "🆜".repeat(80) }, "<title>.m2ts", { replaceEnclosingCharacters: true });
+		assert.strictEqual(limited, expanded.slice(0, 255 - Buffer.byteLength(".m2ts")) + ".m2ts");
+		assert.strictEqual(Buffer.byteLength(limited), 255);
+		// Literal aliases share a basename; an ID in the existing format keeps them distinct.
+		assert.strictEqual(chinachu.formatRecordedName(program, "<title>.m2ts", { replaceEnclosingCharacters: true }),
+			chinachu.formatRecordedName({ ...program, title: "ＡＢＣ ｶﾞ ㍑ Ⅳ [4K][鍵][1][株]" }, "<title>.m2ts", { replaceEnclosingCharacters: true }));
+		assert.notStrictEqual(chinachu.formatRecordedName({ ...program, id: "one" }, "<id>_<title>.m2ts", { replaceEnclosingCharacters: true }),
+			chinachu.formatRecordedName({ ...program, id: "two" }, "<id>_<title>.m2ts", { replaceEnclosingCharacters: true }));
 	});
 });
 
