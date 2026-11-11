@@ -3,8 +3,10 @@ import { createMonthCalendar } from '../components/month-calendar.js';
 import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
 import { channelLogoUrl } from '../services/recording-model.js';
 import { reservationTags } from '../services/reservation-model.js';
+import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { programDetailUrl } from '../services/program-detail-client.js';
-import { subscribeReservationNotifications } from '../services/realtime-client.js';
+import { operatorRecordingInfo } from '../services/recorded-result-warnings.js';
+import { subscribeRecordedNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
 import { createGuideProgramMenu } from './guide-page.js';
 import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor-dialog.js';
 import { ruleAction } from '../services/program-detail-model.js';
@@ -145,32 +147,66 @@ function capacityIssue(programs, tuners) {
   };
 }
 
+function placeTimelineEntry(group, entry) {
+  let track = group.tracks.find(items => !items.length || items[items.length - 1].period.end <= entry.period.start);
+  if (!track) { track = []; group.tracks.push(track); }
+  track.push(entry);
+}
+
 function timelineTracks(entries) {
   const channels = new Map();
   for (const entry of entries) {
     const key = channelKey(entry.program);
     if (!channels.has(key)) channels.set(key, { label: channelOf(entry.program), tracks: [] });
     const channel = channels.get(key);
-    let track = channel.tracks.find(items => items[items.length - 1].period.end <= entry.period.start);
-    if (!track) {
-      track = [];
-      channel.tracks.push(track);
-    }
-    track.push(entry);
+    placeTimelineEntry(channel, entry);
   }
   return [...channels.values()];
 }
 
+function historyTracks(programs, tuners, range) {
+  const identifiedTuners = (tuners || []).filter(tuner => tuner.name || Number.isInteger(tuner.index) && tuner.index >= 0);
+  const unidentifiedList = tuners === null || identifiedTuners.length !== tuners.length;
+  const rows = identifiedTuners.map((tuner, index) => ({ key: `registered:${index}`, label: tuner.name || `チューナー番号 ${tuner.index ?? '未取得'}`,
+    tuner, tracks: [[]] }));
+  const historical = new Map();
+  const unknown = { key: 'unknown', label: '割当不明', tracks: [[]] };
+  let unavailable = 0;
+  const entries = programs.flatMap(program => {
+    const info = operatorRecordingInfo(program);
+    if (info.start === null || info.end === null || info.end <= info.start) { unavailable++; return []; }
+    return info.start < range.end && info.end > range.start
+      ? [{ program, info, period: { start: info.start, end: info.end } }] : [];
+  }).sort((a, b) => a.period.start - b.period.start || a.period.end - b.period.end);
+  for (const entry of entries) {
+    const { tunerName: name, tunerIndex: index } = entry.info;
+    const matches = rows.filter(row => (index === null || row.tuner.index === index) &&
+      (name === null || row.tuner.name === name));
+    let row;
+    if (name === null && index === null || matches.length > 1) row = unknown;
+    else if (matches.length === 1) row = matches[0];
+    else {
+      const key = JSON.stringify([name, index]);
+      if (!historical.has(key)) historical.set(key, { key: `past:${key}`, label: `${entry.info.tunerLabel}（${unidentifiedList ? '一覧照合不可' : '現在の一覧外'}）`, tracks: [] });
+      row = historical.get(key);
+    }
+    placeTimelineEntry(row, entry);
+  }
+  return { rows: [...rows, ...historical.values(), ...(unknown.tracks[0].length ? [unknown] : [])], unavailable, unidentifiedList };
+}
+
 function createTimeline(programs, target, targetPeriod, offsetHours, onShift, onContextMenu, general = null, tuners = null) {
+  const actual = general?.history === true;
   const range = general === null ? timelineRange(targetPeriod, offsetHours) : {
     start: general.start,
     end: general.start + TIMELINE_DURATION_MS,
     step: TIMELINE_STEP_MS
   };
   const duration = range.end - range.start;
-  const entries = timelineEntries(programs, range);
-  const tracks = timelineTracks(entries);
-  const segments = bookingLoadSegments(entries, range);
+  const history = actual ? historyTracks(programs, tuners, range) : null;
+  const entries = actual ? [] : timelineEntries(programs, range);
+  const tracks = actual ? history.rows : timelineTracks(entries);
+  const segments = actual ? [] : bookingLoadSegments(entries, range);
   segments.forEach(segment => { segment.capacity = capacityIssue(segment.programs, tuners); });
   const overCapacitySegments = segments.filter(segment => segment.capacity?.overCapacity === true);
   const ticks = [];
@@ -180,10 +216,10 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
   const wrapper = document.createElement('section');
   wrapper.className = 'conflicts-timeline-section';
   const title = document.createElement('h4');
-  title.textContent = general === null ? '競合周辺の予約タイムライン（3時間表示）' : '通常の予約タイムライン（3時間表示）';
+  title.textContent = actual ? 'チューナー別録画実績（3時間表示）' : general === null ? '競合周辺の予約タイムライン（3時間表示）' : '通常の予約タイムライン（3時間表示）';
   const legend = document.createElement('p');
   legend.className = 'conflicts-timeline-note';
-  legend.textContent = tuners !== null
+  legend.textContent = actual ? 'Operatorの録画開始・終了処理時刻です。TSパケットの先頭・末尾時刻や、チューナーの確保・解放・切替時刻ではありません。' : tuners !== null
     ? '赤い予約バー：Schedulerの競合判定。薄赤の背景・赤い本数帯：GR・BS・CSなどの対応放送波と共用関係を考慮した収容超過の推定区間。録画不能の確定ではありません。'
     : '赤い予約バー：Schedulerの競合判定。チューナー情報を取得できないため、時間帯別の収容超過は判定できません。';
   const controls = document.createElement('div');
@@ -207,7 +243,7 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
   next.className = 'button conflicts-timeline-nav';
   next.textContent = '1時間後へ ▶';
   next.addEventListener('click', () => onShift(1));
-  if (general !== null) {
+  if (general !== null && !general.omitCalendar) {
     const startLabel = document.createElement('div');
     startLabel.className = 'conflicts-timeline-date-label';
     startLabel.textContent = '表示開始';
@@ -233,7 +269,7 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
   header.className = 'conflicts-timeline-row is-header';
   const leftHead = document.createElement('div');
   leftHead.className = 'conflicts-timeline-label';
-  leftHead.textContent = '放送局';
+  leftHead.textContent = actual ? '物理チューナー' : '放送局';
   const axis = document.createElement('div');
   axis.className = 'conflicts-timeline-axis';
   ticks.forEach((at, index) => {
@@ -253,13 +289,16 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
 
   const focusedId = String(target?.id || '');
   tracks.forEach(channel => channel.tracks.forEach((track, trackIndex) => {
+    if (actual && trackIndex > 0) return;
     const row = document.createElement('div');
     row.className = 'conflicts-timeline-row';
+    if (actual) row.dataset.historyRow = channel.key;
     const label = document.createElement('div');
     label.className = 'conflicts-timeline-label';
     label.textContent = channel.label + (trackIndex > 0 ? `（${trackIndex + 1}段目）` : '');
     const plot = document.createElement('div');
     plot.className = 'conflicts-timeline-plot';
+    if (actual) plot.style.height = `${channel.tracks.length * 37}px`;
     ticks.forEach(at => {
       const line = document.createElement('span');
       line.className = 'conflicts-timeline-gridline';
@@ -274,16 +313,17 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
       plot.append(background);
     });
 
-    track.forEach((entry, index) => {
+    (actual ? channel.tracks : [track]).forEach((lane, laneIndex) => lane.forEach((entry, index) => {
       const id = String(entry.program?.id || '');
       const link = id ? document.createElement('a') : document.createElement('span');
       link.className = 'conflicts-timeline-bar';
-      if (entry.program.isConflict === true) link.classList.add('is-conflict');
+      if (actual) link.style.top = `${7 + laneIndex * 37}px`;
+      if (!actual && entry.program.isConflict === true) link.classList.add('is-conflict');
       if (focusedId && id === focusedId) link.classList.add('is-focused');
-      const previous = track[index - 1];
-      const next = track[index + 1];
-      if (previous && Math.abs(previous.period.end - entry.period.start) <= 1000) link.classList.add('is-joined-left');
-      if (next && Math.abs(entry.period.end - next.period.start) <= 1000) link.classList.add('is-joined-right');
+      const previous = lane[index - 1];
+      const next = lane[index + 1];
+      if (previous && (actual ? previous.period.end === entry.period.start : Math.abs(previous.period.end - entry.period.start) <= 1000)) link.classList.add('is-joined-left');
+      if (next && (actual ? entry.period.end === next.period.start : Math.abs(entry.period.end - next.period.start) <= 1000)) link.classList.add('is-joined-right');
       if (entry.period.start < range.start) link.classList.add('is-clipped-left');
       if (entry.period.end > range.end) link.classList.add('is-clipped-right');
       const visibleStart = Math.max(entry.period.start, range.start);
@@ -292,34 +332,48 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
       link.style.width = `${(visibleEnd - visibleStart) / duration * 100}%`;
       const name = titleOf(entry.program);
       link.textContent = name;
-      setProgramHover(link, programHoverInfo(entry.program, { channelLogoUrl: channelLogoUrl(entry.program.channel), statuses: reservationTags(entry.program) }));
+      const hover = programHoverInfo(entry.program, { channelLogoUrl: channelLogoUrl(entry.program.channel), statuses: actual ? [] : reservationTags(entry.program) });
+      if (actual) {
+        link.classList.add('is-actual');
+        link.dataset.historySignature = JSON.stringify([name, entry.program.channel, entry.info, entry.program.category]);
+        hover.description = `放送局・チャンネル：${channelOf(entry.program)}${entry.program.channel?.channel ? ` / ${entry.program.channel.channel}` : ''}\n使用チューナー：${entry.info.tunerLabel}\n録画開始（Operator）：${entry.info.startLabel}\n録画終了（Operator）：${entry.info.endLabel}`;
+        // Do not present the programme's scheduled interval as an actual interval.
+        hover.start = null; hover.end = null;
+      }
+      setProgramHover(link, hover);
       if (id) link.href = programDetailUrl({ id });
       link.setAttribute('aria-label', `${name}、${timeRange(entry.period)}、${channelOf(entry.program)}${entry.program.isConflict ? '、競合判定' : ''}`);
-      if (id) link.addEventListener('contextmenu', event => {
+      if (actual) link.setAttribute('aria-label', `${name}、${hover.description.replaceAll('\n', '、')}`);
+      if (id && actual) link.addEventListener('click', event => {
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        openProgramDetailDialog({ id });
+      });
+      if (id && !actual) link.addEventListener('contextmenu', event => {
         event.preventDefault();
         event.stopPropagation();
         onContextMenu(entry.program, event);
       });
       plot.append(link);
-    });
+    }));
     row.append(label, plot);
     chart.append(row);
   }));
 
-  if (tracks.length === 0) {
+  if (actual ? tracks.every(row => row.tracks.every(track => track.length === 0)) : tracks.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'conflicts-timeline-empty';
-    empty.textContent = 'この時間帯に予約はありません。';
+    empty.textContent = actual ? 'この時間帯に表示できる録画実績はありません。' : 'この時間帯に予約はありません。';
     chart.append(empty);
   }
   // Show the booking-count rows in the same chart and scroll area as the
   // reservations. Each column now uses exactly the same time scale.
-  appendBookingLoadRows(chart, entries, segments, range, ticks, position);
+  if (!actual) appendBookingLoadRows(chart, entries, segments, range, ticks, position);
   scroller.append(chart);
   wrapper.append(scroller);
   const footer = document.createElement('p');
   footer.className = 'conflicts-timeline-note';
-  footer.textContent = general === null
+  footer.textContent = actual ? `左クリック：番組詳細${history.unavailable ? `。実績時刻が不足または不正な録画 ${history.unavailable}件は非表示です。` : ''}${history.unidentifiedList ? ' チューナー一覧の識別情報が未取得のため、記録された識別情報を表示しています。' : ''}` : general === null
     ? '左クリック：番組詳細　右クリック：番組表と同じ操作メニュー。薄赤の背景は、対応放送波と共用を考慮した収容超過の推定区間です。'
     : '左クリック：番組詳細　右クリック：番組表と同じ操作メニュー。予約本数は使用台数や録画実績とは異なります。';
   wrapper.append(footer);
@@ -403,7 +457,7 @@ function createConflictCard(program, period, programs, offsetHours, onShift, onC
   return card;
 }
 
-export function renderConflictsPage(container) {
+export function renderConflictsPage(container, { setHeaderActions = () => {} } = {}) {
   let active = true;
   let generation = 0;
   let expiryTimer = null;
@@ -415,6 +469,37 @@ export function renderConflictsPage(container) {
   const timelineOffsets = new Map();
   let overviewStart = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
   let overviewCalendar = null;
+  let mode = 'reservation';
+  let historyPrograms = null;
+  let historyRequest = null;
+  let historyGeneration = 0;
+  let historyDirty = true;
+  let historySignature = null;
+  let historyCalendar = null;
+
+  const tabs = document.createElement('div');
+  tabs.className = 'conflicts-mode-tabs';
+  tabs.setAttribute('role', 'tablist');
+  tabs.setAttribute('aria-label', 'タイムライン表示');
+  for (const [value, label] of [['reservation', '予約'], ['history', '実績']]) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'button';
+    button.setAttribute('role', 'tab'); button.dataset.mode = value;
+    button.setAttribute('aria-selected', String(value === mode));
+    button.textContent = label;
+    button.addEventListener('click', () => {
+      if (mode === value) return;
+      programHover.close(); activeMenu?.remove(); activeMenu = null;
+      mode = value;
+      tabs.querySelectorAll('button').forEach(tab => tab.setAttribute('aria-selected', String(tab.dataset.mode === mode)));
+      intro.hidden = content.hidden = overview.hidden = mode === 'history';
+      historyHost.hidden = mode !== 'history';
+      if (mode === 'history') { renderHistory(); void refreshHistory(); }
+      else render();
+    });
+    tabs.append(button);
+  }
+  setHeaderActions(tabs);
 
   const page = document.createElement('div');
   page.className = 'conflicts-page';
@@ -437,8 +522,91 @@ export function renderConflictsPage(container) {
   content.append(status);
   const overview = document.createElement('section');
   overview.className = 'panel conflicts-overview';
-  page.append(intro, content, overview);
+  const historyHost = document.createElement('section');
+  historyHost.className = 'panel conflicts-history';
+  historyHost.hidden = true;
+  page.append(intro, content, overview, historyHost);
   container.replaceChildren(page);
+
+  function changeOverviewStart(timestamp) {
+    overviewStart = timestamp;
+    if (mode === 'history') renderHistory(); else render();
+  }
+
+  function renderHistory() {
+    if (!active || mode !== 'history') return;
+    if (historyPrograms === null) {
+      if (!historyHost.firstChild) historyHost.textContent = '録画実績を取得しています…';
+      return;
+    }
+    const range = { start: overviewStart, end: overviewStart + TIMELINE_DURATION_MS };
+    const history = historyTracks(historyPrograms, tuners, range);
+    const signature = JSON.stringify([overviewStart, Math.floor(Date.now() / HOUR_MS), history, tuners]);
+    if (signature === historySignature) return;
+    const current = historyHost.querySelector('.conflicts-timeline-section');
+    const incoming = createTimeline(historyPrograms, null, null, 0,
+      delta => changeOverviewStart(overviewStart + delta * HOUR_MS), null, {
+        history: true, start: overviewStart, omitCalendar: Boolean(current),
+        isCurrent: overviewStart === Math.floor(Date.now() / HOUR_MS) * HOUR_MS,
+        onStartChange: changeOverviewStart,
+        onReset: () => changeOverviewStart(Math.floor(Date.now() / HOUR_MS) * HOUR_MS),
+        onCalendarCreated: calendar => { historyCalendar = calendar; }
+      }, tuners);
+    if (!current) historyHost.replaceChildren(incoming);
+    else {
+      const chart = current.querySelector('.conflicts-timeline-chart');
+      const key = row => row.dataset.historyRow || row.className;
+      const rows = new Map(Array.from(chart.children).map(row => [key(row), row]));
+      const desired = Array.from(incoming.querySelector('.conflicts-timeline-chart').children).map(row => {
+        const retained = rows.get(key(row));
+        if (!retained) return row;
+        const comparison = retained.cloneNode(true);
+        comparison.querySelectorAll('[aria-describedby="program-hover"]').forEach(target => target.removeAttribute('aria-describedby'));
+        if (comparison.outerHTML === row.outerHTML) return retained;
+        closeRemovedHover(retained);
+        return row;
+      });
+      const wanted = new Set(desired);
+      for (const row of Array.from(chart.children)) if (!wanted.has(row)) { closeRemovedHover(row); row.remove(); }
+      let cursor = chart.firstChild;
+      for (const row of desired) {
+        if (row === cursor) cursor = cursor.nextSibling;
+        else chart.insertBefore(row, cursor);
+      }
+      current.querySelector('.conflicts-timeline-range-label').textContent = incoming.querySelector('.conflicts-timeline-range-label').textContent;
+      current.querySelectorAll('.conflicts-timeline-nav')[1].disabled = incoming.querySelectorAll('.conflicts-timeline-nav')[1].disabled;
+      current.querySelector('.conflicts-timeline-note').textContent = incoming.querySelector('.conflicts-timeline-note').textContent;
+      current.lastElementChild.textContent = incoming.lastElementChild.textContent;
+      if (historyHost.dataset.start !== String(overviewStart)) historyCalendar.setValue(new Date(overviewStart));
+    }
+    historyHost.dataset.start = String(overviewStart);
+    historySignature = signature;
+  }
+
+  function refreshHistory() {
+    if (!active || mode !== 'history' || historyRequest || !historyDirty) return historyRequest;
+    historyDirty = false;
+    const current = historyGeneration;
+    historyRequest = loadResource('recorded', { force: true }).then(result => {
+      if (!active || current !== historyGeneration) return;
+      if (!Array.isArray(result)) throw new Error('録画実績データの形式が正しくありません');
+      historyPrograms = result;
+      historyHost.querySelector('[data-history-error]')?.remove();
+      renderHistory();
+    }).catch(error => {
+      if (!active) return;
+      historyDirty = true;
+      const notice = historyHost.querySelector('[data-history-error]') || document.createElement('p');
+      notice.dataset.historyError = ''; notice.className = 'conflicts-message';
+      notice.textContent = `録画実績を取得できませんでした: ${error.message}`;
+      if (historyPrograms === null) historyHost.replaceChildren(notice);
+      else if (!notice.isConnected) historyHost.append(notice);
+    }).finally(() => {
+      historyRequest = null;
+      if (active && current !== historyGeneration) void refreshHistory();
+    });
+    return historyRequest;
+  }
 
   function clearExpiryTimer() {
     if (expiryTimer !== null) window.clearTimeout(expiryTimer);
@@ -504,7 +672,7 @@ export function renderConflictsPage(container) {
     if (element.querySelector('[aria-describedby="program-hover"]')) programHover.close();
   }
   function render() {
-    if (!active || programs === null) return;
+    if (!active || programs === null || mode !== 'reservation') return;
     const now = Date.now();
     const conflicts = programs.filter(program => program?.isConflict === true && program.isSkip !== true &&
       interval(program)?.end > now).sort((a, b) => interval(a).start - interval(b).start);
@@ -562,13 +730,12 @@ export function renderConflictsPage(container) {
       overviewCalendar?.destroy();
       overviewCalendar = null;
       overview.replaceChildren(createTimeline(programs, null, null, 0, delta => {
-        overviewStart += delta * HOUR_MS;
-        render();
+        changeOverviewStart(overviewStart + delta * HOUR_MS);
       }, openProgramMenu, {
         start: overviewStart,
         isCurrent: overviewStart === currentHour,
-        onStartChange: timestamp => { overviewStart = timestamp; render(); },
-        onReset: () => { overviewStart = Math.floor(Date.now() / HOUR_MS) * HOUR_MS; render(); },
+        onStartChange: changeOverviewStart,
+        onReset: () => changeOverviewStart(Math.floor(Date.now() / HOUR_MS) * HOUR_MS),
         onCalendarCreated: calendar => { overviewCalendar = calendar; }
       }, tuners));
       overviewSignature = nextOverviewSignature;
@@ -589,6 +756,7 @@ export function renderConflictsPage(container) {
       programs = result;
       tuners = availableTuners;
       render();
+      renderHistory();
     }).catch(() => {
       if (!active || current !== generation) return;
       if (programs !== null) {
@@ -608,6 +776,12 @@ export function renderConflictsPage(container) {
   }
 
   const unsubscribe = subscribeReservationNotifications(() => refresh(true));
+  const unsubscribeRecorded = subscribeRecordedNotifications(() => {
+    invalidateResources(['recorded']);
+    historyGeneration++;
+    historyDirty = true;
+    void refreshHistory();
+  });
   refresh();
   return () => {
     active = false;
@@ -616,7 +790,10 @@ export function renderConflictsPage(container) {
     clearExpiryTimer();
     activeMenu?.remove();
     overviewCalendar?.destroy();
+    historyCalendar?.destroy();
     ruleDialog?.close();
     unsubscribe();
+    unsubscribeRecorded();
+    setHeaderActions();
   };
 }

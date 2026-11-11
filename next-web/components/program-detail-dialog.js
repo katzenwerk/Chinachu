@@ -189,6 +189,11 @@ function createManagement(model, seriesContext, seriesError) {
     addFact(facts, model.deletion.kind === 'unknown' ? '台帳情報' : '削除理由', model.deletion.reason);
     if (model.deletion.kind !== 'unknown') addFact(facts, '削除日時', model.deletion.deletedAt || '日時情報なし');
   }
+  if (model.operatorRecording) {
+    addFact(facts, '使用チューナー', model.operatorRecording.tunerLabel);
+    addFact(facts, '録画開始（Operator）', model.operatorRecording.startLabel);
+    addFact(facts, '録画終了（Operator）', model.operatorRecording.endLabel);
+  }
   addFact(facts, '所属作品', seriesContext?.seriesTitle || '未確定');
   addFact(facts, 'TID', seriesContext?.tidConfirmed ? String(seriesContext.tid) : '未確定');
   addFact(facts, '話数', seriesContext?.episodeConfirmed ? seriesContext.episodeLabel :

@@ -4,7 +4,8 @@ import {
   recordedResultWarnings,
   recordedFileState,
   recordingDurationInfo,
-  tsDropPidSummary
+  tsDropPidSummary,
+  operatorRecordingInfo
 } from './recorded-result-warnings.js';
 
 export const CONFLICT_DESCRIPTION = 'チューナー不足が予測されています。録画を試みますが、録画できない可能性があります。';
@@ -333,6 +334,7 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
     reservation: reservationInfo(reservationProgram, state, detail.rules),
     relatedRule,
     recordingInfo,
+    operatorRecording: recordedState || state.key === 'recording' ? operatorRecordingInfo(program) : null,
     savedTsAnalysis: program.savedTsAnalysis || null,
     mirakurunDrop: program.mirakurunDrop || null,
     recordingWarnings,

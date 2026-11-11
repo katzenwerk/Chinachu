@@ -16,6 +16,26 @@ function recordedStatus(item) {
   return item?.status === 'RECORDED' || item?.status === 'RECORDED_UNTRACKED';
 }
 
+// Operator process timestamps, not TS packet or tuner acquisition/release times.
+export function operatorRecordingInfo(program) {
+  const drop = program?.mirakurunDrop;
+  const tunerName = text(drop?.tunerName);
+  const tunerIndex = Number.isInteger(drop?.tunerIndex) && drop.tunerIndex >= 0 ? drop.tunerIndex : null;
+  const start = finitePositive(program?.operatorRecordingStart);
+  const end = finitePositive(program?.operatorRecordingEnd);
+  const format = timestamp => {
+    if (timestamp === null) return '未取得';
+    const date = new Date(timestamp);
+    if (!Number.isFinite(date.getTime())) return '未取得';
+    const label = new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(date);
+    return timestamp % 1000 ? `${label}.${String(date.getMilliseconds()).padStart(3, '0')}` : label;
+  };
+  return { tunerName, tunerIndex, start, end,
+    tunerLabel: `${tunerName || '未取得'}${tunerIndex === null ? '' : `（番号 ${tunerIndex}）`}`,
+    startLabel: format(start), endLabel: format(end) };
+}
+
 export function recordedFileState(item) {
   if (item?.deletionKind === 'explicit' || item?.deletion && item.deletion.reason !== 'recorded-missing') return 'deleted';
   if (item?.fileMissing || item?.deletionKind === 'file-missing') return 'missing';

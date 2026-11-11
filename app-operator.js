@@ -1119,9 +1119,11 @@ function startDurationProbe(job) {
 
 // Serialize short recorded transactions, not recording streams. Other writers use
 // the same existing recorded lock; no stale in-memory array is written back.
-function queueRecordedLedgerUpdate(reason, update, afterSave, retryLock) {
+function queueRecordedLedgerUpdate(reason, update, afterSave, retryLock, ready) {
 	pendingRecordedLedgerWrites++;
 	const transaction = recordedLedgerWrites.then(async () => {
+		// Resolve start-time tuner metadata before taking the ledger lock.
+		if (ready) await ready;
 		// Three bounded attempts span the existing 30s incomplete-lock grace
 		// period. Only contention is retried; parse/write/I/O failures are not.
 		const retryDelays = retryLock ? [1000, 5000] : [];
@@ -1195,6 +1197,7 @@ function saveCompletedRecording(program, recovering, originalRecordedPath = prog
 	if (completedProgram.operatorResumePending !== true) delete completedProgram._operatorFilenamePrefixApplied;
 	operatorLog('FIN SAVE PENDING: ' + printProgram(program));
 	return queueRecordedLedgerUpdate('recorded finalize', current => {
+		if (program.mirakurunDrop) completedProgram.mirakurunDrop = JSON.parse(JSON.stringify(program.mirakurunDrop));
 		// A crash can occur after recorded was saved but before recording was
 		// cleared. Keep later duration/metadata updates when replaying that row.
 		const saved = current.find(entry => entry.id === completedProgram.id &&
@@ -1244,7 +1247,7 @@ function saveCompletedRecording(program, recovering, originalRecordedPath = prog
 		else if (program._operatorEndLack) operatorLog('FIN END LACK: ' + printProgram(program));
 		else if (program._operatorAbort) operatorLog('FIN ABORT SHORT: ' + printProgram(program));
 		else operatorLog('FIN: ' + printProgram(program));
-	}, true).catch(error => {
+	}, true, program._operatorTunerInfoPromise).catch(error => {
 		reportRecordingSaveFailure(program, error);
 		return false;
 	});
@@ -2830,7 +2833,7 @@ function summarizeMirakurunStreamInfo(streamInfo) {
 	return summary;
 }
 
-function buildMirakurunUserMap(tuners) {
+function buildMirakurunUserMap(tuners, userId = null, unique = false) {
 	const map = {};
 
 	(tuners || []).forEach(tuner => {
@@ -2842,6 +2845,11 @@ function buildMirakurunUserMap(tuners) {
 			if (!user || !user.url) {
 				return;
 			}
+			if (userId !== null && user.id !== userId) return;
+			if (unique && Object.prototype.hasOwnProperty.call(map, user.url) && map[user.url]?.tuner !== tuner) {
+				map[user.url] = null;
+				return;
+			}
 
 			map[user.url] = {
 				tuner: tuner,
@@ -2851,6 +2859,22 @@ function buildMirakurunUserMap(tuners) {
 	});
 
 	return map;
+}
+
+// The stream response follows Mirakurun's user registration. Identify once here,
+// independently of DROP sampling; do not sample packet/drop counters in this path.
+async function identifyRecordingTuner(program, stream) {
+	const streamPath = program.mirakurunStreamPath;
+	const userId = stream.headers?.['x-mirakurun-tuner-user-id'] || null;
+	const result = await getMirakurunJson('/tuners', 1000);
+	if (!result.ok || !Array.isArray(result.data) || !recording.includes(program) ||
+		program.mirakurunStreamPath !== streamPath) return;
+	const matched = buildMirakurunUserMap(result.data, userId, true)[streamPath];
+	if (!matched) return;
+	const tunerName = typeof matched.tuner.name === 'string' ? matched.tuner.name : undefined;
+	const tunerIndex = Number.isInteger(matched.tuner.index) && matched.tuner.index >= 0 ? matched.tuner.index : undefined;
+	if (!tunerName && tunerIndex === undefined) return;
+	program.mirakurunDrop = { ...program.mirakurunDrop, tunerName, tunerIndex };
 }
 
 function buildMirakurunDropSnapshot(program, matched) {
@@ -3443,6 +3467,10 @@ function doRecord(program, stream) {
 
 	stream.pipe(recFile);
 	recFile.once('open', () => externalNotifier.notify('start', program, '録画出力を開始しました。'));
+	Object.defineProperty(program, '_operatorTunerInfoPromise', {
+		enumerable: false, configurable: true,
+		value: identifyRecordingTuner(program, stream)
+	});
 	if (tsDropAnalyzer) {
 		// 録画pipeを先に接続し、同じchunkを読み取り専用で観測する。
 		// Transformを録画経路へ挟まないため、recFile側のbackpressure経路は維持される。

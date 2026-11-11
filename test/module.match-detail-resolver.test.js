@@ -328,7 +328,7 @@ describe('Match detail resolver', function() {
 			operatorAbort: true,
 			operatorAbortAt: start + 1700 * 1000,
 			operatorAbortReason: 'manual-stop',
-			mirakurunDrop: { dropTotal: 12, packetTotal: 10000, tunerName: 'Fixture tuner' }
+			mirakurunDrop: { dropTotal: 12, packetTotal: 10000, tunerName: 'Fixture tuner', tunerIndex: 0 }
 		});
 		const missed = v2({
 			key: `channel-b|${start + 3600000}|${seconds}`,
@@ -397,6 +397,7 @@ describe('Match detail resolver', function() {
 		assert.strictEqual(recordedItem.operatorAbort, true);
 		assert.strictEqual(recordedItem.operatorActualSeconds, 1700);
 		assert.strictEqual(recordedItem.mirakurunDrop.dropTotal, 12);
+		assert.strictEqual(recordedItem.mirakurunDrop.tunerIndex, 0);
 		assert.strictEqual(recordedItem.channel.hasLogoData, true);
 		assert.strictEqual(recordedItem.recordingPath, '/fixture/current-recorded-a.ts');
 		const missedItem = result.items.find(item => item.status === 'MISSED');

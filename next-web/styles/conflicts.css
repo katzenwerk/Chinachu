@@ -1,4 +1,9 @@
 .conflicts-page,.conflicts-content { display: grid; gap: var(--layout-section-gap); min-width: 0; }
+.conflicts-page > [hidden] { display: none; }
+.conflicts-mode-tabs { display: flex; gap: 4px; }
+.conflicts-mode-tabs [aria-selected="true"] { background: var(--brand-soft); color: var(--brand-strong); }
+.conflicts-history { min-width: 0; }
+.conflicts-timeline-bar.is-actual { min-width: 0; padding: 3px 0; border: 0; border-radius: 0; }
 .conflicts-intro { display: grid; gap: 8px; }
 .conflicts-intro h2 { margin: 0; font-size: 18px; color: var(--text); }
 .conflicts-intro p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }

@@ -153,7 +153,7 @@ const routeTitles = {
   recording: '録画中',
   recorded: '録画結果',
   reserves: '予約一覧',
-  conflicts: '予約タイムライン',
+  conflicts: 'タイムライン',
   rules: 'ルール',
   series: 'シリーズ',
   status: 'ステータス',
@@ -302,7 +302,7 @@ async function route() {
     return;
   }
   if (name === 'conflicts') {
-    disposeCurrentPage = renderConflictsPage(page);
+    disposeCurrentPage = renderConflictsPage(page, { setHeaderActions: shell.setPageActions });
     return;
   }
   if (name === 'rules') {

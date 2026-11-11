@@ -154,7 +154,7 @@ describe('Operator low-storage handling', function() {
 		assert.match(health.detail, /root filesystem protection/);
 	});
 
-	it('keeps fresh recording safety checks while logging capacity transitions and recording events', function() {
+	it('keeps recording-start safety, tuner identification, and capacity transition handling', async function() {
 		const source = fs.readFileSync(path.join(__dirname, '..', 'app-operator.js'), 'utf8');
 		const doRecord = source.slice(source.indexOf('function doRecord(program, stream)'));
 		const forcedCheck = doRecord.indexOf("ensureRecordingDestinationHealthy(program, false, { force: true, recordingEvent: 'recording-start' })");
@@ -207,6 +207,75 @@ describe('Operator low-storage handling', function() {
 		context.handleStorageGroup(group('warning', 8, 'disk-b'));
 		assert.strictEqual(logs.length, 6);
 		assert.match(logs[5], /INFO: Storage Capacity Recovered!/);
+
+		// Start-time identification runs in file mode, without an Operator process,
+		// HTTP server, recording files, DROP sampling or polling timers.
+		const manual = { id: 'manual', isManualReserved: true, recorded: '/fixture/manual.ts', mirakurunStreamPath: '/manual',
+			mirakurunDrop: { dropTotal: 12, packetTotal: 100 } };
+		const ruled = { id: 'rule', ruleUid: 'rule-a', mirakurunStreamPath: '/rule' };
+		const requests = [];
+		let written = [], lockCalls = 0, pipeCalls = 0;
+		const metadata = vm.createContext({
+			dropDetectionMode: 'file', mirakurunDropDetectionEnabled: false, recording: [manual, ruled],
+			getMirakurunJson(endpoint, timeout) {
+				assert.strictEqual(endpoint, '/tuners'); assert.strictEqual(timeout, 1000);
+				return new Promise(resolve => requests.push(resolve));
+			},
+			recordedLedgerWrites: Promise.resolve(), pendingRecordedLedgerWrites: 0, shutdownStarted: false,
+			RECORDED_DATA_FILE: '/fixture/recorded.json',
+			reservationStore: {
+				withLockAsync: async (file, callback) => { lockCalls++; return callback(); },
+				readArray: () => written,
+				writeArrayAtomic: (file, rows) => { written = JSON.parse(JSON.stringify(rows)); }
+			},
+			writeRecordingData() {}, operatorLog() {}, printProgram: program => program.id,
+			removeManualReserve: async () => {}, finishPendingRecording() {}, scheduleMatchLedgerUpdate() {},
+			externalNotifier: { notify() {}, finish() {}, recordingResult() {} },
+			config: {}, wakePostProcessing() {}, completeOperatorShutdown() {},
+			recordedThumbnailGenerator: { resume() {} },
+			reportRecordingSaveFailure(program, error) { throw error; }
+		});
+		vm.runInContext(source.slice(source.indexOf('function buildMirakurunUserMap('),
+			source.indexOf('function buildMirakurunDropSnapshot(')) +
+			source.slice(source.indexOf('function queueRecordedLedgerUpdate('), source.indexOf('function finishPendingRecording(')) +
+			source.slice(source.indexOf('function saveCompletedRecording('), source.indexOf('function discardRecordingAfterManualRemoval(')), metadata);
+		const startHook = doRecord.slice(doRecord.indexOf('\tstream.pipe(recFile);'), doRecord.indexOf('\tif (tsDropAnalyzer) {', doRecord.indexOf('\tstream.pipe(recFile);')));
+		for (const program of [manual, ruled]) {
+			metadata.program = program;
+			metadata.stream = { headers: program === manual ? { 'x-mirakurun-tuner-user-id': 'own' } : {}, pipe() { pipeCalls++; } };
+			metadata.recFile = { once() {} };
+			vm.runInContext(startHook, metadata);
+			assert.strictEqual(Object.keys(program).includes('_operatorTunerInfoPromise'), false);
+		}
+		assert.strictEqual(pipeCalls, 2);
+		assert.strictEqual(requests.length, 2);
+		// A completion may race the metadata response. Wait before locking/saving,
+		// while leaving stream closure and Operator start/end timestamps alone.
+		const saved = metadata.saveCompletedRecording(manual, false);
+		await Promise.resolve();
+		assert.strictEqual(lockCalls, 0);
+		const tuners = [
+			{ index: 9, name: 'Other tuner', users: [{ id: 'other', url: '/manual' }] },
+			{ index: 0, name: 'PT3 GR 1', users: [{ id: 'own', url: '/manual' }, { id: 'rule-user', url: '/rule' }] }
+		];
+		requests.forEach(resolve => resolve({ ok: true, data: tuners }));
+		await Promise.all([manual._operatorTunerInfoPromise, ruled._operatorTunerInfoPromise]);
+		assert.strictEqual(await saved, true);
+		assert.deepStrictEqual(written[0].mirakurunDrop, { dropTotal: 12, packetTotal: 100, tunerName: 'PT3 GR 1', tunerIndex: 0 });
+		assert.deepStrictEqual(Object.keys(ruled.mirakurunDrop).sort(), ['tunerIndex', 'tunerName']);
+		assert.strictEqual(ruled.mirakurunDrop.tunerIndex, 0);
+		assert.strictEqual('_operatorTunerInfoPromise' in written[0], false);
+		assert.strictEqual(metadata.buildMirakurunUserMap(tuners)['/manual'].tuner.index, 0); // Existing DROP lookup unchanged.
+		const unknown = { id: 'unknown', mirakurunStreamPath: '/manual' };
+		metadata.recording.push(unknown);
+		metadata.getMirakurunJson = async () => ({ ok: true, data: tuners });
+		await metadata.identifyRecordingTuner(unknown, { headers: {} });
+		assert.strictEqual(unknown.mirakurunDrop, undefined); // Ambiguous URL without a user ID.
+		await metadata.identifyRecordingTuner(unknown, { headers: { 'x-mirakurun-tuner-user-id': 'absent' } });
+		assert.strictEqual(unknown.mirakurunDrop, undefined);
+		metadata.getMirakurunJson = async () => ({ ok: false, error: 'timeout' });
+		await metadata.identifyRecordingTuner(unknown, { headers: {} });
+		assert.strictEqual(unknown.mirakurunDrop, undefined);
 	});
 
 	it('keeps expectedMount active independently of root protection', function() {

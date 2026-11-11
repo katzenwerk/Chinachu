@@ -261,6 +261,18 @@ test('common programme detail maps reservation, rule and recorded actions withou
 	assert.strictEqual(recorded.matchStatus, 'RECORDED');
 	assert.strictEqual(recorded.media.playable, true);
 	assert.strictEqual(recorded.actions.deleteRecording.recordedId, 'recorded-a');
+	assert.strictEqual(recorded.operatorRecording.tunerLabel, '未取得');
+	assert.strictEqual(recorded.operatorRecording.startLabel, '未取得');
+	assert.strictEqual(recorded.operatorRecording.endLabel, '未取得');
+	const actualStart = new Date(2026, 10, 11, 19, 59, 45, 280).getTime();
+	const actualEnd = new Date(2026, 10, 11, 20, 29, 59, 830).getTime();
+	const actual = buildProgramDetailModel(detail({ currentSource: 'recorded',
+		program: { id: 'recorded-a', operatorRecordingStart: actualStart, operatorRecordingEnd: actualEnd,
+			tuner: { name: 'dummy' }, mirakurunDrop: { tunerName: 'PT3 GR 1', tunerIndex: 0 } },
+		match: { status: 'RECORDED' } }));
+	assert.strictEqual(actual.operatorRecording.tunerLabel, 'PT3 GR 1（番号 0）');
+	assert.match(actual.operatorRecording.startLabel, /19:59:45\.280$/);
+	assert.match(actual.operatorRecording.endLabel, /20:29:59\.830$/);
 
 	const lowStorageAbort = buildProgramDetailModel(detail({
 		currentSource: 'recorded',

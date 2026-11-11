@@ -34,7 +34,7 @@ async function runReservationAction(item) {
   }
 }
 
-export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilter = false }) {
+export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilter = false, waitForReady = false }) {
   const menu = document.createElement('div');
   menu.className = 'recorded-context-menu';
   menu.setAttribute('role', 'menu');
@@ -151,13 +151,15 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
     rule.disabled = true;
     rule.title = '';
     rule.textContent = 'ルールを確認中…';
-    menu.hidden = false;
-    menu.style.left = '0px';
-    menu.style.top = '0px';
-    positionMenu(x, y);
+    if (!waitForReady) {
+      menu.hidden = false;
+      menu.style.left = '0px';
+      menu.style.top = '0px';
+      positionMenu(x, y);
+    }
     const current = generation;
     loadProgramActionContext(item.id).then(async context => {
-      if (destroyed || menu.hidden || current !== generation) return;
+      if (destroyed || selected !== item || current !== generation) return;
       item.actionContext = context;
       const { model, seriesContext: series } = context;
       primary.hidden = model.actions.reservation === null;
@@ -174,20 +176,25 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
         button.hidden = false;
         button.textContent = action.label;
       });
-      positionMenu(x, y);
+      if (!waitForReady) positionMenu(x, y);
       let result = model.actions.rule;
       if (typeof resolveRule === 'function' && result.mode !== 'unavailable') result = await resolveRule(item);
-      if (destroyed || menu.hidden || current !== generation) return;
+      if (destroyed || selected !== item || current !== generation) return;
       item.ruleAction = result;
       rule.disabled = model.actions.rule.mode === 'unavailable' || result.mode === 'unavailable';
       rule.textContent = model.phase.key === 'program' && result.mode === 'create' ? 'ルール作成' : 'ルール';
       rule.title = result.label || '';
+      menu.hidden = false;
       positionMenu(x, y);
     }).catch(error => {
-      if (destroyed || menu.hidden || current !== generation) return;
+      if (destroyed || selected !== item || current !== generation) return;
       rule.textContent = 'ルールを取得できません';
       rule.title = String(error?.message || error);
       rule.disabled = true;
+      if (waitForReady) {
+        menu.hidden = false;
+        positionMenu(x, y);
+      }
     });
   }
 
@@ -238,10 +245,10 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
     else if (!submenu.hidden) toggleFilters(false);
   });
   const outsidePointer = event => {
-    if (!menu.hidden && !menu.contains(event.target) && !submenu?.contains(event.target)) close();
+    if (selected && !menu.contains(event.target) && !submenu?.contains(event.target)) close();
   };
   const keydown = event => {
-    if (menu.hidden) return;
+    if (menu.hidden && !(waitForReady && selected && event.key === 'Escape')) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       close();
