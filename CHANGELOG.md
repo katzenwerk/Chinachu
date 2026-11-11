@@ -1,3 +1,27 @@
+# Chinachu 0.10.7-thorn.38
+
+## Web UI
+
+- Add a browser-local UI scale control from 70% to 120%, in 5% steps, shared across the WUI. Apply and save the selected scale when slider interaction finishes, keeping dragging stable.
+- Standardize Home on layout C and place a compact, color-coded storage-capacity warning immediately above upcoming reservations.
+- Separate recording warnings from saved TS analysis findings in recorded results and CSV output, with independent filters.
+- Show recording history on the timeline using actual recording times and identified tuners, and expose tuner information in programme details.
+
+## Recording and Maintenance
+
+- Automatically fill missing thumbnails for completed recordings through the existing Operator queue, sharing background processing opportunities with automatic TS analysis while retaining recording and manual-task priority.
+- Allow manual thumbnail generation and regeneration at an integer position from 0% to 99%. Keep 35% as the default and preserve the input during maintenance-status updates.
+- Expand recording-filename substitutions for broadcast symbols, circled numbers, and corporate abbreviations.
+
+## Notifications
+
+- Add configurable Slack, SMTP email, and Pushover notifications, with separately stored credentials and test sending from unsaved settings.
+
+## Series Management (BETA)
+
+- Add original series registration, dictionary browsing, and a registration list that retains definitions without recordings.
+- Improve series association, dictionary-search input, and filtering of current recordings and hidden entries.
+
 # Chinachu 0.10.7-thorn.37
 
 ## Recording Files and Organization
