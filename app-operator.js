@@ -1425,6 +1425,7 @@ function nextAutoTsCandidate() {
 }
 
 function getAutoThumbnailSummary() {
+	if (config.recordedThumbnailAutoEnabled === false) return { remaining: 0, candidate: null };
 	const resolver = require('./lib/match-detail-resolver');
 	const blockedById = new Map(), blockedKeys = new Set();
 	for (const item of reservationStore.readArray(MATCH_DATA_FILE)) {
@@ -3478,7 +3479,7 @@ function doRecord(program, stream) {
 						persistRecordedDuration(program.id, finalPath, duration, requestedAt);
 						updateBitrateStatsAfterClose(program, finalPath, duration);
 					}
-					if (generateThumbnailAfterClose && !shutdownStarted) {
+					if (generateThumbnailAfterClose && config.recordedThumbnailAutoEnabled !== false && !shutdownStarted) {
 						recordedThumbnailGenerator.enqueue({
 							id: program.id,
 							inputPath: finalPath,

@@ -156,6 +156,34 @@ describe('Operator low-storage handling', function() {
 
 	it('keeps recording-start safety, tuner identification, and capacity transition handling', async function() {
 		const source = fs.readFileSync(path.join(__dirname, '..', 'app-operator.js'), 'utf8');
+		// Disabled automatic thumbnails must not even inspect the backfill candidates.
+		let candidateChecks = 0, queuedThumbnails = 0;
+		const candidate = { id: 'old-recording' };
+		const thumbnailContext = vm.createContext({
+			config: {}, recorded: [], recording: [], activeRecordingOutputs: new Set(),
+			generateThumbnailAfterClose: true, shutdownStarted: false, program: { id: 'finished' },
+			finalPath: '/fixture/finished.ts', duration: 120, requestedAt: 1,
+			recordedThumbnailGenerator: { enqueue: () => { queuedThumbnails++; } },
+			MATCH_DATA_FILE: '/fixture/match.json', RECORDED_THUMBNAIL_DIR: '/fixture/thumbnails',
+			reservationStore: { readArray: () => [] },
+			require: name => { assert.strictEqual(name, './lib/match-detail-resolver'); return {}; },
+			recordedThumbnail: { summarizeMissing: () => { candidateChecks++; return { remaining: 1, candidate }; } }
+		});
+		vm.runInContext(source.slice(source.indexOf('function getAutoThumbnailSummary()'),
+			source.indexOf('function stopAutoIfRecordingLimitExceeded()')), thumbnailContext);
+		const enqueueStart = source.indexOf('\t\t\t\t\tif (generateThumbnailAfterClose');
+		assert.ok(enqueueStart !== -1);
+		const enqueueSource = source.slice(enqueueStart, source.indexOf('\n\t\t\t\t});', enqueueStart));
+		for (const enabled of [undefined, true, false]) {
+			thumbnailContext.config.recordedThumbnailAutoEnabled = enabled;
+			const before = candidateChecks;
+			const summary = thumbnailContext.getAutoThumbnailSummary();
+			assert.strictEqual(summary.candidate, enabled === false ? null : candidate);
+			assert.strictEqual(candidateChecks - before, enabled === false ? 0 : 1);
+			const queuedBefore = queuedThumbnails;
+			vm.runInContext(enqueueSource, thumbnailContext);
+			assert.strictEqual(queuedThumbnails - queuedBefore, enabled === false ? 0 : 1);
+		}
 		const doRecord = source.slice(source.indexOf('function doRecord(program, stream)'));
 		const forcedCheck = doRecord.indexOf("ensureRecordingDestinationHealthy(program, false, { force: true, recordingEvent: 'recording-start' })");
 		const outputCreation = doRecord.indexOf("fs.createWriteStream(recPath, { flags: 'a' })");

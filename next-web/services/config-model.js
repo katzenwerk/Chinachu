@@ -8,7 +8,7 @@ export const DROP_DETECTION_MODES = [
 const KNOWN_KEYS = new Set([
   'externalNotifications', 'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs',
   'recordedFormat', 'recordedCommand', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
-  'recordingFilenamePrefixEnabled', 'recordedFolderOrganizeEnabled', 'recordedFolderOrganizeOrder',
+  'recordedThumbnailAutoEnabled', 'recordingFilenamePrefixEnabled', 'recordedFolderOrganizeEnabled', 'recordedFolderOrganizeOrder',
   'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm',
   'vaapiEnabled', 'vaapiDevice', 'recordingBoundaryPolicy', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode', 'autoTsMaxRecordings',
   'recordedStorageWakeupBeforeSec', 'storageLowSpaceWarningThresholdMB',
@@ -28,6 +28,7 @@ export function cloneConfig(value) {
 export function configForSave(config) {
   const result = cloneConfig(config);
   if (!Object.prototype.hasOwnProperty.call(result, 'wuiBlockGlobalAccess')) result.wuiBlockGlobalAccess = true;
+  if (!Object.prototype.hasOwnProperty.call(result, 'recordedThumbnailAutoEnabled')) result.recordedThumbnailAutoEnabled = true;
   if (!Object.prototype.hasOwnProperty.call(result, 'seriesUseSyobocal')) result.seriesUseSyobocal = true;
   return result;
 }
@@ -162,6 +163,9 @@ export function validateConfig(config) {
   }
   if (config.seriesUseSyobocal !== undefined && typeof config.seriesUseSyobocal !== 'boolean') {
     errors.push('seriesUseSyobocalは真偽値で指定してください。');
+  }
+  if (config.recordedThumbnailAutoEnabled !== undefined && typeof config.recordedThumbnailAutoEnabled !== 'boolean') {
+    errors.push('サムネイル自動作成は真偽値で指定してください。');
   }
   if (config.recordedFolderOrganizeEnabled !== undefined && typeof config.recordedFolderOrganizeEnabled !== 'boolean') {
     errors.push('recordedFolderOrganizeEnabledは真偽値で指定してください。');

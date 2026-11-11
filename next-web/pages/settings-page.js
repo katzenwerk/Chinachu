@@ -509,12 +509,13 @@ export function renderSettingsPage(container) {
     const fields = document.createElement('div');
     fields.className = 'settings-fields';
     const recordedCommand = bindValueField('recordedCommand', '録画が正常に終了した後に実行する外部コマンドです。空欄では何も実行しません。', { multiline: true, wide: true });
+    const autoThumbnail = bindBoolean('recordedThumbnailAutoEnabled', 'サムネイル自動作成', '録画終了後のサムネイル作成と、未作成サムネイルの自動補完を行います。初期値はONです。OFFでも手動作成は利用でき、作成済み画像は削除しません。', { defaultTrue: true });
     const ffprobe = bindValueField('ffprobeCommand', '録画ファイルの再生時間を調べるために使用するコマンドです。通常は変更不要です。', { placeholder: '通常: ffprobe' });
     const timeout = bindValueField('recordedDurationProbeTimeoutMs', '再生時間の取得を待つ最大時間です。単位はミリ秒で、8000なら8秒です。', { compact: true });
     const normalization = bindValueField('normalizationForm', '番組名や番組説明と予約ルールを照合する際に、文字の表現の違いを調整します。変更すると、ルールに一致する番組が変わる場合があります。通常はNFKCを使用します。', {
       select: [{ value: '', label: '未指定（正規化なし）' }, { value: 'NFC', label: 'NFC' }, { value: 'NFD', label: 'NFD' }, { value: 'NFKC', label: 'NFKC' }, { value: 'NFKD', label: 'NFKD' }]
     });
-    fields.append(ffprobe.wrap, timeout.wrap, normalization.wrap);
+    fields.append(autoThumbnail.wrap, ffprobe.wrap, timeout.wrap, normalization.wrap);
     const boundary = bindValueField('recordingBoundaryPolicy', 'チューナー不足で録画を切り替えるとき、先行録画の末尾と後続録画の先頭のどちらを優先するかを選びます。未指定時は終了優先です。ルールの個別指定がある場合はそちらを優先します。変更はOperator再起動後に反映されます。', { compact: true });
     if (draft.recordingBoundaryPolicy === undefined) boundary.input.value = 'end';
     fields.append(boundary.wrap);

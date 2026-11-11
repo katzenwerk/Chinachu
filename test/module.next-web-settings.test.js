@@ -53,6 +53,15 @@ test('settings model preserves unknown and untouched values while validating exp
 	assert.deepStrictEqual(model.validateConfig({ recordedDir: '/recorded', storageLowSpaceAction: 'stop-new', recordedDirs: dirs.value }), []);
 	assert.ok(model.configChanges(original, draft).some(change => change.key === 'recordedDurationProbeTimeoutMs'));
 
+	assert.strictEqual(model.configForSave(original).recordedThumbnailAutoEnabled, true);
+	for (const enabled of [true, false]) {
+		const config = { ...original, recordedThumbnailAutoEnabled: enabled };
+		assert.strictEqual(model.configForSave(config).recordedThumbnailAutoEnabled, enabled);
+		assert.ok(!model.unknownConfigKeys(config).includes('recordedThumbnailAutoEnabled'));
+		assert.deepStrictEqual(model.validateConfig(config), []);
+	}
+	assert.ok(model.validateConfig({ ...original, recordedThumbnailAutoEnabled: 'false' }).some(message => message.includes('サムネイル自動作成')));
+
 	const storage = await storageModel();
 	const blocked = {
 		thresholds: {},
@@ -194,15 +203,18 @@ test('settings model preserves unknown and untouched values while validating exp
 			const loaded = await client.loadConfig();
 			assert.ok(loaded.externalNotifications.routes.slack.configured);
 			const edited = model.cloneConfig(loaded);
+			edited.recordedThumbnailAutoEnabled = false;
 			edited.externalNotifications.events.start = !edited.externalNotifications.events.start;
 			edited.externalNotifications.routes.slack.webhook = 'https://hooks.slack.com/services/fixture/edited/new-secret';
 			const result = await client.saveConfig(edited, undefined, loaded);
 			assert.strictEqual(result.externalNotifications.events.start, edited.externalNotifications.events.start);
 			assert.strictEqual(result.externalNotifications.routes.slack.webhook, undefined);
 			assert.deepStrictEqual(model.configChanges(result, model.cloneConfig(result)), []);
-			const onlyOtherTab = { ...result, recordedFormat: 'unchanged-notification' };
+			assert.strictEqual((await client.loadConfig()).recordedThumbnailAutoEnabled, false);
+			const onlyOtherTab = { ...result, recordedFormat: 'unchanged-notification', recordedThumbnailAutoEnabled: true };
 			await client.saveConfig(onlyOtherTab, undefined, result);
 			assert.strictEqual(calls.at(-1).init.body.has('notifications'), false);
+			assert.strictEqual((await client.loadConfig()).recordedThumbnailAutoEnabled, true);
 		} finally { globalThis.fetch = realFetch; }
 		const deleted = model.cloneConfig(combined.body.externalNotifications);
 		deleted.routes.slack = { configured: false, enabled: false };
