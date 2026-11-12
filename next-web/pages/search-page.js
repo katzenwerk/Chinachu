@@ -204,17 +204,19 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
         row.addEventListener('keydown', event => {
           if (event.target === row && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openDetail(); }
         });
-        row.addEventListener('contextmenu', event => {
+        const openContext = event => {
           event.preventDefault();
           event.stopPropagation();
           closeMenu();
           const displayProgram = { ...program, channel: displayChannel };
           contextMenu = createGuideProgramMenu({
-            program: displayProgram, x: event.clientX, y: event.clientY,
+            program: displayProgram,
+            ...(event.type === 'contextmenu' && (event.clientX || event.clientY)
+              ? { x: event.clientX, y: event.clientY }
+              : { x: row.getBoundingClientRect().left + 16, y: row.getBoundingClientRect().top + 16 }),
             onChanged: reloadReservations,
-            resolveRule: async () => {
-              invalidateResources(['rules']);
-              const rules = await loadResource('rules');
+            resolveRule: context => {
+              const rules = context.detail.rules;
               const linked = linkedRuleProgram(displayProgram, reserves);
               if (linked === null) return { mode: 'unavailable', label: '関連する予約を一意に特定できません' };
               const result = ruleAction(linked, rules, preferredRuleUids.get(program.id));
@@ -224,6 +226,10 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
             onRule: action => openRuleAction(displayProgram, action)
           });
           contextMenu.dataset.programKey = key;
+        };
+        row.addEventListener('contextmenu', openContext);
+        row.addEventListener('keydown', event => {
+          if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) openContext(event);
         });
       }
       searchRows.set(key, { row, logo, signature });
@@ -326,11 +332,6 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   category.addEventListener('change', () => { pageIndex = 0; redraw(); });
   pagination.querySelector('[data-prev]').addEventListener('click', () => { pageIndex -= 1; redraw(); });
   pagination.querySelector('[data-next]').addEventListener('click', () => { pageIndex += 1; redraw(); });
-  const outsidePointer = event => { if (!contextMenu?.contains(event.target)) closeMenu(); };
-  const escape = event => { if (event.key === 'Escape') closeMenu(); };
-  document.addEventListener('pointerdown', outsidePointer, true);
-  document.addEventListener('keydown', escape, true);
-  window.addEventListener('scroll', closeMenu, true);
 
   releases.push(subscribeReservationNotifications(() => { if (!disposed) void reloadReservations(); }));
   releases.push(subscribeRecordingNotifications(() => { if (!disposed) void reloadReservations(); }));
@@ -373,9 +374,6 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
     closeMenu();
     ruleDialog?.close?.();
     compactMedia.removeEventListener('change', setCompact);
-    document.removeEventListener('pointerdown', outsidePointer, true);
-    document.removeEventListener('keydown', escape, true);
-    window.removeEventListener('scroll', closeMenu, true);
     releases.forEach(release => release?.());
     setHeaderActions();
   };

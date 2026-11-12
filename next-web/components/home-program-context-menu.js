@@ -34,7 +34,7 @@ async function runReservationAction(item) {
   }
 }
 
-export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilter = false, waitForReady = false }) {
+export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilter = false }) {
   const menu = document.createElement('div');
   menu.className = 'recorded-context-menu';
   menu.setAttribute('role', 'menu');
@@ -85,7 +85,7 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
   function positionSubmenu() {
     if (!submenu || submenu.hidden) return;
     const margin = 8;
-    const gap = 2;
+    const gap = 4;
     const parent = menu.getBoundingClientRect();
     const trigger = filterButton.getBoundingClientRect();
     const rect = submenu.getBoundingClientRect();
@@ -122,6 +122,8 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
   }
 
   function positionMenu(x, y) {
+    menu.style.left = '0px';
+    menu.style.top = '0px';
     const rect = menu.getBoundingClientRect();
     menu.style.left = viewportCssPixels(Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)));
     menu.style.top = viewportCssPixels(Math.max(8, Math.min(y, window.innerHeight - rect.height - 8)));
@@ -151,14 +153,8 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
     rule.disabled = true;
     rule.title = '';
     rule.textContent = 'ルールを確認中…';
-    if (!waitForReady) {
-      menu.hidden = false;
-      menu.style.left = '0px';
-      menu.style.top = '0px';
-      positionMenu(x, y);
-    }
     const current = generation;
-    loadProgramActionContext(item.id).then(async context => {
+    return loadProgramActionContext(item.id, item.seriesContext).then(async context => {
       if (destroyed || selected !== item || current !== generation) return;
       item.actionContext = context;
       const { model, seriesContext: series } = context;
@@ -176,9 +172,8 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
         button.hidden = false;
         button.textContent = action.label;
       });
-      if (!waitForReady) positionMenu(x, y);
       let result = model.actions.rule;
-      if (typeof resolveRule === 'function' && result.mode !== 'unavailable') result = await resolveRule(item);
+      if (typeof resolveRule === 'function' && result.mode !== 'unavailable') result = await resolveRule(item, context);
       if (destroyed || selected !== item || current !== generation) return;
       item.ruleAction = result;
       rule.disabled = model.actions.rule.mode === 'unavailable' || result.mode === 'unavailable';
@@ -191,16 +186,14 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
       rule.textContent = 'ルールを取得できません';
       rule.title = String(error?.message || error);
       rule.disabled = true;
-      if (waitForReady) {
-        menu.hidden = false;
-        positionMenu(x, y);
-      }
+      menu.hidden = false;
+      positionMenu(x, y);
     });
   }
 
   menu.addEventListener('click', event => {
     const button = event.target.closest?.('button[data-action]');
-    if (!button || button.disabled || selected === null) return;
+    if (!button || button.disabled || button.hidden || selected === null) return;
     const item = selected;
     const action = button.dataset.action;
     if (action === 'filter') {
@@ -248,10 +241,18 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
     if (selected && !menu.contains(event.target) && !submenu?.contains(event.target)) close();
   };
   const keydown = event => {
-    if (menu.hidden && !(waitForReady && selected && event.key === 'Escape')) return;
+    if (!selected) return;
     if (event.key === 'Escape') {
       event.preventDefault();
+      event.stopPropagation();
       close();
+      return;
+    }
+    if (menu.hidden) return;
+    if ((event.key === 'Enter' || event.key === ' ') &&
+        !menu.contains(document.activeElement) && !submenu?.contains(document.activeElement)) {
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
     if (event.key === 'ArrowLeft' && submenu && !submenu.hidden) {
@@ -279,7 +280,8 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
   };
   document.addEventListener('pointerdown', outsidePointer, true);
   document.addEventListener('keydown', keydown, true);
-  window.addEventListener('scroll', close, true);
+  const scroll = event => { if (event.target !== menu && event.target !== submenu) close(); };
+  window.addEventListener('scroll', scroll, true);
   window.addEventListener('resize', close);
 
   return {
@@ -290,7 +292,7 @@ export function createHomeProgramContextMenu({ onAction, resolveRule, enableFilt
       close();
       document.removeEventListener('pointerdown', outsidePointer, true);
       document.removeEventListener('keydown', keydown, true);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', scroll, true);
       window.removeEventListener('resize', close);
       menu.remove();
       submenu?.remove();

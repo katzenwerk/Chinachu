@@ -574,13 +574,21 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
     if (action === 'delete' && row.uid) { openDeleteDialog(row.uid); return; }
     if (action === 'toggle' && row.uid) void toggleRule(row);
   }});
-  listHost.addEventListener('contextmenu', event => {
+  const openRowContext = event => {
+    if (event.target.closest?.('input,textarea,select,[contenteditable="true"]')) return;
     const item = event.target.closest?.('.rule-row');
     if (!item || !listHost.contains(item)) return;
     const row = rowByElement.get(item);
     if (!row) return;
     event.preventDefault();
-    contextMenu.open(row, { x: event.clientX, y: event.clientY });
+    const rect = item.getBoundingClientRect();
+    const point = event.type === 'contextmenu' && (event.clientX || event.clientY)
+      ? { x: event.clientX, y: event.clientY } : { x: rect.left + 16, y: rect.top + 16 };
+    contextMenu.open(row, point);
+  };
+  listHost.addEventListener('contextmenu', openRowContext);
+  listHost.addEventListener('keydown', event => {
+    if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) openRowContext(event);
   });
 
   async function toggleRule(row) {

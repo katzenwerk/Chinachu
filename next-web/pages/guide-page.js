@@ -112,7 +112,7 @@ function closeGuideProgramMenu() {
 export function createGuideProgramMenu({ program, x, y, resolveRule, onRule, onChanged }) {
   closeGuideProgramMenu();
   const menu = createHomeProgramContextMenu({
-    resolveRule: () => resolveRule(),
+    resolveRule: (item, context) => resolveRule(context),
     onAction(action, item) {
       if (action === 'rule') return onRule(item.ruleAction);
       if (action === 'copy-title') return void copyProgramTitle(item.title).catch(error => window.alert(String(error?.message || error)));
@@ -124,6 +124,7 @@ export function createGuideProgramMenu({ program, x, y, resolveRule, onRule, onC
   activeGuideMenu = menu;
   menu.open({ id: program.id, title: programActionTitle(program), program, refresh: onChanged }, { x, y });
   return {
+    dataset: menu.element.dataset,
     contains: target => menu.element.contains(target),
     remove() {
       menu.destroy();
@@ -458,17 +459,19 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
           statuses: state.key === 'none' ? [] : [state.label] }));
         if (initial) {
           cell.addEventListener('click', () => openProgramDetailDialog({ id: entry.program.id, onChanged: refreshState }));
-          cell.addEventListener('contextmenu', event => {
+          const openContext = event => {
             const program = entry.program;
             const displayProgram = entry.displayProgram;
             programHover.close();
             event.preventDefault();
             event.stopPropagation();
-            createGuideProgramMenu({ program: displayProgram, x: event.clientX, y: event.clientY,
+            const rect = cell.getBoundingClientRect();
+            const point = event.type === 'contextmenu' && (event.clientX || event.clientY)
+              ? { x: event.clientX, y: event.clientY } : { x: rect.left + 16, y: rect.top + 16 };
+            createGuideProgramMenu({ program: displayProgram, ...point,
               onChanged: () => refreshState(['recording', 'reserves']),
-              resolveRule: async () => {
-                invalidateResources(['rules']);
-                const rules = await loadResource('rules');
+              resolveRule: context => {
+                const rules = context.detail.rules;
                 const linked = ruleProgram(displayProgram, data.reserves);
                 if (linked === null) return { mode: 'unavailable', label: '関連する予約を一意に特定できません' };
                 const action = ruleAction(linked, rules, preferredRuleUids.get(program.id));
@@ -492,6 +495,10 @@ export function renderGuidePage(container, { setHeaderActions = () => {} } = {})
                   await refreshState();
                 }, action);
               } });
+          };
+          cell.addEventListener('contextmenu', openContext);
+          cell.addEventListener('keydown', event => {
+            if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) openContext(event);
           });
         }
         if (cell.parentElement !== canvas) canvas.append(cell);

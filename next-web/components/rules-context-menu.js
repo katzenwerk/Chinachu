@@ -45,7 +45,7 @@ export function createRulesContextMenu({ onAction }) {
 
   menu.addEventListener('click', event => {
     const button = event.target.closest('button[data-action]');
-    if (!button || button.disabled || !selected) return;
+    if (!button || button.disabled || button.hidden || !selected) return;
     const row = selected;
     const action = button.dataset.action;
     close();
@@ -56,7 +56,7 @@ export function createRulesContextMenu({ onAction }) {
   }
   function keyboard(event) {
     if (menu.hidden) return;
-    if (event.key === 'Escape') { event.preventDefault(); close(); return; }
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); return; }
     // 右クリック前に行へフォーカスが残っていてもEnterで編集を起動させない。
     if ((event.key === 'Enter' || event.key === ' ') && !menu.contains(document.activeElement)) {
       event.preventDefault();

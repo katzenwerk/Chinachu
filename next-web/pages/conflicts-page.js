@@ -349,11 +349,20 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
         event.preventDefault();
         openProgramDetailDialog({ id });
       });
-      if (id && !actual) link.addEventListener('contextmenu', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        onContextMenu(entry.program, event);
-      });
+      if (id && !actual) {
+        const openContext = event => {
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = link.getBoundingClientRect();
+          const point = event.type === 'contextmenu' && (event.clientX || event.clientY)
+            ? event : { clientX: rect.left + 16, clientY: rect.top + 16 };
+          onContextMenu(entry.program, point);
+        };
+        link.addEventListener('contextmenu', openContext);
+        link.addEventListener('keydown', event => {
+          if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) openContext(event);
+        });
+      }
       plot.append(link);
     }));
     row.append(label, plot);
@@ -620,9 +629,8 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
       x: event.clientX,
       y: event.clientY,
       onChanged: () => refresh(true),
-      resolveRule: async () => {
-        invalidateResources(['rules']);
-        const rules = await loadResource('rules');
+      resolveRule: context => {
+        const rules = context.detail.rules;
         const linked = {
           ...program,
           ruleUid: program.ruleUid || program.reservationMeta?.ruleUid,

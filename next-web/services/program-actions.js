@@ -3,11 +3,21 @@ import { buildProgramDetailModel, programSeriesContext } from './program-detail-
 import { loadSeriesProjection } from './series-client.js';
 import { buildSeriesEventIndex } from './series-event-model.js';
 
-export async function loadProgramActionContext(id) {
-  const detail = await loadProgramDetail({ id });
+// Share only in-flight detail reads; never keep a stale action model after completion.
+const pendingActionDetails = new Map();
+
+export async function loadProgramActionContext(id, knownSeriesContext) {
+  const key = String(id);
+  if (!pendingActionDetails.has(key)) {
+    const request = loadProgramDetail({ id }).finally(() => pendingActionDetails.delete(key));
+    pendingActionDetails.set(key, request);
+  }
+  const detail = await pendingActionDetails.get(key);
   const model = buildProgramDetailModel(detail);
   let seriesContext = null;
-  if (model.eventKey) {
+  const knownKey = knownSeriesContext?.eventKey || knownSeriesContext?.event?.key;
+  if (model.eventKey && knownKey === model.eventKey) seriesContext = knownSeriesContext;
+  else if (model.eventKey) {
     try {
       const snapshot = await loadSeriesProjection({ eventKeys: [model.eventKey] });
       seriesContext = programSeriesContext(model, detail.program, buildSeriesEventIndex(snapshot).get(model.eventKey) || null);

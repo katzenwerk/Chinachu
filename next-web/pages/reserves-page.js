@@ -344,10 +344,9 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
 
   const showContextError = error => window.alert(`操作できませんでした: ${String(error?.message || error)}`);
 
-  async function resolveContextRule(item) {
+  function resolveContextRule(item, context) {
     // 古いruleIdやタイトルの曖昧一致から編集するルールを推測しない。
-    invalidateResources(['rules']);
-    const rules = await loadResource('rules');
+    const rules = context.detail.rules;
     const program = item.program;
     const meta = program.reservationMeta || {};
     const action = ruleAction({

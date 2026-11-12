@@ -1133,7 +1133,6 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
     }
   });
   const programContextMenu = createHomeProgramContextMenu({
-    waitForReady: true,
     onAction(action, item) {
       if (action === 'rule') openProgramDetailDialog({ id: item.id, initialAction: 'rule',
         onChanged: () => scheduleRefresh(0) });
@@ -1155,7 +1154,7 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
         channel: event.channel, seriesContext: context, hideFilter: true }, point);
     } else if (kind === 'reservation' && event?.reservation && event.ids?.length === 1) {
       programContextMenu.open({ id: event.ids[0], title: event.fullTitle || event.title,
-        program: { channel: { id: event.channel?.id } }, refresh: () => scheduleRefresh(0) }, point);
+        program: { channel: { id: event.channel?.id } }, seriesContext: context, refresh: () => scheduleRefresh(0) }, point);
     } else contextMenu.open(context, point);
   }
 

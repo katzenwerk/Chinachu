@@ -41,11 +41,12 @@ export function createSeriesContextMenu({ onAction }) {
     const hiddenButton = menu.querySelector('[data-action="series-hidden"]');
     hiddenButton.hidden = !seriesOnly || !Number.isInteger(Number(item?.tid)) || Number(item?.tid) <= 0;
     hiddenButton.textContent = item?.hidden ? 'シリーズを再表示' : 'シリーズを非表示';
+    menu.style.left = '0px';
+    menu.style.top = '0px';
     menu.hidden = false;
     const rect = menu.getBoundingClientRect();
     menu.style.left = viewportCssPixels(Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)));
     menu.style.top = viewportCssPixels(Math.max(8, Math.min(y, window.innerHeight - rect.height - 8)));
-    buttons.find(button => !button.disabled && !button.hidden)?.focus({ preventScroll: true });
   }
   menu.addEventListener('click', event => {
     const button = event.target.closest?.('button[data-action]');
@@ -60,7 +61,13 @@ export function createSeriesContextMenu({ onAction }) {
     if (menu.hidden) return;
     if (event.key === 'Escape') {
       event.preventDefault();
+      event.stopPropagation();
       close();
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && !menu.contains(document.activeElement)) {
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
@@ -74,7 +81,8 @@ export function createSeriesContextMenu({ onAction }) {
   };
   document.addEventListener('pointerdown', outside, true);
   document.addEventListener('keydown', keydown, true);
-  window.addEventListener('scroll', close, true);
+  const scroll = event => { if (event.target !== menu) close(); };
+  window.addEventListener('scroll', scroll, true);
   window.addEventListener('resize', close);
   return {
     open, close,
@@ -83,7 +91,7 @@ export function createSeriesContextMenu({ onAction }) {
       close();
       document.removeEventListener('pointerdown', outside, true);
       document.removeEventListener('keydown', keydown, true);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', scroll, true);
       window.removeEventListener('resize', close);
       menu.remove();
     }

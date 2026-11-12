@@ -6,6 +6,132 @@ const path = require('path');
 const vm = require('node:vm');
 const test = require('node:test');
 
+async function checkContextMenus() {
+	// Minimal DOM for the existing menus: no browser, server, timers or real actions.
+	class Element {
+		constructor(tag, document) { this.tag = tag; this.document = document; this.children = []; this.style = {}; this.dataset = {}; this.listeners = new Map(); this.hidden = false; this.disabled = false; this.attributes = {}; }
+		setAttribute(key, value) { this.attributes[key] = value; }
+		set innerHTML(html) {
+			this.children = [];
+			for (const match of html.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>|<(?:div|hr)([^>]*role="separator"[^>]*)>/g)) {
+				const attrs = match[1] ?? match[3], child = new Element(match[1] === undefined ? 'separator' : 'button', this.document);
+				child.hidden = /\bhidden\b/.test(attrs); child.disabled = /\bdisabled\b/.test(attrs);
+				child.dataset.action = /data-action="([^"]+)"/.exec(attrs)?.[1];
+				child.textContent = (match[2] || '').replace(/<[^>]+>/g, '');
+				this.append(child);
+			}
+		}
+		append(...items) { for (const item of items) { item.parent = this; this.children.push(item); } }
+		contains(item) { return this === item || this.children.some(child => child.contains(item)); }
+		querySelector(selector) { return selector.includes('separator') ? this.children.find(child => child.tag === 'separator') : this.children.find(child => child.dataset.action === /data-action="([^"]+)"/.exec(selector)?.[1]); }
+		querySelectorAll() { return this.children.filter(child => child.tag === 'button'); }
+		closest() { return this.tag === 'button' ? this : null; }
+		getBoundingClientRect() { return { left: parseFloat(this.style.left) || 0, top: parseFloat(this.style.top) || 0, right: 200, bottom: 40, width: 200, height: this.children.filter(child => !child.hidden).length * 20 }; }
+		focus() { this.document.activeElement = this; }
+		blur() { this.document.activeElement = this.document.body; }
+		remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); }
+		addEventListener(type, listener) { if (!this.listeners.has(type)) this.listeners.set(type, new Set()); this.listeners.get(type).add(listener); }
+		removeEventListener(type, listener) { this.listeners.get(type)?.delete(listener); }
+		emit(type, values = {}) { const event = { target: this, preventDefault() {}, stopPropagation() {}, ...values }; for (const listener of this.listeners.get(type) || []) listener(event); }
+	}
+	const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+	const modules = ['home-program-context-menu', 'recorded-context-menu', 'series-context-menu', 'rules-context-menu'];
+	for (const name of modules) {
+		const document = new Element('document'); document.document = document;
+		document.createElement = tag => new Element(tag, document);
+		document.body = document.createElement('body'); document.activeElement = document.body;
+		const window = new Element('window', document); window.innerWidth = 800; window.innerHeight = 800;
+		const requests = [], actions = [], details = [];
+		const sandbox = { document, window, viewportCssPixels: value => `${value}px`,
+			loadProgramActionContext: id => { const request = { id, ...deferred() }; requests.push(request); return request.promise; },
+			reservationActionLabel: action => action || '', seriesCorrectionActions: () => [],
+			isRecordedResultPlayable: () => true, openProgramDetailDialog: item => details.push(item) };
+		const source = fs.readFileSync(path.join(__dirname, `../next-web/components/${name}.js`), 'utf8')
+			.replace(/^import .*;\n/gm, '').replace(/export function /g, 'function ');
+		vm.runInNewContext(source, sandbox);
+		const factory = Object.values(sandbox).find(value => typeof value === 'function' && value.name.startsWith('create'));
+		const menu = factory({ enableFilter: true, onAction: (action, item) => actions.push({ action, item }),
+			resolveRule: (item, context) => { assert.ok(context.detail.rules); return context.model.actions.rule; } });
+		const root = document.body.children[0], submenu = document.body.children[1];
+		const state = () => JSON.stringify(root.children.map(child => [child.dataset.action, child.hidden, child.disabled, child.textContent]));
+		const item = id => ({ id, title: id, uid: id, enabled: true, program: {}, event: { key: id }, seriesId: 'syobocal:1' });
+		const context = { detail: { rules: [] }, model: { actions: { reservation: 'skip', stopRecording: null, rule: { mode: 'create' } },
+			media: { liveModel: null }, phase: { key: 'reserved' } }, seriesContext: null };
+		const readyItem = id => name === modules[0] ? context : item(id);
+		if (name === modules[0]) {
+			const first = menu.open(item('first'), { x: 790, y: 790 });
+			assert.strictEqual(root.hidden, true);
+			const second = menu.open(item('second'), { x: 790, y: 790 });
+			await Promise.resolve();
+			requests[1].resolve(readyItem('second')); await second;
+			assert.strictEqual(root.hidden, false);
+			const shown = state(), position = JSON.stringify(root.style);
+			requests[0].resolve(readyItem('first')); await first;
+			assert.strictEqual(state(), shown); assert.strictEqual(JSON.stringify(root.style), position);
+			root.emit('click', { target: root.querySelector('[data-action="detail"]') });
+			assert.strictEqual(name === modules[0] ? details[0].id : actions[0].item.id, 'second');
+			for (const cancel of [() => document.emit('keydown', { key: 'Escape' }),
+				() => document.emit('pointerdown', { target: document.body }),
+				() => window.emit('scroll', { target: document.body }), () => window.emit('resize')]) {
+				const ready = menu.open(item('cancelled'), { x: 30, y: 30 }); cancel();
+				await Promise.resolve();
+				requests.at(-1).resolve(readyItem('cancelled')); await ready; assert.strictEqual(root.hidden, true);
+			}
+		}
+		const opening = menu.open(item('final'), { x: 790, y: 790 });
+		await Promise.resolve();
+		if (requests.length) requests.at(-1).resolve(readyItem('final'));
+		await opening;
+		assert.strictEqual(root.hidden, false);
+		assert.ok(parseFloat(root.style.left) >= 8 && parseFloat(root.style.left) <= 592);
+		document.emit('keydown', { key: 'ArrowDown' });
+		assert.strictEqual(document.activeElement, root.children.find(child => child.tag === 'button' && !child.disabled && !child.hidden));
+		window.emit('scroll', { target: root }); assert.strictEqual(root.hidden, false);
+		if (submenu) {
+			const filter = root.querySelector('[data-action="filter"]'); filter.focus();
+			document.emit('keydown', { key: 'ArrowRight' }); assert.strictEqual(submenu.hidden, false);
+			window.emit('scroll', { target: submenu }); assert.strictEqual(root.hidden, false);
+			document.emit('keydown', { key: 'ArrowLeft' }); assert.strictEqual(submenu.hidden, true);
+			assert.strictEqual(document.activeElement, filter);
+		}
+		document.emit('keydown', { key: 'Escape' }); assert.strictEqual(root.hidden, true);
+		menu.destroy(); assert.strictEqual(document.body.children.length, 0);
+		if (name === modules[1]) {
+			const direct = factory({ onAction() {} });
+			direct.open(item('known'), { x: 30, y: 30 });
+			assert.strictEqual(document.body.children[0].hidden, false); // Known items keep the synchronous path.
+			direct.destroy();
+		}
+		for (const listeners of [...document.listeners.values(), ...window.listeners.values()]) assert.strictEqual(listeners.size, 0);
+	}
+	// Repeated opening requests share a pending detail read and reuse known series data.
+	let reads = 0, pending = deferred();
+	const service = { loadProgramDetail: () => { reads++; return pending.promise; },
+		buildProgramDetailModel: () => ({ eventKey: 'known' }),
+		loadSeriesProjection: () => { throw new Error('Known series information must not be fetched again'); } };
+	const actionSource = fs.readFileSync(path.join(__dirname, '../next-web/services/program-actions.js'), 'utf8');
+	vm.runInNewContext(actionSource.slice(actionSource.indexOf('const pendingActionDetails'), actionSource.indexOf('function validTitle')).replace('export async function ', 'async function '), service);
+	const known = { eventKey: 'known' };
+	const first = service.loadProgramActionContext('same', known), second = service.loadProgramActionContext('same', known);
+	assert.strictEqual(reads, 1); pending.resolve({ program: {} });
+	assert.strictEqual((await first).seriesContext, known); await second;
+	pending = deferred(); const fresh = service.loadProgramActionContext('same', known);
+	assert.strictEqual(reads, 2); pending.resolve({ program: {} }); await fresh;
+	// Both recording menus use direct deletion without opening a detail dialog.
+	for (const [page, marker] of [['series-page', 'const recordedContextMenu =']]) {
+		const source = fs.readFileSync(path.join(__dirname, `../next-web/pages/${page}.js`), 'utf8');
+		const begin = source.indexOf('    onAction(action, item) {', source.indexOf(marker));
+		const end = source.indexOf('\n  });', begin);
+		assert.ok(begin >= 0 && end > begin);
+		const deletion = { calls: [], details: [], deleteRecordedFromContext: value => { deletion.calls.push(value); return Promise.resolve(null); },
+			openProgramDetailDialog: value => deletion.details.push(value),
+			showMenuError: error => { throw error; }, menuError: error => { throw error; } };
+		vm.runInNewContext(`const handler = ({${source.slice(begin, end)}}).onAction; handler('delete', { key: 'event', recordedId: 'recorded' });`, deletion);
+		assert.deepStrictEqual(JSON.parse(JSON.stringify(deletion.calls)), [{ key: 'event', recordedId: 'recorded' }]);
+		assert.strictEqual(deletion.details.length, 0);
+	}
+}
+
 async function checkMaintenanceState() {
 	const source = fs.readFileSync(path.join(__dirname, '../next-web/components/recorded-maintenance-dialog.js'), 'utf8');
 	function section(text, start, end) {
@@ -342,5 +468,6 @@ test('common programme detail maps reservation, rule and recorded actions withou
 	assert.strictEqual(pendingRule.phase.key, 'program');
 	assert.strictEqual(pendingRule.actions.rule.mode, 'edit');
 	assert.strictEqual(pendingRule.actions.rule.pending, true);
+	await checkContextMenus();
 	await checkMaintenanceState();
 });

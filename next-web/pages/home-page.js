@@ -739,10 +739,9 @@ export function renderHomePage(container, options = {}) {
     openProgramDetailDialog({ id, key, initialAction, onChanged });
   }
 
-  async function resolveHomeRule(item) {
+  function resolveHomeRule(item, context) {
     // 番組名の曖昧一致や旧ruleIdの配列位置を、編集対象の決定に使わない。
-    invalidateResources(['rules']);
-    const rules = await loadResource('rules');
+    const rules = context.detail.rules;
     const program = item.program || {};
     const meta = program.reservationMeta || {};
     const action = ruleAction({

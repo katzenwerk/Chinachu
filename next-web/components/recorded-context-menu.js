@@ -104,7 +104,7 @@ export function createRecordedContextMenu({ onAction }) {
 
   function open(item, { x, y }) {
     if (destroyed) return;
-    clearMenuFocus();
+    close();
     selected = item;
     toggleFilters(false);
     menu.querySelector('[data-action="filter"]').hidden = item?.hideFilter === true;
@@ -133,7 +133,7 @@ export function createRecordedContextMenu({ onAction }) {
 
   function clickAction(event) {
     const button = event.target.closest?.('button[data-action]');
-    if (!button || button.disabled || selected === null) return;
+    if (!button || button.disabled || button.hidden || selected === null) return;
     const action = button.dataset.action;
     if (action === 'filter') {
       toggleFilters(true, true);
@@ -163,6 +163,12 @@ export function createRecordedContextMenu({ onAction }) {
       event.preventDefault();
       event.stopPropagation();
       close();
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') &&
+        !menu.contains(document.activeElement) && !submenu.contains(document.activeElement)) {
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
     if (event.key === 'ArrowLeft' && !submenu.hidden) {
