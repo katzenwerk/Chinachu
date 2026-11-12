@@ -9,7 +9,7 @@
 
 ## Recording and Maintenance
 
-- Automatically fill missing thumbnails for completed recordings through the existing Operator queue, sharing background processing opportunities with automatic TS analysis while retaining recording and manual-task priority.
+- Automatically fill missing thumbnails for completed recordings through the existing Operator queue, sharing background processing opportunities with automatic TS analysis while retaining recording and manual-task priority. Add a default-on "サムネイル自動作成" switch in Recording settings to control both post-recording thumbnail creation and missing-thumbnail backfill. Changes take effect after restarting Operator; disabling automatic creation preserves existing thumbnails and keeps manual generation and regeneration available.
 - Allow manual thumbnail generation and regeneration at an integer position from 0% to 99%. Keep 35% as the default and preserve the input during maintenance-status updates.
 - Expand recording-filename substitutions for broadcast symbols, circled numbers, and corporate abbreviations.
 
