@@ -259,6 +259,7 @@ describe('WUI access model', function() {
 			);
 			[
 				'channel-preview.js',
+				'external-notification.js',
 				'ledger-cleaner-jobs.js',
 				'ledger-cleaner.js',
 				'log-history.js',

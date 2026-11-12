@@ -132,7 +132,8 @@ test('settings model preserves unknown and untouched values while validating exp
 	assert.strictEqual(host.firstChild, warningCard); assert.strictEqual(warningCard.children[1].firstChild, firstRow);
 	renderWarning(homeLow); assert.strictEqual(host.children.length, 1);
 	assert.strictEqual(host.firstChild.className, 'panel home-storage-capacity-card is-low');
-	assert.strictEqual(host.firstChild.children[2].href, '#storage');
+	assert.strictEqual(homeLow.href, '#storage');
+	assert.strictEqual(host.firstChild.firstChild.children[2].href, homeLow.href);
 	assert.ok(host.firstChild.children[2].textContent.includes('ほか1件'));
 	renderWarning(null); assert.strictEqual(host.children.length, 0); assert.strictEqual(parent.children[1], nextReservation);
 	// Initial mounting always selects C and nests the warning above reservations, ignoring old A preferences.
