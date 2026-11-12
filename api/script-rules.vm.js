@@ -35,6 +35,7 @@
 
 				try {
 					var result = ruleStore.updateRules(define.RULES_FILE, function(updatedRules) {
+						ruleStore.normalizeRecordingHandoff(newRule);
 						updatedRules.push(newRule);
 						return newRule;
 					});

@@ -49,6 +49,10 @@
 					}
 					if (newRule.isEnabled === false) newRule.isDisabled = true;
 					delete newRule.isEnabled;
+					if (newRule.recordingHandoffProtected === undefined && typeof currentRule.recordingHandoffProtected === 'boolean') {
+						newRule.recordingHandoffProtected = currentRule.recordingHandoffProtected;
+					}
+					ruleStore.normalizeRecordingHandoff(newRule);
 					newRule.ruleUid = currentRule.ruleUid;
 					updatedRules.splice(index, 1, newRule);
 					return newRule;

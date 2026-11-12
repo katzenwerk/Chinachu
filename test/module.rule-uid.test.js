@@ -142,13 +142,17 @@ describe('Stable rule UID lifecycle', function() {
 		const originalSchedule = reservationStore.scheduleReservations;
 		try {
 			reservationStore.scheduleReservations = function() { throw new Error('WUI must calculate reservations in a child process'); };
-			const created = await runApi(file, 'POST', existing, { title: 'new rule' });
+			const created = await runApi(file, 'POST', existing, { title: 'new rule', recordingBoundaryPolicy: 'start', allowEndLack: true });
 			assert.strictEqual(created.statusCode, 201);
 			assert.strictEqual(JSON.parse(created.body).reservationUpdate.success, true, created.body);
 			let saved = readRules(directory);
 			assert.strictEqual(saved.length, 2);
 			assert.strictEqual(saved[0].ruleUid, 'stable-a');
 			assert.match(saved[1].ruleUid, /^[0-9a-f-]{36}$/);
+			assert.strictEqual(saved[1].recordingHandoffProtected, false);
+			assert.strictEqual('recordingBoundaryPolicy' in saved[1], false);
+			assert.strictEqual('allowEndLack' in saved[1], false);
+			assert.strictEqual('recordingHandoffProtected' in saved[0], false);
 
 			const beforeDuplicate = fs.readFileSync(file, 'utf8');
 			const duplicate = await runApi(file, 'POST', saved, { ruleUid: 'stable-a', title: 'duplicate' });
@@ -161,12 +165,56 @@ describe('Stable rule UID lifecycle', function() {
 	});
 
 	it('edits the expected UID after an index shift while preserving its UID and title mode', async function() {
+		// The editor, rule API and reservation builder enable only explicit protection.
+		const modelSource = fs.readFileSync(path.join(repositoryRoot, 'next-web/services/rule-model.js'), 'utf8');
+		const model = await import('data:text/javascript;base64,' + Buffer.from(modelSource).toString('base64'));
+		const editorSource = fs.readFileSync(path.join(repositoryRoot, 'next-web/components/rule-editor-dialog.js'), 'utf8');
+		const editor = vm.createContext({ structuredClone });
+		vm.runInContext(editorSource.slice(editorSource.indexOf('const TEXT_ARRAY_FIELDS'),
+			editorSource.indexOf('function pairedFields')), editor);
+		const cases = [
+			[{}, false], [{ recordingBoundaryPolicy: 'default' }, false],
+			[{ recordingBoundaryPolicy: 'start' }, false], [{ recordingBoundaryPolicy: 'end' }, false],
+			[{ allowEndLack: true }, false],
+			[{ recordingHandoffProtected: true }, true], [{ recordingHandoffProtected: false }, false],
+			[{ recordingHandoffProtected: false, recordingBoundaryPolicy: 'end', allowEndLack: true }, false],
+			[{ recordingHandoffProtected: false, recordingBoundaryPolicy: 'start' }, false],
+			[{ recordingHandoffProtected: true, recordingBoundaryPolicy: 'default', allowEndLack: false }, true]
+		];
+		for (const [legacy, expected] of cases) {
+			assert.strictEqual(model.ruleHandoffProtected(legacy), expected);
+			assert.strictEqual(reservationStore.isRecordingHandoffProtected(legacy), expected);
+			const form = { elements: { isEnabled: { checked: true }, reserve_titles_mode: { value: 'or' },
+				recordedDirId: { value: '' }, recorded_format: { value: '' }, recordingHandoffProtected: { checked: expected } },
+				querySelectorAll: () => [] };
+			const payload = editor.buildPayload(form, { ...legacy, ruleUid: 'handoff-rule', customSetting: { keep: true } });
+			assert.strictEqual(payload.recordingHandoffProtected, expected);
+			assert.strictEqual('recordingBoundaryPolicy' in payload, false);
+			assert.strictEqual('allowEndLack' in payload, false);
+			assert.strictEqual(payload.customSetting.keep, true);
+			assert.strictEqual(payload.ruleUid, 'handoff-rule');
+			const normalized = ruleStore.normalizeRecordingHandoff(structuredClone(payload));
+			assert.deepStrictEqual(normalized, payload);
+			const oldRule = { ...legacy, ruleUid: 'handoff-rule', customSetting: { keep: true } };
+			assert.deepStrictEqual(ruleStore.normalizeRecordingHandoff(oldRule),
+				{ ruleUid: 'handoff-rule', customSetting: { keep: true }, recordingHandoffProtected: expected });
+			const rule = { ...legacy, ruleUid: 'handoff-rule', types: ['GR'] };
+			const before = JSON.stringify(rule);
+			const result = reservationStore.evaluateReservations([
+				{ id: 'candidate', title: 'Fixture', start: 1000, end: 2000, seconds: 1,
+					channel: { type: 'GR', channel: '1', sid: 1 } }
+			], [{ types: ['GR'] }], [rule], {});
+			assert.strictEqual(result.reserves[0].recordingHandoffProtected, expected);
+			assert.strictEqual('allowEndLack' in result.reserves[0], false);
+			assert.strictEqual('recordingBoundaryPolicy' in result.reserves[0], false);
+			assert.strictEqual(JSON.stringify(rule), before);
+		}
 		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chinachu-rule-uid-api-'));
 		const file = path.join(directory, 'rules.json');
 		try {
 			const staleMemory = [
 				{ ruleUid: 'stable-a', title: 'A' },
-				{ ruleUid: 'stable-b', title: 'B', reserve_titles_mode: 'and' }
+				{ ruleUid: 'stable-b', title: 'B', reserve_titles_mode: 'and', recordingBoundaryPolicy: 'end' }
 			];
 			fs.writeFileSync(file, JSON.stringify([{ ruleUid: 'inserted', title: 'X' }, ...staleMemory]));
 			const response = await runApi(file, 'PUT', staleMemory, { ruleUid: 'caller-change', title: 'edited' }, 0,
@@ -178,11 +226,34 @@ describe('Stable rule UID lifecycle', function() {
 				['inserted', 'X'], ['stable-a', 'A'], ['stable-b', 'edited']
 			]);
 			assert.strictEqual(saved[2].reserve_titles_mode, 'and');
+			assert.strictEqual(saved[2].recordingHandoffProtected, false);
+			assert.strictEqual('recordingBoundaryPolicy' in saved[2], false);
+			assert.strictEqual('recordingHandoffProtected' in saved[1], false);
 
 			const explicitOr = await runApi(file, 'PUT', saved, { title: 'edited again', reserve_titles_mode: 'or' }, 2,
 				{ 'x-chinachu-rule-uid': 'stable-b' });
 			assert.strictEqual(explicitOr.statusCode, 200);
 			assert.strictEqual(readRules(directory)[2].reserve_titles_mode, 'or');
+			assert.strictEqual(readRules(directory)[2].recordingHandoffProtected, false);
+			const protectedRule = await runApi(file, 'PUT', readRules(directory),
+				{ title: 'protected', recordingHandoffProtected: true, customSetting: { keep: true } }, 2,
+				{ 'x-chinachu-rule-uid': 'stable-b' });
+			assert.strictEqual(protectedRule.statusCode, 200);
+			const retained = await runApi(file, 'PUT', readRules(directory),
+				{ title: 'protected edited', recordingBoundaryPolicy: 'default', customSetting: { keep: true } }, 2,
+				{ 'x-chinachu-rule-uid': 'stable-b' });
+			assert.strictEqual(retained.statusCode, 200);
+			assert.strictEqual(readRules(directory)[2].recordingHandoffProtected, true);
+			assert.strictEqual(readRules(directory)[2].ruleUid, 'stable-b');
+			assert.deepStrictEqual(readRules(directory)[2].customSetting, { keep: true });
+			assert.strictEqual('recordingBoundaryPolicy' in readRules(directory)[2], false);
+			const unprotected = await runApi(file, 'PUT', readRules(directory),
+				{ title: 'unprotected', recordingHandoffProtected: false, recordingBoundaryPolicy: 'end', allowEndLack: true }, 2,
+				{ 'x-chinachu-rule-uid': 'stable-b' });
+			assert.strictEqual(unprotected.statusCode, 200);
+			assert.strictEqual(readRules(directory)[2].recordingHandoffProtected, false);
+			assert.strictEqual('allowEndLack' in readRules(directory)[2], false);
+			assert.strictEqual('recordingBoundaryPolicy' in readRules(directory)[2], false);
 			const invalid = await runApi(file, 'PUT', readRules(directory), { title: 'invalid', reserve_titles_mode: 'xor' }, 2,
 				{ 'x-chinachu-rule-uid': 'stable-b' });
 			assert.strictEqual(invalid.statusCode, 400);
@@ -275,9 +346,30 @@ describe('Stable rule UID lifecycle', function() {
 			fs.writeFileSync(path.join(directory, 'rules.json'), JSON.stringify([
 				{ ruleUid: 'stable-a', title: 'A' }, { ruleUid: 'stable-b', title: 'B' }
 			]));
+			const handoffRules = readRules(directory);
+			for (const legacy of [{ allowEndLack: true }, { recordingBoundaryPolicy: 'start' }, { recordingBoundaryPolicy: 'end' },
+				{ recordingHandoffProtected: true, recordingBoundaryPolicy: 'end' }]) {
+				fs.writeFileSync(path.join(directory, 'rules.json'), JSON.stringify([
+					{ ...handoffRules[0], ...legacy, customSetting: { keep: true } }, handoffRules[1]
+				]));
+				const edited = runCli(directory, ['--enable', '--rule-uid', 'stable-a']);
+				assert.strictEqual(edited.status, 0, edited.stdout + edited.stderr);
+				const latest = readRules(directory);
+				assert.strictEqual(latest[0].recordingHandoffProtected, legacy.recordingHandoffProtected === true);
+				assert.strictEqual(latest[0].ruleUid, 'stable-a');
+				assert.deepStrictEqual(latest[0].customSetting, { keep: true });
+				assert.strictEqual('allowEndLack' in latest[0], false);
+				assert.strictEqual('recordingBoundaryPolicy' in latest[0], false);
+				assert.deepStrictEqual(latest[1], handoffRules[1]);
+			}
+			handoffRules[1].recordingHandoffProtected = false;
+			handoffRules[1].recordingBoundaryPolicy = 'start';
+			fs.writeFileSync(path.join(directory, 'rules.json'), JSON.stringify(handoffRules));
 			result = runCli(directory, ['--disable', '--rule-uid', 'stable-b']);
 			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
 			assert.strictEqual(readRules(directory)[1].isDisabled, true);
+			assert.strictEqual(readRules(directory)[1].recordingHandoffProtected, false);
+			assert.strictEqual('recordingBoundaryPolicy' in readRules(directory)[1], false);
 			result = runCli(directory, ['--enable', '--rule-uid', 'stable-b']);
 			assert.strictEqual(result.status, 0, result.stdout + result.stderr);
 			assert.strictEqual(readRules(directory)[1].isDisabled, undefined);

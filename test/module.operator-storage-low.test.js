@@ -14,6 +14,98 @@ const storageManualRefresh = require('../lib/storage-manual-refresh');
 const storageRefreshIpc = require('../lib/storage-refresh-ipc');
 const storageRuntimeState = require('../lib/storage-runtime-state');
 
+// Exercise the existing Operator functions without starting services or opening streams.
+async function assertHandoffBehavior(source) {
+	const now = Date.now(), timers = [], finished = [];
+	let started = 0, tunerRequests = 0, settle;
+	const current = (id, seconds, protectedValue) => ({ id, title: id, end: now + seconds * 1000,
+		channel: { type: 'GR', channel: id, sid: id }, _stream: {}, mirakurunStreamPath: '/' + id,
+		recordingHandoffProtected: protectedValue,
+		_operatorFinalize() { finished.push(id); delete this._stream; this.operatorRecordingEnd = Date.now(); } });
+	const rows = [current('A', 5, true), current('B', 12, false), current('C', 18, true), current('D', 18000, false)];
+	const next = { id: 'E', end: now + 60000, channel: { type: 'GR', channel: 'E', sid: 'E' }, recordingHandoffProtected: true };
+	const tuners = rows.map(row => ({ types: ['GR', 'BS'], users: [{ url: row.mirakurunStreamPath }] }));
+	const context = vm.createContext({ config: { recordingBoundaryPolicy: 'start' }, clock: now,
+		endLackMaxSeconds: 20, recording: rows, reservationStore: require('../lib/reservation-store'),
+		shutdownStarted: false, handoffEndLackUsed: new Set(), reserves: [next],
+		recordingAttempt: require('../lib/recording-attempt'), recordingPriority: 2, conflictedPriority: 1,
+		ensureRecordingDestinationHealthy: () => true, getResumableInterruptedRecording: () => null,
+		isRecordedForReserve: () => false, isRecording: row => context.recording.includes(row),
+		operatorLog() {}, printProgram: row => row.id, writeRecordingData() {}, stopAutoIfRecordingLimitExceeded() {},
+		safeAbortStream() { throw new Error('Expected the formal recording finalizer'); },
+		getMirakurunJson: async () => { tunerRequests++; return { ok: true, data: tuners }; },
+		doRecord: () => { started++; settle(); },
+		setTimeout: (callback, delay) => { timers.push({ callback, delay }); settle(); },
+		mirakurun: { getProgramStream: async () => ({}) }
+	});
+	vm.runInContext(source.slice(source.indexOf('function boundaryOverride('), source.indexOf('function getMirakurunJson(')) +
+		source.slice(source.indexOf('function finishRecordingForEndLack('), source.indexOf('// 録画中のまま固着した番組を掃除する')) +
+		source.slice(source.indexOf('function prepRecord('), source.indexOf('// 録画実行')), context);
+	for (const legacy of [{ allowEndLack: true }, { recordingBoundaryPolicy: 'start' }, { recordingBoundaryPolicy: 'end' }]) {
+		assert.strictEqual(context.boundaryOverride(legacy), false);
+	}
+	for (const policy of ['start', 'end']) {
+		context.config.recordingBoundaryPolicy = policy;
+		for (const a of [false, true]) for (const b of [false, true]) {
+			assert.strictEqual(context.mayHandoffEndEarly({ recordingHandoffProtected: a }, { recordingHandoffProtected: b }),
+				a === b ? policy === 'start' : b);
+		}
+	}
+	context.config.recordingBoundaryPolicy = 'start';
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(next).needsTunerInfo, true);
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(next).candidate, null);
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(next, tuners).candidate.id, 'B');
+	rows[2].recordingHandoffProtected = false;
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(next, tuners).candidate.id, 'B');
+	rows[2].recordingHandoffProtected = true;
+	tuners[1].users.push({ url: '/another-service' });
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(next, tuners).candidate.id, 'A');
+	tuners[1].users.pop();
+	context.recording = [rows[0]];
+	for (const patch of [{ _stream: null }, { _operatorAbort: true }, { _operatorNg: true },
+		{ _operatorEndLack: true }, { operatorRecordingEnd: now }, { _operatorHistoryPending: true }, { operatorResumePending: true },
+		{ end: now }, { end: now + 21000 }, { channel: { ...next.channel, sid: 'different-service' } }]) {
+		context.recording = [{ ...rows[0], ...patch }];
+		assert.strictEqual(context.getHandoffEndLackCandidateInfo(next, tuners).candidate, null);
+	}
+	context.recording = [{ ...rows[0], end: now + 20000 }];
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(next, tuners).candidate.id, 'A');
+	context.recording = [rows[0]];
+	const bsNext = { ...next, channel: { ...next.channel, type: 'BS' } };
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(bsNext, tuners).candidate.id, 'A');
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(bsNext, [{ ...tuners[0], types: ['GR'] }]).candidate, null);
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(next, [tuners[0], tuners[0]]).candidate, null);
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(next, [{ ...tuners[0], users: [...tuners[0].users, { url: '/external' }] }]).candidate, null);
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(next, []).candidate, null);
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo({ ...next, recordingHandoffProtected: false }, tuners).candidate, null);
+	context.config.recordingBoundaryPolicy = 'end';
+	assert.strictEqual(context.getHandoffEndLackCandidateInfo(next, tuners).candidate, null);
+	context.config.recordingBoundaryPolicy = 'start';
+	context.recording = rows.slice();
+	await new Promise(resolve => { settle = resolve; context.prepRecord({ ...next }); });
+	assert.strictEqual(started, 1); assert.strictEqual(finished.length, 0); assert.strictEqual(tunerRequests, 0);
+	context.recording = rows.slice();
+	context.mirakurun.getProgramStream = async () => { throw { statusCode: 503, statusMessage: 'Tuner Resource Unavailable' }; };
+	await new Promise(resolve => { settle = resolve; context.prepRecord(next); });
+	assert.deepStrictEqual(finished, ['B']); assert.strictEqual(tunerRequests, 1);
+	assert.strictEqual(rows[1].operatorEndLackByProgramId, next.id);
+	assert.strictEqual(rows[1].operatorEndLackReason, 'HANDOFF_TUNER');
+	assert.strictEqual(timers[0].delay, 500);
+	await new Promise(resolve => { settle = resolve; timers.shift().callback(); });
+	assert.deepStrictEqual(finished, ['B']); assert.strictEqual(tunerRequests, 1);
+	assert.strictEqual(timers[0].delay, 5000); // Same incoming recording cannot shorten a second recording.
+	timers.length = 0;
+	context.config.recordingBoundaryPolicy = 'end';
+	await new Promise(resolve => { settle = resolve; context.prepRecord({ ...next, id: 'no-candidate' }); });
+	assert.deepStrictEqual(finished, ['B']); assert.strictEqual(tunerRequests, 1);
+	assert.strictEqual(timers[0].delay, 5000);
+	timers.length = 0;
+	context.mirakurun.getProgramStream = async () => { throw { statusCode: 500 }; };
+	await new Promise(resolve => { settle = resolve; context.prepRecord({ ...next, id: 'non-shortage' }); });
+	assert.deepStrictEqual(finished, ['B']); assert.strictEqual(tunerRequests, 1);
+	assert.strictEqual(timers[0].delay, 5000);
+}
+
 function linuxDev(major, minor) {
 	major = BigInt(major);
 	minor = BigInt(minor);
@@ -156,6 +248,7 @@ describe('Operator low-storage handling', function() {
 
 	it('keeps recording-start safety, tuner identification, and capacity transition handling', async function() {
 		const source = fs.readFileSync(path.join(__dirname, '..', 'app-operator.js'), 'utf8');
+		await assertHandoffBehavior(source);
 		// Disabled automatic thumbnails must not even inspect the backfill candidates.
 		let candidateChecks = 0, queuedThumbnails = 0;
 		const candidate = { id: 'old-recording' };

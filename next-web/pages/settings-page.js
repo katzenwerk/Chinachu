@@ -516,7 +516,7 @@ export function renderSettingsPage(container) {
       select: [{ value: '', label: '未指定（正規化なし）' }, { value: 'NFC', label: 'NFC' }, { value: 'NFD', label: 'NFD' }, { value: 'NFKC', label: 'NFKC' }, { value: 'NFKD', label: 'NFKD' }]
     });
     fields.append(autoThumbnail.wrap, ffprobe.wrap, timeout.wrap, normalization.wrap);
-    const boundary = bindValueField('recordingBoundaryPolicy', 'チューナー不足で録画を切り替えるとき、先行録画の末尾と後続録画の先頭のどちらを優先するかを選びます。未指定時は終了優先です。ルールの個別指定がある場合はそちらを優先します。変更はOperator再起動後に反映されます。', { compact: true });
+    const boundary = bindValueField('recordingBoundaryPolicy', 'チューナー不足で録画を切り替えるとき、先行録画の末尾と後続録画の先頭のどちらを優先するかを選びます。未指定時は終了優先です。ルールで優先保護された番組と通常の番組が切り替わる場合は、保護された番組を優先します。変更はOperator再起動後に反映されます。', { compact: true });
     if (draft.recordingBoundaryPolicy === undefined) boundary.input.value = 'end';
     fields.append(boundary.wrap);
     ['recordingPriority', 'conflictedPriority', 'handoffPrepSeconds'].forEach(key => {

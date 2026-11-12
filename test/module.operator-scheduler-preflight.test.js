@@ -215,6 +215,8 @@ function createOperatorLaunchFixture(store) {
 
 describe('Operator scheduler preflight', function() {
 	it('classifies clean, content, metadata-only, and unavailable inputs', async function() {
+		assert.deepStrictEqual(preflightModule.projectReserves([{ id: 'manual', isManualReserved: true, recordingHandoffProtected: true,
+			recordingBoundaryPolicy: 'end', allowEndLack: true }]), [{ id: 'manual', isManualReserved: true }]);
 		const local = createFixture();
 		try {
 			assert.deepStrictEqual(await local.preflight.check(), {

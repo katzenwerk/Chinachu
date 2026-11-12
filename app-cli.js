@@ -809,6 +809,7 @@ async function chinachuRule() {
 					hasTarget ? '見つかりません' : 'ルールが空です。一つ以上の条件が必要です。');
 			}
 
+			if (!opts.get('remove')) ruleStore.normalizeRecordingHandoff(r);
 			if (opts.get('enable')) delete r.isDisabled;
 			if (opts.get('disable')) r.isDisabled = true;
 

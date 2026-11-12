@@ -1,6 +1,6 @@
 import { createChannelLogo } from './channel-logo.js';
 import { openChannelSelector } from './channel-selector-dialog.js';
-import { RULE_CATEGORIES, RULE_FLAGS, RULE_TYPES, buildRuleChannelMap, categoryLabel, ruleTitleMode } from '../services/rule-model.js';
+import { RULE_CATEGORIES, RULE_FLAGS, RULE_TYPES, buildRuleChannelMap, categoryLabel, ruleTitleMode, ruleHandoffProtected } from '../services/rule-model.js';
 import { createRule, deleteRule, loadRuleEditorData, runScheduler, updateRule } from '../services/rules-client.js';
 import { previewRuleMatches, schedulePrograms } from '../services/rule-match-preview.js';
 import { programState, programTitlePresentation } from '../services/timetable-model.js';
@@ -10,7 +10,7 @@ const KNOWN_KEYS = new Set([
   'ruleUid', 'name', 'isDisabled', 'sid', 'category', 'types', 'categories', 'channels', 'ignore_channels',
   'reserve_flags', 'ignore_flags', 'hour', 'duration', 'reserve_titles', 'reserve_titles_mode',
   'ignore_titles', 'reserve_descriptions', 'ignore_descriptions', 'recordedDirId',
-  'recorded_format', 'allowEndLack', 'recordingBoundaryPolicy'
+  'recorded_format', 'allowEndLack', 'recordingBoundaryPolicy', 'recordingHandoffProtected'
 ]);
 const FLAG_TITLES = Object.freeze({
   '新': '新番組', '終': '最終回', '再': '再放送', '字': '字幕放送', 'デ': 'データ放送',
@@ -116,7 +116,8 @@ function buildPayload(form, original) {
   if (recordedDirId) payload.recordedDirId = recordedDirId; else delete payload.recordedDirId;
   const recordedFormat = text(form.elements.recorded_format.value);
   if (recordedFormat) payload.recorded_format = recordedFormat; else delete payload.recorded_format;
-  payload.recordingBoundaryPolicy = form.elements.recordingBoundaryPolicy.value;
+  payload.recordingHandoffProtected = form.elements.recordingHandoffProtected.checked;
+  delete payload.recordingBoundaryPolicy;
   delete payload.allowEndLack;
   return payload;
 }
@@ -378,18 +379,14 @@ export function openRuleEditorDialog({ row = null, initialRule = null, title = n
     const outputGrid = document.createElement('div'); outputGrid.className = 'rule-form-columns';
     const format = document.createElement('label'); format.textContent = 'ファイル名書式';
     const formatInput = document.createElement('input'); formatInput.type = 'text'; formatInput.name = 'recorded_format'; formatInput.value = text(original.recorded_format); formatInput.placeholder = 'デフォルトの書式を使用'; format.append(formatInput);
-    const boundary = document.createElement('label'); boundary.textContent = '録画の優先方針';
-    const boundarySelect = document.createElement('select'); boundarySelect.name = 'recordingBoundaryPolicy';
-    [['default', '共通設定に従う'], ['start', '開始優先（末尾切れを許可）'], ['end', '終了優先（開始遅れを許可）']]
-      .forEach(([value, label]) => {
-        const option = document.createElement('option'); option.value = value; option.textContent = label;
-        boundarySelect.append(option);
-      });
-    boundarySelect.value = ['default', 'start', 'end'].includes(original.recordingBoundaryPolicy)
-      ? original.recordingBoundaryPolicy : original.allowEndLack === true ? 'start' : 'default';
-    boundary.append(boundarySelect);
+    const boundary = document.createElement('label'); boundary.textContent = '録画の優先保護';
+    const protectionLabel = document.createElement('span'); protectionLabel.className = 'rule-switch';
+    const protection = document.createElement('input'); protection.type = 'checkbox'; protection.name = 'recordingHandoffProtected';
+    protection.checked = ruleHandoffProtected(original);
+    protectionLabel.append(protection, document.createTextNode('優先保護する'));
+    boundary.append(protectionLabel);
     const boundaryNote = document.createElement('p'); boundaryNote.className = 'rule-field-note';
-    boundaryNote.textContent = '共通設定に従う場合は録画設定の方針を使用します。個別指定は共通設定を変更しても維持されます。';
+    boundaryNote.textContent = 'この番組の先頭と末尾を、通常の番組よりできる限り優先します。';
     outputGrid.append(format, boundary); output.append(outputGrid, boundaryNote); advanced.append(output);
 
     const compatibility = Object.keys(original).filter(key => !KNOWN_KEYS.has(key));

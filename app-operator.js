@@ -864,6 +864,7 @@ function recordingUpdater(program) {
 		'recordedDirId',
 		'allowEndLack',
 		'recordingBoundaryPolicy',
+		'recordingHandoffProtected',
 		'priority'
 	];
 
@@ -873,6 +874,8 @@ function recordingUpdater(program) {
 			copyKeys.forEach(k => {
 				if (program.hasOwnProperty(k)) {
 					recording[i][k] = program[k];
+				} else if (k === 'recordingHandoffProtected') {
+					delete recording[i][k];
 				}
 			});
 			return;
@@ -2176,22 +2179,16 @@ function safeAbortStream(stream, reason) {
 	}
 }
 
-// 旧allowEndLackは「この録画が末尾を譲る許可」だけを表す。
-// 新しいstart/endは、録画開始側と終了側の両方で評価する。
+// Use the same explicit protection flag as reservation generation.
 function boundaryOverride(program) {
-	if (program?.recordingBoundaryPolicy === 'start' || program?.recordingBoundaryPolicy === 'end') {
-		return program.recordingBoundaryPolicy;
-	}
-	return program?.allowEndLack === true ? 'legacy-start' : 'default';
+	return reservationStore.isRecordingHandoffProtected(program);
 }
 
 function mayHandoffEndEarly(current, next) {
-	const currentMode = boundaryOverride(current);
-	const nextMode = boundaryOverride(next);
-	// 明示的な終了優先は末尾短縮を拒否する。開始優先は共通設定を上書きできる。
-	if (currentMode === 'end' || nextMode === 'end') return false;
-	return currentMode === 'start' || currentMode === 'legacy-start' ||
-		nextMode === 'start' || config.recordingBoundaryPolicy === 'start';
+	const currentProtected = boundaryOverride(current);
+	const nextProtected = boundaryOverride(next);
+	if (currentProtected !== nextProtected) return nextProtected;
+	return config.recordingBoundaryPolicy === 'start';
 }
 
 // 同一チャンネルの予約か確認する
@@ -2202,25 +2199,22 @@ function isSameChannelProgram(a, b) {
 
 	return (
 		a.channel.type === b.channel.type &&
-		String(a.channel.channel || '') === String(b.channel.channel || '') &&
-		String(a.channel.sid || '') === String(b.channel.sid || '')
+		String(a.channel.channel || '') === String(b.channel.channel || '')
 	);
 }
 
 // チャンネル切替のため末尾切れ候補になる録画を探す
-// stream取得失敗後だけ呼び出し、終了直前で録画境界の優先方針が末尾短縮を許す録画だけを対象にする。
-function findHandoffEndLackCandidate(nextProgram) {
-	return getHandoffEndLackCandidateInfo(nextProgram).candidate;
-}
-
-function canHandoffAcrossTypes(currentType, nextType, tuners) {
-	if (!Array.isArray(tuners) || !tuners.every(tuner => tuner &&
-		Array.isArray(tuner.types) && tuner.types.length > 0 &&
-		tuner.types.every(type => typeof type === 'string' && type.length > 0))) {
-		return false;
-	}
-	const currentTuners = tuners.filter(tuner => tuner.types.includes(currentType));
-	return currentTuners.length > 0 && currentTuners.every(tuner => tuner.types.includes(nextType));
+// チューナー不足時だけ、終了直前かつ実際に解放できるチューナーの録画を対象にする。
+function canHandoffTuner(current, nextType, tuners) {
+	if (!Array.isArray(tuners) || !current.mirakurunStreamPath) return false;
+	const matches = tuners.filter(tuner => Array.isArray(tuner?.users) &&
+		tuner.users.some(user => user?.url === current.mirakurunStreamPath));
+	if (matches.length !== 1) return false;
+	const tuner = matches[0];
+	// Closing one service cannot release a tuner still shared by another user.
+	return tuner.isAvailable !== false && tuner.isDisabled !== true &&
+		Array.isArray(tuner.types) && tuner.types.includes(current.channel.type) && tuner.types.includes(nextType) &&
+		tuner.users.length === 1;
 }
 
 function getHandoffEndLackCandidateInfo(nextProgram, tuners = null) {
@@ -2239,7 +2233,8 @@ function getHandoffEndLackCandidateInfo(nextProgram, tuners = null) {
 			continue;
 		}
 
-		if (!current._stream || current._operatorNg || current._operatorAbort || current._operatorEndLack) {
+		if (!current._stream || current._stream.destroyed || current.operatorRecordingEnd ||
+			current._operatorHistoryPending || current.operatorResumePending || current._operatorNg || current._operatorAbort || current._operatorEndLack) {
 			continue;
 		}
 
@@ -2260,18 +2255,11 @@ function getHandoffEndLackCandidateInfo(nextProgram, tuners = null) {
 		if (typeof currentType !== 'string' || !currentType || typeof nextType !== 'string' || !nextType) {
 			continue;
 		}
-		if (currentType !== nextType) {
-			if (tuners === null) {
-				if (remainSeconds <= endLackMaxSeconds) needsTunerInfo = true;
-				continue;
-			}
-			if (!canHandoffAcrossTypes(currentType, nextType, tuners)) {
-				continue;
-			}
-		}
-
 		if (remainSeconds <= endLackMaxSeconds) {
-			if (!candidate || remainSeconds < candidateRemainSeconds) {
+			if (tuners === null) { needsTunerInfo = true; continue; }
+			if (!canHandoffTuner(current, nextType, tuners)) continue;
+			if (!candidate || Number(boundaryOverride(current)) < Number(boundaryOverride(candidate)) ||
+				(boundaryOverride(current) === boundaryOverride(candidate) && remainSeconds < candidateRemainSeconds)) {
 				candidate = current;
 				candidateRemainSeconds = remainSeconds;
 			}

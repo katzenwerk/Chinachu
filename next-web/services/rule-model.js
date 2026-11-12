@@ -19,6 +19,10 @@ export function ruleTitleMode(rule) {
   return rule?.reserve_titles_mode === 'and' ? 'and' : 'or';
 }
 
+export function ruleHandoffProtected(rule) {
+  return rule?.recordingHandoffProtected === true;
+}
+
 export function buildRuleChannelMap(schedule) {
   const channels = new Map();
   (Array.isArray(schedule) ? schedule : []).forEach(channel => {
