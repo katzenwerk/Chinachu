@@ -19,7 +19,7 @@ function recordedStatus(item) {
 // Operator process timestamps, not TS packet or tuner acquisition/release times.
 export function operatorRecordingInfo(program) {
   const drop = program?.mirakurunDrop;
-  const tunerName = text(drop?.tunerName);
+  const tunerName = text(drop?.tunerName) === null ? null : drop.tunerName;
   const tunerIndex = Number.isInteger(drop?.tunerIndex) && drop.tunerIndex >= 0 ? drop.tunerIndex : null;
   const start = finitePositive(program?.operatorRecordingStart);
   const end = finitePositive(program?.operatorRecordingEnd);
@@ -32,7 +32,7 @@ export function operatorRecordingInfo(program) {
     return timestamp % 1000 ? `${label}.${String(date.getMilliseconds()).padStart(3, '0')}` : label;
   };
   return { tunerName, tunerIndex, start, end,
-    tunerLabel: `${tunerName || '未取得'}${tunerIndex === null ? '' : `（番号 ${tunerIndex}）`}`,
+    tunerLabel: tunerName ?? (tunerIndex === null ? '割当不明' : `チューナー #${tunerIndex}`),
     startLabel: format(start), endLabel: format(end) };
 }
 

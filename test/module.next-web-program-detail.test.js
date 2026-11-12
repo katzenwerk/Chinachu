@@ -51,6 +51,7 @@ async function checkContextMenus() {
 		vm.runInNewContext(source, sandbox);
 		const factory = Object.values(sandbox).find(value => typeof value === 'function' && value.name.startsWith('create'));
 		const menu = factory({ enableFilter: true, onAction: (action, item) => actions.push({ action, item }),
+			prepareItem: name === modules[1] ? item => { const request = { id: item.id, ...deferred() }; requests.push(request); return request.promise; } : undefined,
 			resolveRule: (item, context) => { assert.ok(context.detail.rules); return context.model.actions.rule; } });
 		const root = document.body.children[0], submenu = document.body.children[1];
 		const state = () => JSON.stringify(root.children.map(child => [child.dataset.action, child.hidden, child.disabled, child.textContent]));
@@ -58,7 +59,7 @@ async function checkContextMenus() {
 		const context = { detail: { rules: [] }, model: { actions: { reservation: 'skip', stopRecording: null, rule: { mode: 'create' } },
 			media: { liveModel: null }, phase: { key: 'reserved' } }, seriesContext: null };
 		const readyItem = id => name === modules[0] ? context : item(id);
-		if (name === modules[0]) {
+		if (name === modules[0] || name === modules[1]) {
 			const first = menu.open(item('first'), { x: 790, y: 790 });
 			assert.strictEqual(root.hidden, true);
 			const second = menu.open(item('second'), { x: 790, y: 790 });
@@ -118,7 +119,7 @@ async function checkContextMenus() {
 	pending = deferred(); const fresh = service.loadProgramActionContext('same', known);
 	assert.strictEqual(reads, 2); pending.resolve({ program: {} }); await fresh;
 	// Both recording menus use direct deletion without opening a detail dialog.
-	for (const [page, marker] of [['series-page', 'const recordedContextMenu =']]) {
+	for (const [page, marker] of [['series-page', 'const recordedContextMenu ='], ['conflicts-page', 'const historyMenu =']]) {
 		const source = fs.readFileSync(path.join(__dirname, `../next-web/pages/${page}.js`), 'utf8');
 		const begin = source.indexOf('    onAction(action, item) {', source.indexOf(marker));
 		const end = source.indexOf('\n  });', begin);
@@ -391,7 +392,7 @@ test('common programme detail maps reservation, rule and recorded actions withou
 	assert.strictEqual(recorded.matchStatus, 'RECORDED');
 	assert.strictEqual(recorded.media.playable, true);
 	assert.strictEqual(recorded.actions.deleteRecording.recordedId, 'recorded-a');
-	assert.strictEqual(recorded.operatorRecording.tunerLabel, '未取得');
+	assert.strictEqual(recorded.operatorRecording.tunerLabel, '割当不明');
 	assert.strictEqual(recorded.operatorRecording.startLabel, '未取得');
 	assert.strictEqual(recorded.operatorRecording.endLabel, '未取得');
 	const actualStart = new Date(2026, 10, 11, 19, 59, 45, 280).getTime();
@@ -400,7 +401,7 @@ test('common programme detail maps reservation, rule and recorded actions withou
 		program: { id: 'recorded-a', operatorRecordingStart: actualStart, operatorRecordingEnd: actualEnd,
 			tuner: { name: 'dummy' }, mirakurunDrop: { tunerName: 'PT3 GR 1', tunerIndex: 0 } },
 		match: { status: 'RECORDED' } }));
-	assert.strictEqual(actual.operatorRecording.tunerLabel, 'PT3 GR 1（番号 0）');
+	assert.strictEqual(actual.operatorRecording.tunerLabel, 'PT3 GR 1');
 	assert.match(actual.operatorRecording.startLabel, /19:59:45\.280$/);
 	assert.match(actual.operatorRecording.endLabel, /20:29:59\.830$/);
 

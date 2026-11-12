@@ -61,24 +61,38 @@ test('timetable and recording-history positions preserve intervals and tuner ide
 		recording('unknown', 0, 10000, {}), recording('past', 0, 10000, { tunerName: 'Old PT3', tunerIndex: 0 }),
 		{ id: 'missing-times', start, end: start + 60000, tuner: { name: 'PT3 GR 1' } },
 		recording('outside', -60000, -1)
-	], tuners, { start, end: start + 3 * 3600000 });
-	assert.deepStrictEqual(Array.from(history.rows, row => row.label), ['PT3 BS 1', 'PT3 GR 1', 'Old PT3（番号 0）（現在の一覧外）', '割当不明']);
+	], { start, end: start + 3 * 3600000 });
+	assert.deepStrictEqual(Array.from(history.rows, row => row.label), ['Old PT3', 'PT3 GR 1', '割当不明']);
 	assert.strictEqual(history.unavailable, 1);
-	assert.strictEqual(history.rows[1].tracks.length, 2);
-	assert.deepStrictEqual(Array.from(history.rows[1].tracks[0], entry => entry.program.id), ['prior', 'next']);
-	assert.strictEqual(history.rows[1].tracks[0][1].period.start - history.rows[1].tracks[0][0].period.end, 2000);
-	assert.strictEqual(history.rows[1].tracks[0][1].period.start, start + 47280);
+	const recordedTuner = history.rows.find(row => row.key === `recorded:${JSON.stringify(['PT3 GR 1', 0])}`);
+	assert.strictEqual(recordedTuner.tracks.length, 2);
+	assert.deepStrictEqual(Array.from(recordedTuner.tracks[0], entry => entry.program.id), ['prior', 'next']);
+	assert.strictEqual(recordedTuner.tracks[0][1].period.start - recordedTuner.tracks[0][0].period.end, 2000);
+	assert.strictEqual(recordedTuner.tracks[0][1].period.start, start + 47280);
 	assert.match(operatorRecordingInfo(recording('precise', 47280, 60000)).startLabel, /:47\.280$/);
 	assert.match(operatorRecordingInfo(recording('precise', 47280, 60000)).endLabel, /:00$/);
 	assert.strictEqual(operatorRecordingInfo({ start, end: start + 10000, tuner: { name: 'dummy' } }).startLabel, '未取得');
-	assert.strictEqual(operatorRecordingInfo({ mirakurunDrop: { tunerIndex: null } }).tunerLabel, '未取得');
-	const ambiguous = context.historyTracks([recording('ambiguous', 0, 1000, { tunerName: 'same' })],
-		[{ name: 'same', index: 0 }, { name: 'same', index: 1 }], { start, end: start + 2000 });
-	assert.strictEqual(ambiguous.rows[2].label, '割当不明');
-	const oldApi = context.historyTracks([recording('old-api', 0, 1000)], [{ types: ['GR'] }], { start, end: start + 2000 });
-	assert.strictEqual(oldApi.unidentifiedList, true);
-	assert.strictEqual(oldApi.rows.length, 1);
-	assert.match(oldApi.rows[0].label, /PT3 GR 1.*一覧照合不可/);
+	assert.strictEqual(operatorRecordingInfo({ mirakurunDrop: { tunerIndex: null } }).tunerLabel, '割当不明');
+	const partial = context.historyTracks([
+		recording('name-only', 0, 1000, { tunerName: 'same' }),
+		recording('index-only', 0, 1000, { tunerIndex: 0 }),
+		recording('both', 0, 1000, { tunerName: 'same', tunerIndex: 0 }),
+		recording('other-index', 0, 1000, { tunerName: 'same', tunerIndex: 1 })
+	], { start, end: start + 2000 });
+	assert.deepStrictEqual(Array.from(partial.rows, row => row.label), ['same', 'チューナー #0', 'same', 'same']);
+	assert.notStrictEqual(partial.rows[2].key, partial.rows[3].key);
+	assert.deepStrictEqual(Array.from(partial.rows, row => Array.from(row.tracks[0], entry => entry.program.id)),
+		[['name-only'], ['index-only'], ['both'], ['other-index']]);
+	for (const [saved, expected] of [
+		[{ tunerName: 'PT3-S3', tunerIndex: 0 }, 'PT3-S3'],
+		[{ tunerName: 'e-better DTV02A-4TS-P #1', tunerIndex: 2 }, 'e-better DTV02A-4TS-P #1'],
+		[{ tunerIndex: 2 }, 'チューナー #2'], [{}, '割当不明'],
+		[{ tunerName: ' PT3-S3 ', tunerIndex: 0 }, ' PT3-S3 ']
+	]) {
+		const info = operatorRecordingInfo({ mirakurunDrop: saved });
+		assert.strictEqual(info.tunerLabel, expected);
+		assert.strictEqual(info.tunerIndex, saved.tunerIndex ?? null);
+	}
 
 	// Exercise the existing API script without Mirakurun or service operations.
 	const api = fs.readFileSync(path.join(__dirname, '../api/script-tuners.vm.js'), 'utf8');

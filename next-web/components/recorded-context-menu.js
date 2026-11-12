@@ -1,10 +1,10 @@
 import { viewportCssPixels } from '../services/ui-scale.js';
 import { isRecordedResultPlayable } from '../services/recorded-result-warnings.js';
 
-// 録画結果一覧専用。番組情報の取得や削除権限の判定は呼び出し元・詳細モーダルに委ねる。
+// 録画結果・実績の共通操作。追加情報が必要な場合だけprepareItemで表示前に取得する。
 let nextSubmenuId = 0;
 
-export function createRecordedContextMenu({ onAction }) {
+export function createRecordedContextMenu({ onAction, prepareItem }) {
   const menu = document.createElement('div');
   menu.className = 'recorded-context-menu';
   menu.setAttribute('role', 'menu');
@@ -47,6 +47,7 @@ export function createRecordedContextMenu({ onAction }) {
   const menuButtons = Array.from(menu.querySelectorAll('button[data-action]'));
   const submenuButtons = Array.from(submenu.querySelectorAll('button[data-action]'));
   let selected = null;
+  let generation = 0;
   let destroyed = false;
 
   function positionSubmenu() {
@@ -96,15 +97,30 @@ export function createRecordedContextMenu({ onAction }) {
   }
 
   function close() {
+    generation++;
     clearMenuFocus();
     menu.hidden = true;
     selected = null;
     toggleFilters(false);
   }
 
-  function open(item, { x, y }) {
+  function open(item, point) {
     if (destroyed) return;
     close();
+    selected = item;
+    if (typeof prepareItem !== 'function') return show(item, point);
+    const current = generation;
+    return Promise.resolve().then(() => prepareItem(item)).then(ready => {
+      if (destroyed || current !== generation) return;
+      show(ready, point);
+    }).catch(error => {
+      if (destroyed || current !== generation) return;
+      close();
+      window.alert(`メニューを取得できませんでした: ${error?.message || error}`);
+    });
+  }
+
+  function show(item, { x, y }) {
     selected = item;
     toggleFilters(false);
     menu.querySelector('[data-action="filter"]').hidden = item?.hideFilter === true;
@@ -155,16 +171,17 @@ export function createRecordedContextMenu({ onAction }) {
   });
 
   function onPointerDown(event) {
-    if (!menu.hidden && !menu.contains(event.target) && !submenu.contains(event.target)) close();
+    if (selected && !menu.contains(event.target) && !submenu.contains(event.target)) close();
   }
   function onKeyDown(event) {
-    if (menu.hidden) return;
+    if (!selected) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
       close();
       return;
     }
+    if (menu.hidden) return;
     if ((event.key === 'Enter' || event.key === ' ') &&
         !menu.contains(document.activeElement) && !submenu.contains(document.activeElement)) {
       event.preventDefault();

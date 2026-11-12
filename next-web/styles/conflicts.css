@@ -2,8 +2,6 @@
 .conflicts-page > [hidden] { display: none; }
 .conflicts-mode-tabs { display: flex; gap: 4px; }
 .conflicts-mode-tabs [aria-selected="true"] { background: var(--brand-soft); color: var(--brand-strong); }
-.conflicts-history { min-width: 0; }
-.conflicts-timeline-bar.is-actual { min-width: 0; padding: 3px 0; border: 0; border-radius: 0; }
 .conflicts-intro { display: grid; gap: 8px; }
 .conflicts-intro h2 { margin: 0; font-size: 18px; color: var(--text); }
 .conflicts-intro p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
@@ -54,7 +52,7 @@
 .conflicts-timeline-bar.is-clipped-right::after { position: absolute; top: 3px; right: 2px; content: '▶'; font-size: 9px; }
 
 /* Independent reservation-based overview below conflict detail. */
-.conflicts-overview { display: grid; gap: 12px; min-width: 0; }
+.conflicts-overview,.conflicts-history { display: grid; gap: 12px; min-width: 0; }
 .conflicts-timeline-date-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
 .conflicts-timeline-date-label input { min-height: 30px; max-width: 230px; padding: 3px 7px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); color: var(--text); font: inherit; font-size: 12px; }
 .conflicts-timeline-empty { margin: 0; padding: 14px; color: var(--muted); font-size: 12px; }

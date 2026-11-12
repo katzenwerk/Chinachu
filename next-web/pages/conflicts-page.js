@@ -4,6 +4,11 @@ import { createProgramHover, programHoverInfo, setProgramHover } from '../compon
 import { channelLogoUrl } from '../services/recording-model.js';
 import { reservationTags } from '../services/reservation-model.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
+import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
+import { loadProgramActionContext, copyProgramTitle, programSearchUrl } from '../services/program-actions.js';
+import { deleteRecordedFromContext } from '../services/recorded-delete-action.js';
+import { openRecordedPlaybackOverlay } from '../services/live-player-adapter.js';
+import { seriesEventHref } from '../services/series-event-model.js';
 import { programDetailUrl } from '../services/program-detail-client.js';
 import { operatorRecordingInfo } from '../services/recorded-result-warnings.js';
 import { subscribeRecordedNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
@@ -164,13 +169,9 @@ function timelineTracks(entries) {
   return [...channels.values()];
 }
 
-function historyTracks(programs, tuners, range) {
-  const identifiedTuners = (tuners || []).filter(tuner => tuner.name || Number.isInteger(tuner.index) && tuner.index >= 0);
-  const unidentifiedList = tuners === null || identifiedTuners.length !== tuners.length;
-  const rows = identifiedTuners.map((tuner, index) => ({ key: `registered:${index}`, label: tuner.name || `チューナー番号 ${tuner.index ?? '未取得'}`,
-    tuner, tracks: [[]] }));
-  const historical = new Map();
-  const unknown = { key: 'unknown', label: '割当不明', tracks: [[]] };
+function historyTracks(programs, range) {
+  const rows = new Map();
+  const unknown = { key: 'unknown', label: '割当不明', tracks: [] };
   let unavailable = 0;
   const entries = programs.flatMap(program => {
     const info = operatorRecordingInfo(program);
@@ -180,19 +181,15 @@ function historyTracks(programs, tuners, range) {
   }).sort((a, b) => a.period.start - b.period.start || a.period.end - b.period.end);
   for (const entry of entries) {
     const { tunerName: name, tunerIndex: index } = entry.info;
-    const matches = rows.filter(row => (index === null || row.tuner.index === index) &&
-      (name === null || row.tuner.name === name));
-    let row;
-    if (name === null && index === null || matches.length > 1) row = unknown;
-    else if (matches.length === 1) row = matches[0];
-    else {
+    let row = unknown;
+    if (name !== null || index !== null) {
       const key = JSON.stringify([name, index]);
-      if (!historical.has(key)) historical.set(key, { key: `past:${key}`, label: `${entry.info.tunerLabel}（${unidentifiedList ? '一覧照合不可' : '現在の一覧外'}）`, tracks: [] });
-      row = historical.get(key);
+      if (!rows.has(key)) rows.set(key, { key: `recorded:${key}`, label: entry.info.tunerLabel, tracks: [] });
+      row = rows.get(key);
     }
     placeTimelineEntry(row, entry);
   }
-  return { rows: [...rows, ...historical.values(), ...(unknown.tracks[0].length ? [unknown] : [])], unavailable, unidentifiedList };
+  return { rows: [...rows.values(), ...(unknown.tracks.length ? [unknown] : [])], unavailable };
 }
 
 function createTimeline(programs, target, targetPeriod, offsetHours, onShift, onContextMenu, general = null, tuners = null) {
@@ -203,7 +200,7 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
     step: TIMELINE_STEP_MS
   };
   const duration = range.end - range.start;
-  const history = actual ? historyTracks(programs, tuners, range) : null;
+  const history = actual ? historyTracks(programs, range) : null;
   const entries = actual ? [] : timelineEntries(programs, range);
   const tracks = actual ? history.rows : timelineTracks(entries);
   const segments = actual ? [] : bookingLoadSegments(entries, range);
@@ -334,7 +331,6 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
       link.textContent = name;
       const hover = programHoverInfo(entry.program, { channelLogoUrl: channelLogoUrl(entry.program.channel), statuses: actual ? [] : reservationTags(entry.program) });
       if (actual) {
-        link.classList.add('is-actual');
         link.dataset.historySignature = JSON.stringify([name, entry.program.channel, entry.info, entry.program.category]);
         hover.description = `放送局・チャンネル：${channelOf(entry.program)}${entry.program.channel?.channel ? ` / ${entry.program.channel.channel}` : ''}\n使用チューナー：${entry.info.tunerLabel}\n録画開始（Operator）：${entry.info.startLabel}\n録画終了（Operator）：${entry.info.endLabel}`;
         // Do not present the programme's scheduled interval as an actual interval.
@@ -349,7 +345,7 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
         event.preventDefault();
         openProgramDetailDialog({ id });
       });
-      if (id && !actual) {
+      if (id) {
         const openContext = event => {
           event.preventDefault();
           event.stopPropagation();
@@ -382,7 +378,7 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
   wrapper.append(scroller);
   const footer = document.createElement('p');
   footer.className = 'conflicts-timeline-note';
-  footer.textContent = actual ? `左クリック：番組詳細${history.unavailable ? `。実績時刻が不足または不正な録画 ${history.unavailable}件は非表示です。` : ''}${history.unidentifiedList ? ' チューナー一覧の識別情報が未取得のため、記録された識別情報を表示しています。' : ''}` : general === null
+  footer.textContent = actual ? `左クリック：番組詳細　右クリック：録画結果の操作${history.unavailable ? `。実績時刻が不足または不正な録画 ${history.unavailable}件は非表示です。` : ''}` : general === null
     ? '左クリック：番組詳細　右クリック：番組表と同じ操作メニュー。薄赤の背景は、対応放送波と共用を考慮した収容超過の推定区間です。'
     : '左クリック：番組詳細　右クリック：番組表と同じ操作メニュー。予約本数は使用台数や録画実績とは異なります。';
   wrapper.append(footer);
@@ -478,6 +474,7 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
   const timelineOffsets = new Map();
   let overviewStart = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
   let overviewCalendar = null;
+  const reservationDescription = '競合が予測された予約の前後と、指定日時の予約状況を表示します。時間帯別の収容超過は対応放送波から推定し、実際のチューナー割当は再現していません。';
   let mode = 'reservation';
   let historyPrograms = null;
   let historyRequest = null;
@@ -499,9 +496,15 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
     button.addEventListener('click', () => {
       if (mode === value) return;
       programHover.close(); activeMenu?.remove(); activeMenu = null;
+      historyMenu.close();
       mode = value;
       tabs.querySelectorAll('button').forEach(tab => tab.setAttribute('aria-selected', String(tab.dataset.mode === mode)));
-      intro.hidden = content.hidden = overview.hidden = mode === 'history';
+      content.hidden = overview.hidden = mode === 'history';
+      count.hidden = mode === 'history';
+      heading.textContent = mode === 'history' ? '録画実績タイムライン' : '予約タイムライン';
+      description.textContent = mode === 'history'
+        ? '録画履歴に保存されたチューナーごとに、Operatorの録画開始・終了時刻を表示します。'
+        : reservationDescription;
       historyHost.hidden = mode !== 'history';
       if (mode === 'history') { renderHistory(); void refreshHistory(); }
       else render();
@@ -521,7 +524,7 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
   count.className = 'conflicts-count';
   count.textContent = '確認中';
   const description = document.createElement('p');
-  description.textContent = '競合が予測された予約の前後と、指定日時の予約状況を表示します。時間帯別の収容超過は対応放送波から推定し、実際のチューナー割当は再現していません。';
+  description.textContent = reservationDescription;
   intro.append(heading, count, description);
   const content = document.createElement('div');
   content.className = 'conflicts-content';
@@ -538,6 +541,7 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
   container.replaceChildren(page);
 
   function changeOverviewStart(timestamp) {
+    historyMenu.close();
     overviewStart = timestamp;
     if (mode === 'history') renderHistory(); else render();
   }
@@ -549,18 +553,18 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
       return;
     }
     const range = { start: overviewStart, end: overviewStart + TIMELINE_DURATION_MS };
-    const history = historyTracks(historyPrograms, tuners, range);
-    const signature = JSON.stringify([overviewStart, Math.floor(Date.now() / HOUR_MS), history, tuners]);
+    const history = historyTracks(historyPrograms, range);
+    const signature = JSON.stringify([overviewStart, Math.floor(Date.now() / HOUR_MS), history]);
     if (signature === historySignature) return;
     const current = historyHost.querySelector('.conflicts-timeline-section');
     const incoming = createTimeline(historyPrograms, null, null, 0,
-      delta => changeOverviewStart(overviewStart + delta * HOUR_MS), null, {
+      delta => changeOverviewStart(overviewStart + delta * HOUR_MS), openHistoryMenu, {
         history: true, start: overviewStart, omitCalendar: Boolean(current),
         isCurrent: overviewStart === Math.floor(Date.now() / HOUR_MS) * HOUR_MS,
         onStartChange: changeOverviewStart,
         onReset: () => changeOverviewStart(Math.floor(Date.now() / HOUR_MS) * HOUR_MS),
         onCalendarCreated: calendar => { historyCalendar = calendar; }
-      }, tuners);
+      });
     if (!current) historyHost.replaceChildren(incoming);
     else {
       const chart = current.querySelector('.conflicts-timeline-chart');
@@ -622,7 +626,63 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
     expiryTimer = null;
   }
 
+  function changedHistory() {
+    historyGeneration++;
+    historyDirty = true;
+    return refreshHistory();
+  }
+  const menuError = error => window.alert(String(error?.message || error));
+  const historyMenu = createRecordedContextMenu({
+    async prepareItem(program) {
+      const { detail, model, seriesContext } = await loadProgramActionContext(program.id);
+      return { ...program, key: model.eventKey, recordedId: String(program.id),
+        status: model.media.playable ? 'RECORDED' : null,
+        recordingPathMissing: !model.media.playable || model.media.recordedId !== String(program.id),
+        ruleUid: detail.program.ruleUid || detail.match?.reservationMeta?.ruleUid,
+        seriesContext };
+    },
+    onAction(action, item) {
+      if (action === 'play') {
+        void openRecordedPlaybackOverlay({ playable: true, recordedId: item.recordedId,
+          title: item.fullTitle || item.title }).catch(menuError);
+      } else if (action === 'download') {
+        const anchor = document.createElement('a');
+        anchor.href = `/api/recorded/${encodeURIComponent(item.recordedId)}/file.m2ts`;
+        anchor.download = ''; anchor.hidden = true;
+        document.body.append(anchor); anchor.click(); anchor.remove();
+      } else if (action === 'delete') {
+        void deleteRecordedFromContext({ key: item.key, recordedId: item.recordedId }).then(result => {
+          if (!result || !active) return;
+          void changedHistory();
+          if (result.storageRefreshError) menuError(`録画ファイルは削除しました。容量表示の更新に失敗しました: ${result.storageRefreshError}`);
+        }).catch(menuError);
+      } else if (action === 'series-view') {
+        const href = seriesEventHref(item.seriesContext);
+        if (href) location.hash = href;
+      } else if (action === 'detail' || action === 'rule' || action.startsWith('series-')) {
+        openProgramDetailDialog({ id: item.recordedId, key: item.key,
+          initialAction: action === 'detail' ? null : action, onChanged: changedHistory });
+      } else if (action.startsWith('filter-')) {
+        const params = new URLSearchParams();
+        if (action === 'filter-title') params.set('search', item.title || item.fullTitle || '');
+        if (action === 'filter-channel' && item.channel?.id) params.set('channelId', item.channel.id);
+        if (action === 'filter-rule' && item.ruleUid) params.set('ruleUid', item.ruleUid);
+        location.hash = `#recorded${params.size ? '?' + params : ''}`;
+      } else if (action === 'copy-title') {
+        void copyProgramTitle(item.fullTitle || item.title).catch(menuError);
+      } else if (action === 'search-google' || action === 'search-wikipedia') {
+        window.open(programSearchUrl(action === 'search-google' ? 'google' : 'wikipedia', item.fullTitle || item.title), '_blank', 'noopener');
+      }
+    }
+  });
+  function openHistoryMenu(program, event) {
+    programHover.close();
+    activeMenu?.remove(); activeMenu = null;
+    void historyMenu.open(program, { x: event.clientX, y: event.clientY });
+  }
+
   function openProgramMenu(program, event) {
+    historyMenu.close();
     activeMenu?.remove();
     activeMenu = createGuideProgramMenu({
       program,
@@ -797,6 +857,7 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
     generation++;
     clearExpiryTimer();
     activeMenu?.remove();
+    historyMenu.destroy();
     overviewCalendar?.destroy();
     historyCalendar?.destroy();
     ruleDialog?.close();
