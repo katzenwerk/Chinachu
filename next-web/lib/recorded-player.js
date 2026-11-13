@@ -22,7 +22,7 @@ function isDesktopNonSafariEnvironment(nav) {
 		/(?:Windows NT|Macintosh|X11|CrOS)/i.test(userAgent);
 }
 
-export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compatHlsUrl }) {
+export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compatHlsUrl, chaseStatusUrl, onStatus = () => {} }) {
 	const stage = document.createElement('div');
 	stage.className = 'program-ts-stage';
 	const picture = document.createElement('div');
@@ -75,13 +75,27 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 
 	const player = new Mpeg2TsPlayer(video, {
 		mediaSource: 'auto', oversample: 2, recoveryInterval: 24,
-		splitFieldSamples: true
+		splitFieldSamples: true, chaseStatusUrl
 	});
 	let destroyed = false;
 	let playerDestroyed = false;
 	let captionsEnabled = true;
 	let seekFeedbackTimer = null;
 	let hlsCloseUrl = null;
+	let requestedUrl = null;
+	let resumeTime = 0;
+	let pendingRestore = null;
+	const retryButton = document.createElement('button');
+	retryButton.type = 'button';
+	retryButton.textContent = '再試行';
+	retryButton.hidden = true;
+	if (chaseStatusUrl) controls.append(retryButton);
+	const rememberTime = () => { if (video.currentTime > 0) resumeTime = video.currentTime; };
+	const chaseState = event => {
+		const text = event.detail.phase === 'reconnecting' ? '再接続中…' : '';
+		status.textContent = text;
+		onStatus(text);
+	};
 	const entries = [];
 	// Same feeder/controller/renderer wiring as packages/demo/src/demo.ts.
 	const feed = event => {
@@ -110,8 +124,19 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		closeHlsSession();
 		onEnded();
 	};
-	const failed = event => onError(event.detail.error);
+	const failed = event => {
+		if (destroyed) return;
+		if (pendingRestore) {
+			player.removeEventListener('seekable', pendingRestore);
+			video.removeEventListener('loadedmetadata', pendingRestore);
+		}
+		pendingRestore = null;
+		if (chaseStatusUrl) retryButton.hidden = false;
+		onError(event.detail.error);
+	};
 	const mediaFailed = () => {
+		// The chase watchdog owns the recovery deadline, including native stalls.
+		if (chaseStatusUrl) return;
 		const mediaError = video.error;
 		const details = [
 			mediaError ? 'code=' + mediaError.code : 'code=unknown',
@@ -128,6 +153,12 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		player.removeEventListener('private_stream_1', feed);
 		player.removeEventListener('private_stream_2', feed);
 		player.removeEventListener('error', failed);
+		player.removeEventListener('chase', chaseState);
+		if (pendingRestore) {
+			player.removeEventListener('seekable', pendingRestore);
+			video.removeEventListener('loadedmetadata', pendingRestore);
+		}
+		pendingRestore = null;
 		for (const { controller, feeder, renderer } of entries.splice(0)) {
 			controller.hide();
 			controller.detachMedia();
@@ -262,6 +293,7 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		closeHlsSession();
 		disposeMpegPlayer();
 		video.removeEventListener('ended', ended);
+		video.removeEventListener('timeupdate', rememberTime);
 		video.removeEventListener('error', mediaFailed);
 		video.removeEventListener('resize', resize);
 		picture.removeEventListener('keydown', seekByArrow, { capture: true });
@@ -298,6 +330,10 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 	player.addEventListener('private_stream_1', feed);
 	player.addEventListener('private_stream_2', feed);
 	player.addEventListener('error', failed);
+	if (chaseStatusUrl) {
+		player.addEventListener('chase', chaseState);
+		video.addEventListener('timeupdate', rememberTime);
+	}
 	video.addEventListener('ended', ended);
 	video.addEventListener('error', mediaFailed);
 	video.addEventListener('resize', resize);
@@ -341,12 +377,37 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		fullscreenChanged();
 	});
 
+	retryButton.addEventListener('click', async () => {
+		if (!requestedUrl || destroyed) return;
+		retryButton.hidden = true;
+		const targetTime = resumeTime;
+		const restore = () => {
+			if (destroyed || player.duration === null || video.readyState < 1) return;
+			player.removeEventListener('seekable', restore);
+			video.removeEventListener('loadedmetadata', restore);
+			pendingRestore = null;
+			if (!destroyed && targetTime > 0 && player.duration !== null) video.currentTime = Math.min(targetTime, player.duration);
+		};
+		if (pendingRestore) {
+			player.removeEventListener('seekable', pendingRestore);
+			video.removeEventListener('loadedmetadata', pendingRestore);
+		}
+		pendingRestore = restore;
+		player.addEventListener('seekable', restore);
+		video.addEventListener('loadedmetadata', restore);
+		try {
+			onStatus('');
+			await player.load(requestedUrl);
+			await video.play().catch(() => {});
+		} catch (error) { failed({ detail: { error } }); }
+	});
 	return {
 		destroy,
 		async loadCompat() {
 			await startCompatPlayback(true);
 		},
 		async load(url) {
+			requestedUrl = url;
 			status.textContent = '読み込み中…';
 			try {
 				await player.load(url);

@@ -17,6 +17,12 @@
     "types"  : ["png", "jpg", "txt"]
   },
 
+  "/:id/chase": {
+    "script": "recording-program-chase",
+    "methods": ["get"],
+    "types": ["json", "m2ts"]
+  },
+
   "/:id/watch": {
     "script" : "recording-program-watch",
     "methods": ["get"],

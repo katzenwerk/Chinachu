@@ -119,7 +119,6 @@
   .recording-home-actions,.recorded-card-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
   .recording-broadcast,.recorded-card-broadcast,.recording-program-meta,.recording-card-meta { font-size: 12px; white-space: normal; }
   .recording-detail,.recorded-card-detail { display: inline-flex; align-items: center; min-height: 44px; font-size: 14px; }
-  .recording-watch-button,.recording-card.is-home-overlay .recording-watch-button { width: 44px; height: 44px; opacity: 1; }
   .recording-card.is-home-overlay .recording-state-badge { display: none; }
   .mobile-recording-state { font-size: 13px; color: var(--brand); }
   .recording-watch-error { grid-column: 1/-1; }

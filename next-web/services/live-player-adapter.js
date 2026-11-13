@@ -75,6 +75,11 @@ export async function openRecordingLiveOverlay(model) {
   return overlay;
 }
 
+export function openChasePlaybackOverlay(model) {
+  if (!model?.id) throw new Error('追っかけ再生に必要な番組情報がありません');
+  return openRecordedPlaybackOverlay({ ...model, playable: true, recordedId: model.id, chase: true });
+}
+
 export async function openRecordedPlaybackOverlay(model) {
   if (!model?.playable || !model.recordedId) throw new Error('この録画は再生できません');
   closeActiveLiveOverlay();
@@ -96,7 +101,8 @@ export async function openRecordedPlaybackOverlay(model) {
       </div>
       <div class="recorded-playback-frame"></div>
     </div>`;
-  overlay.querySelector('.recorded-playback-title').textContent = model.title;
+  overlay.querySelector('.recorded-playback-title').textContent = model.chase ? `${model.title}（追っかけ再生）` : model.title;
+  if (model.chase) overlay.setAttribute('aria-label', `${model.title}の追っかけ再生`);
   const status = overlay.querySelector('.recorded-playback-status');
   const frame = overlay.querySelector('.recorded-playback-frame');
   const closeButton = overlay.querySelector('.chinachu-live-player-close');
@@ -128,9 +134,17 @@ export async function openRecordedPlaybackOverlay(model) {
   activeOverlay = { close, overlay };
 
   const encodedId = encodeURIComponent(model.recordedId);
+  const chaseQuery = new URLSearchParams();
+  if (model.recordingStart) chaseQuery.set('recordingStart', String(model.recordingStart));
+  if (model.programStart) chaseQuery.set('programStart', String(model.programStart));
+  const chaseBase = `/api/recording/${encodedId}/chase`;
+  const chaseSuffix = chaseQuery.size ? `?${chaseQuery}` : '';
+  const chaseStatusUrl = model.chase ? new URL(`${chaseBase}.json${chaseSuffix}`, document.baseURI).href : undefined;
   player = module.createRecordedPlayer(frame, {
-    compatUrl: `/api/recorded/${encodedId}/watch.mp4?profile=compat`,
-    compatHlsUrl: `/api/recorded/${encodedId}/watch-hls.json?profile=compat`,
+    chaseStatusUrl,
+    compatUrl: model.chase ? undefined : `/api/recorded/${encodedId}/watch.mp4?profile=compat`,
+    compatHlsUrl: model.chase ? undefined : `/api/recorded/${encodedId}/watch-hls.json?profile=compat`,
+    onStatus: text => { if (!closed) status.textContent = text; },
     onEnded: () => { if (!closed) status.textContent = '再生が終了しました'; },
     onError: error => { if (!closed) status.textContent = recordedPlaybackErrorText(error); }
   });
@@ -140,7 +154,7 @@ export async function openRecordedPlaybackOverlay(model) {
     overlay.focus();
   }
   try {
-    await player.load(`/api/recorded/${encodedId}/file.m2ts`);
+    await player.load(model.chase ? new URL(`${chaseBase}.m2ts${chaseSuffix}`, document.baseURI).href : `/api/recorded/${encodedId}/file.m2ts`);
   } catch (error) {
     if (!closed) status.textContent = recordedPlaybackErrorText(error);
   }

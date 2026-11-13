@@ -6,6 +6,7 @@ import {
   isRecordedCompatPlaybackAvailable,
   mountRecordedPlayback,
   openRecordingLiveOverlay,
+  openChasePlaybackOverlay,
   recordedPlaybackErrorText
 } from '../services/live-player-adapter.js';
 
@@ -262,7 +263,7 @@ function renderMedia(model) {
   poster.className = 'program-detail-media-poster';
   if (poster instanceof HTMLButtonElement) {
     poster.type = 'button';
-    poster.setAttribute('aria-label', model.media.kind === 'recording' ? `${model.title}をライブ視聴` : `${model.title}を再生`);
+    poster.setAttribute('aria-label', model.media.kind === 'recording' ? `${model.title}をLIVE視聴` : `${model.title}を再生`);
   }
   const fallback = document.createElement('div');
   fallback.className = 'program-detail-media-fallback';
@@ -370,12 +371,12 @@ function renderMedia(model) {
   async function startRecordingPlayback() {
     if (disposed || model.media.liveModel === null) return;
     setActionsDisabled(true);
-    status.textContent = 'ライブ視聴を準備しています';
+    status.textContent = 'LIVE視聴を準備しています';
     try {
       await openRecordingLiveOverlay(model.media.liveModel);
       if (!disposed) status.textContent = '';
     } catch (error) {
-      if (!disposed) status.textContent = `ライブ視聴を開始できませんでした: ${error.message || error}`;
+      if (!disposed) status.textContent = `LIVE視聴を開始できませんでした: ${error.message || error}`;
     } finally {
       if (!disposed) setActionsDisabled(false);
     }
@@ -405,10 +406,20 @@ function renderMedia(model) {
     const watchButton = document.createElement('button');
     watchButton.className = 'button is-primary';
     watchButton.type = 'button';
-    watchButton.textContent = 'ライブ視聴';
+    watchButton.textContent = 'LIVE視聴';
     watchButton.addEventListener('click', startRecordingPlayback);
     actions.append(watchButton);
     actionControls.push(watchButton);
+  }
+  if (model.media.chaseModel) {
+    const chaseButton = document.createElement('button');
+    chaseButton.className = 'button';
+    chaseButton.type = 'button';
+    chaseButton.textContent = '追っかけ再生';
+    chaseButton.addEventListener('click', () => openChasePlaybackOverlay(model.media.chaseModel).catch(error => {
+      if (!disposed) status.textContent = `追っかけ再生を開始できませんでした: ${error.message || error}`;
+    }));
+    actions.append(chaseButton);
   }
   if (model.media.downloadUrl !== null) {
     const download = document.createElement('a');

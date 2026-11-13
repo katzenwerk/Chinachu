@@ -46,6 +46,47 @@ async function requestFile(range, options = {}) {
 	return { status, headers, body: Buffer.concat(chunks) };
 }
 
+
+async function requestChase(range, options = {}) {
+	const body = options.body || bytes;
+	const chunks = [], headers = {};
+	let status, closed = 0;
+	const program = { id: 'fixture', start: 1760194800000, operatorRecordingStart: 1760194790000,
+		recorded: '/growing.ts', channel: { id: 'channel-a' } };
+	const saved = { ...program, recorded: '/series/final.ts', operatorRecordingEnd: 1760196600000 };
+	const response = new Writable({ write(chunk, _encoding, next) { chunks.push(chunk); next(); } });
+	response.setHeader = (name, value) => { headers[name.toLowerCase()] = String(value); };
+	response.head = value => { status = value; };
+	response.error = value => { status = value; response.end(); };
+	const recording = options.complete ? [] : [{ ...program, _operatorFilenameFinalTarget: '/series/final.ts' }];
+	const context = {
+		request: { method: 'GET', type: options.type || 'm2ts', param: { id: 'fixture' }, headers: { range }, query: options.query || {} },
+		response, Buffer, Date,
+		data: { status: { feature: { filer: true, streamer: true } } },
+		define: { RECORDING_DATA_FILE: '/recording.json', RECORDED_DATA_FILE: '/recorded.json' },
+		fs: {
+			readFileSync(filename) {
+				if (options.invalidLedger) return '{';
+				return JSON.stringify(filename === '/recording.json' ? recording : options.complete ? [saved] : []);
+			},
+			openSync(filename) {
+				if (filename !== (options.moved || options.complete ? '/series/final.ts' : '/growing.ts'))
+					throw Object.assign(new Error('moved'), { code: 'ENOENT' });
+				return 7;
+			},
+			fstatSync: () => ({ size: body.length, dev: 1, ino: options.replaced ? 22 : 11, birthtimeMs: 10, isFile: () => true }),
+			closeSync() { closed++; },
+			createReadStream(_filename, { fd, start, end }) {
+				assert.equal(fd, 7);
+				return Readable.from([body.subarray(start, end + 1)]);
+			}
+		}
+	};
+	vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../api/script-recording-program-chase.vm.js'), 'utf8'), context);
+	await finished(response);
+	return { status, headers, body: Buffer.concat(chunks), closed };
+}
+
 function deleteRecorded(targetScript, fileExists, options = {}) {
 	const recordedPath = '/fixture.m2ts';
 	const matchPath = '/match.json';
@@ -174,6 +215,21 @@ function requestRecordedDetail(options = {}) {
 }
 
 it('raw recorded download returns exact single-range bytes including suffix and clamped bounds', async () => {
+	const pinned = { identity: '1:11:10', recordingStart: '1760194790000' };
+	const initial = await requestChase('bytes=0-999', { query: pinned });
+	assert.equal(initial.status, 206);
+	assert.deepEqual(initial.body, bytes.subarray(0, 1000));
+	const grown = await requestChase('bytes=1000-', { query: pinned });
+	assert.deepEqual(grown.body, bytes.subarray(1000));
+	const moved = await requestChase('bytes=1000-', { query: pinned, moved: true });
+	assert.deepEqual(moved.body, grown.body);
+	const final = await requestChase('bytes=1000-', { query: pinned, complete: true });
+	assert.deepEqual(final.body, grown.body);
+	const suffix = await requestChase('bytes=-1000', { query: pinned });
+	assert.deepEqual(suffix.body, bytes.subarray(bytes.length - 1000));
+	const bounded = await requestChase('bytes=0-', { body: Buffer.alloc(5 * 1024 * 1024) });
+	assert.equal(bounded.body.length, 4 * 1024 * 1024);
+
 	for (const [range, start, end] of [
 		['bytes=0-999', 0, 999], ['bytes=1000-', 1000, bytes.length - 1],
 		['bytes=-1048576', 1024, bytes.length - 1], ['bytes=0-0', 0, 0],
@@ -191,6 +247,22 @@ it('raw recorded download returns exact single-range bytes including suffix and 
 });
 
 it('unsatisfiable byte ranges return 416 with file size and no body', async () => {
+	const tail = await requestChase(`bytes=${bytes.length}-`);
+	assert.equal(tail.status, 416);
+	assert.equal(tail.headers['content-range'], `bytes */${bytes.length}`);
+	for (const complete of [false, true]) {
+		const metadata = await requestChase(undefined, { type: 'json', complete });
+		assert.equal(metadata.status, 200);
+		assert.equal(metadata.closed, 1);
+		const state = JSON.parse(metadata.body);
+		assert.equal(state.complete, complete);
+		assert.equal(state.size, bytes.length);
+		assert.equal(state.identity, '1:11:10');
+		assert.equal(metadata.body.includes('/growing'), false);
+		assert.equal(metadata.body.includes('/series'), false);
+	}
+	assert.equal((await requestChase('bytes=0-', { body: Buffer.alloc(0) })).status, 416);
+
 	for (const range of ['bytes=1049600-', 'bytes=20-10', 'bytes=-0', 'bytes=999999999999999999999-']) {
 		const result = await requestFile(range);
 		assert.equal(result.status, 416, range);
@@ -204,6 +276,12 @@ it('unsatisfiable byte ranges return 416 with file size and no body', async () =
 });
 
 it('normal downloads and ignored Range forms preserve attachment and file contents', async () => {
+	assert.equal((await requestChase('bytes=0-', { invalidLedger: true })).status, 503);
+	assert.equal((await requestChase('bytes=0-', { query: { recordingStart: '999' } })).status, 409);
+	assert.equal((await requestChase('bytes=0-', { query: { programStart: '999' } })).status, 409);
+	assert.equal((await requestChase('bytes=0-', { query: { identity: '1:11:10' }, replaced: true })).status, 409);
+	assert.equal((await requestChase('bytes=0-1,4-5')).status, 400);
+
 	for (const range of [undefined, 'bytes=0-1,4-5', 'bytes=oops', 'items=0-1', 'bytes=-']) {
 		const result = await requestFile(range);
 		assert.equal(result.status, 200);

@@ -1,3 +1,4 @@
+import { openChasePlaybackOverlay } from '../services/live-player-adapter.js';
 import { applyStorageWarning } from './storage-warning.js';
 import { createChannelLogo } from './channel-logo.js';
 import { createProgramHover, setProgramHover } from './program-hover.js';
@@ -17,6 +18,10 @@ function loadImage(url) {
 
 export function createRecordingCard(initialModel, { onWatch, variant = 'default' } = {}) {
   const homeVariant = variant === 'home';
+  const playbackActions = `<div class="recording-playback-actions">
+    <button class="button recording-live-button" type="button"><svg class="icon icon-small" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47M19.1 1.9a9.96 9.96 0 0 1 0 14.1M9.5 18h5m-6.5 4 4-11 4 11"/></svg><span>LIVE視聴</span></button>
+    <button class="button recording-chase-button" type="button"><svg class="icon icon-small" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z"/><circle cx="12" cy="12" r="10"/></svg><span>追っかけ再生</span></button>
+  </div>`;
   const article = document.createElement('article');
   article.className = `recording-card${homeVariant ? ' is-home-overlay' : ''}`;
   article.innerHTML = homeVariant ? `
@@ -27,7 +32,6 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
         <span class="recording-channel-logo-slot"></span>
         <span class="recording-title-overlay"></span>
       </span>
-      <button class="recording-watch-button" type="button" aria-label="ライブ視聴" title="ライブ視聴"><span aria-hidden="true"></span></button>
       <span class="recording-state-badge"></span>
       <div class="recording-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div>
     </div>
@@ -37,15 +41,15 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
       <span class="recording-broadcast"></span>
       <span class="recording-home-actions">
         <span class="recording-storage-warning storage-warning is-align-right" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></span>
-        <a class="recording-detail" href=""><span aria-hidden="true">ⓘ</span> 詳細</a>
       </span>
+      ${playbackActions}
+      <a class="recording-detail" href=""><span aria-hidden="true">ⓘ</span> 詳細</a>
     </div>
     <p class="recording-watch-error" role="status" hidden></p>` : `
     <div class="recording-thumbnail">
       <div class="recording-placeholder" aria-hidden="true"><svg class="icon"><use href="#icon-record"></use></svg></div>
       <img class="recording-preview-image" hidden alt="">
       <span class="recording-channel-logo-slot"></span>
-      <button class="recording-watch-button" type="button" aria-label="ライブ視聴" title="ライブ視聴"><span aria-hidden="true"></span></button>
       <div class="recording-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div>
     </div>
     <div class="recording-card-body">
@@ -53,6 +57,7 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
       <p class="recording-program-meta"></p>
       <p class="recording-storage-warning storage-warning" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></p>
       <div class="recording-card-meta"><span class="recording-status" hidden></span><span class="recording-elapsed"></span><span class="recording-remaining"></span></div>
+      ${playbackActions}
       <a class="recording-detail" href="">詳細</a>
       <p class="recording-watch-error" role="status" hidden></p>
     </div>`;
@@ -63,12 +68,14 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
   const placeholder = article.querySelector('.recording-placeholder');
   const progress = article.querySelector('.recording-progress');
   const progressBar = progress.querySelector('i');
-  const watchButton = article.querySelector('.recording-watch-button');
+  const watchButton = article.querySelector('.recording-live-button');
   const watchError = article.querySelector('.recording-watch-error');
   const title = article.querySelector(homeVariant ? '.recording-title-overlay' : 'h3');
   const storageWarning = article.querySelector('.recording-storage-warning');
   const stateBadge = article.querySelector('.recording-state-badge');
   const detailLink = article.querySelector('.recording-detail');
+  const chaseButton = article.querySelector('.recording-chase-button');
+  const opening = { live: false, chase: false };
   let currentModel = initialModel;
   const programHover = createProgramHover(article);
   article.querySelectorAll('h3,.recording-title-overlay,.mobile-card-title,.recording-detail').forEach(target => setProgramHover(target, () => currentModel.hover));
@@ -168,7 +175,7 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
       status.textContent = model.statusText;
       status.hidden = model.status !== 'preparing';
     }
-    watchButton.hidden = model.liveChannel === null;
+    updatePlaybackButtons();
     updateChannelLogo(model);
     updateDynamic(model);
     requestPreview(model);
@@ -184,19 +191,33 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
     channelLogo.dispose();
   }
 
-  watchButton.addEventListener('click', async () => {
-    if (typeof onWatch !== 'function' || watchButton.disabled) return;
-    watchButton.disabled = true;
+  function updatePlaybackButtons() {
+    watchButton.disabled = opening.live || !currentModel.liveChannel || typeof onWatch !== 'function';
+    chaseButton.disabled = opening.chase || !currentModel.chaseModel;
+  }
+
+  async function startPlayback(kind) {
+    const button = kind === 'live' ? watchButton : chaseButton;
+    if (disposed || button.disabled) return;
+    opening[kind] = true;
+    updatePlaybackButtons();
     watchError.hidden = true;
     try {
-      await onWatch(currentModel);
+      if (kind === 'live') await onWatch(currentModel);
+      else await openChasePlaybackOverlay(currentModel.chaseModel);
     } catch (error) {
-      watchError.textContent = `ライブ視聴を開始できませんでした: ${error.message || error}`;
-      watchError.hidden = false;
+      if (!disposed) {
+        const label = kind === 'live' ? 'LIVE視聴' : '追っかけ再生';
+        watchError.textContent = `${label}を開始できませんでした: ${error.message || error}`;
+        watchError.hidden = false;
+      }
     } finally {
-      if (!disposed) watchButton.disabled = false;
+      opening[kind] = false;
+      if (!disposed) updatePlaybackButtons();
     }
-  });
+  }
+  watchButton.addEventListener('click', () => startPlayback('live'));
+  chaseButton.addEventListener('click', () => startPlayback('chase'));
 
   update(initialModel);
   return { element: article, update, updateDynamic, refreshPreview, dispose };

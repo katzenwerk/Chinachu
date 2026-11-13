@@ -4,7 +4,7 @@ import { openRuleEditorDialog, programRuleSeed } from './rule-editor-dialog.js';
 import { deleteRecordedProgram, loadProgramDetail, ProgramDetailError, stopRecordingProgram } from '../services/program-detail-client.js';
 import { buildProgramDetailModel, programSeriesContext, reservationActionLabel, seriesCorrectionActions } from '../services/program-detail-model.js';
 import { reserveProgram, setReserveSkip, unreserveProgram } from '../services/timetable-client.js';
-import { openRecordedPlaybackOverlay, openRecordingLiveOverlay } from '../services/live-player-adapter.js';
+import { openRecordedPlaybackOverlay, openRecordingLiveOverlay, openChasePlaybackOverlay } from '../services/live-player-adapter.js';
 import { copyProgramTitle, programSearchUrl } from '../services/program-actions.js';
 import { invalidateResources } from '../services/api-client.js';
 import { subscribeSeriesNotifications, subscribeMatchNotifications, subscribeRecordedNotifications, subscribeRecordingNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
@@ -275,7 +275,7 @@ function createThumbnail(model, onPlay, { onError = null, cacheKey = null, liveU
   const frame = document.createElement(interactive ? 'button' : 'div');
   if (interactive) frame.type = 'button';
   frame.className = 'program-modal-thumbnail';
-  if (interactive) frame.setAttribute('aria-label', `${model.title}を${live || model.media.kind === 'recording' ? 'ライブ視聴' : '再生'}`);
+  if (interactive) frame.setAttribute('aria-label', `${model.title}を${live || model.media.kind === 'recording' ? 'LIVE視聴' : '再生'}`);
   if (url) {
     const image = document.createElement('img');
     image.src = url;
@@ -741,8 +741,19 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       const button = document.createElement('button');
       button.className = 'button primary';
       button.type = 'button';
-      button.textContent = 'Live視聴';
+      button.textContent = 'LIVE視聴';
       button.addEventListener('click', () => openRecordingLiveOverlay(model.media.liveModel).catch(cause => { feedback.textContent = errorText(cause); }));
+      primary.append(button);
+    }
+    if (model.media.chaseModel) {
+      const button = document.createElement('button');
+      button.className = 'button primary';
+      button.type = 'button';
+      button.textContent = '追っかけ再生';
+      button.addEventListener('click', () => {
+        close();
+        openChasePlaybackOverlay(model.media.chaseModel).catch(cause => window.alert(errorText(cause)));
+      });
       primary.append(button);
     }
     if (model.media.playable) {

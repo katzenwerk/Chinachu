@@ -41,11 +41,6 @@
 .recording-thumbnail > .channel-logo { position: absolute; top: 7px; left: 7px; z-index: 4; }
 .recording-placeholder { display: grid; place-items: center; }
 .recording-placeholder .icon { width: 34px; height: 34px; }
-.recording-watch-button { position: absolute; inset: 50% auto auto 50%; z-index: 3; display: grid; width: 48px; height: 48px; padding: 0; transform: translate(-50%,-50%); place-items: center; border: 1px solid rgba(255,255,255,.8); border-radius: 50%; background: rgba(0,0,0,.62); color: #fff; cursor: pointer; opacity: 0; transition: opacity .15s ease, background .15s ease; }
-.recording-watch-button span { width: 0; height: 0; margin-left: 4px; border-top: 9px solid transparent; border-bottom: 9px solid transparent; border-left: 14px solid currentColor; }
-.recording-thumbnail:hover .recording-watch-button, .recording-watch-button:focus-visible { opacity: 1; }
-.recording-watch-button:hover { background: rgba(27,88,61,.9); }
-.recording-watch-button:disabled { cursor: wait; opacity: .65; }
 .recording-progress { position: absolute; right: 0; bottom: 0; left: 0; z-index: 2; height: 6px; background: rgba(255,255,255,.28); }
 .recording-progress i { display: block; height: 100%; background: #59c78b; }
 .recording-card-body { display: flex; flex: 1; flex-direction: column; padding: 8px 10px; }
@@ -62,14 +57,17 @@
 .recording-watch-error { margin: 8px 0 0; color: var(--danger); font-size: 11px; line-height: 1.4; }
 .recording-card.is-home-overlay .recording-card-header { position: absolute; top: 0; right: 0; left: 0; z-index: 4; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 6px 12px 4px; background: linear-gradient(to bottom,rgba(0,0,0,.7) 0%,rgba(0,0,0,.38) 65%,transparent 100%); color: #fff; text-align: left; }
 .recording-card.is-home-overlay .recording-title-overlay { min-width: 0; flex: 1; overflow: hidden; font-size: 12px; font-weight: var(--font-title-weight); line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-.recording-card.is-home-overlay .recording-watch-button { width: 38px; height: 38px; border-color: rgba(255,255,255,.76); background: rgba(0,0,0,.46); opacity: 1; }
-.recording-card.is-home-overlay .recording-watch-button span { margin-left: 3px; border-top-width: 7px; border-bottom-width: 7px; border-left-width: 11px; }
 .recording-card.is-home-overlay .recording-state-badge { position: absolute; right: 5px; bottom: 11px; z-index: 3; padding: 2px 5px; border-radius: 6px; background: rgba(0,0,0,.62); color: #fff; font-size: 11px; font-variant-numeric: tabular-nums; line-height: 1.2; pointer-events: none; }
-.recording-home-footer { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding: 6px 8px 7px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.recording-home-footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; min-width: 0; padding: 6px 8px 7px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .recording-broadcast { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recording-home-actions { display: inline-flex; flex: 0 0 auto; align-items: baseline; gap: 7px; margin-left: auto; }
 .recording-card.is-home-overlay .recording-storage-warning { display: inline-flex; flex: 0 1 auto; margin: 0; white-space: nowrap; }
 .recording-card.is-home-overlay .recording-storage-warning[hidden] { display: none; }
+.recording-playback-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; width: 100%; margin-top: 6px; }
+.recording-playback-actions .button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 44px; height: 100%; padding: 6px; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
+.recording-playback-actions .button > span { min-width: 0; }
+.recording-playback-actions .button:disabled { opacity: .5; cursor: default; }
+.recording-home-footer > .recording-detail { width: 100%; }
 .recording-detail { flex: 0 0 auto; color: var(--brand); font-weight: var(--font-title-weight); text-decoration: none; white-space: nowrap; }
 .recording-detail:hover { text-decoration: underline; }
 .recording-detail:focus-visible { border-radius: 2px; outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -159,7 +157,6 @@
 .home-page.is-layout-c.is-custom-narrow .recording-grid { grid-template-columns: repeat(auto-fill,minmax(0,min(100%,var(--home-c-recording-card-width,350px)))); }
 .home-page.is-layout-c.is-custom-narrow .recorded-recent-grid { grid-template-columns: repeat(auto-fill,minmax(0,min(100%,var(--home-c-recorded-card-width,245px)))); }
 
-@media (hover:none), (pointer:coarse) { .recording-watch-button { opacity: 1; } }
 
 @media (max-width:1180px) { .recording-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width:1100px) { .recorded-recent-grid { grid-template-columns: repeat(3,minmax(0,1fr)); } }

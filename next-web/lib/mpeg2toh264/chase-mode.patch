@@ -1,0 +1,914 @@
+--- a/packages/player/src/source.ts
++++ b/packages/player/src/source.ts
+@@ -106,6 +106,7 @@
+   url: string,
+   signal: AbortSignal,
+   offset = 0,
++  timeoutMs = 0,
+ ): Promise<Source> {
+   // Ask from zero too: a 206 proves this response can be cancelled at an
+   // input high-water mark and resumed later without trusting Accept-Ranges.
+@@ -117,10 +118,12 @@
+   const abortRequest = (): void => request.abort(signal.reason);
+   if (signal.aborted) abortRequest();
+   else signal.addEventListener("abort", abortRequest, { once: true });
++  const timer = timeoutMs ? setTimeout(() => request.abort(), timeoutMs) : null;
+   let closed = false;
+   const close = (): void => {
+     if (closed) return;
+     closed = true;
++    if (timer !== null) clearTimeout(timer);
+     signal.removeEventListener("abort", abortRequest);
+     request.abort();
+   };
+@@ -132,7 +135,7 @@
+       cache: "no-store",
+     });
+   } catch (error) {
+-    signal.removeEventListener("abort", abortRequest);
++    close();
+     if (signal.aborted) throw error;
+     const reason = error instanceof Error ? error.message : String(error);
+     throw new Error(
+@@ -279,3 +282,63 @@
+     return null;
+   return { start, totalBytes };
+ }
++
++/** Metadata belongs to one recording take, never to a filename. */
++export interface ChaseSnapshot {
++  size: number;
++  complete: boolean;
++  identity: string;
++  recordingStart: number;
++}
++
++export async function readChaseStatus(
++  url: string,
++  signal: AbortSignal,
++): Promise<ChaseSnapshot> {
++  const controller = new AbortController();
++  const abort = () => controller.abort();
++  signal.addEventListener("abort", abort, { once: true });
++  if (signal.aborted) abort();
++  const timer = setTimeout(abort, 5000);
++  try {
++    const response = await fetch(url, {
++      signal: controller.signal,
++      cache: "no-store",
++    });
++    if (!response.ok)
++      throw new Error(`recording status: HTTP ${response.status}`);
++    const state = (await response.json()) as ChaseSnapshot;
++    if (
++      !Number.isSafeInteger(state.size) ||
++      state.size < 0 ||
++      typeof state.complete !== "boolean" ||
++      typeof state.identity !== "string" ||
++      !state.identity ||
++      !Number.isFinite(state.recordingStart) ||
++      state.recordingStart <= 0
++    )
++      throw new Error("invalid recording status");
++    return state;
++  } finally {
++    clearTimeout(timer);
++    signal.removeEventListener("abort", abort);
++  }
++}
++
++export function chaseDelay(signal: AbortSignal): Promise<void> {
++  return new Promise((resolve, reject) => {
++    const abort = () => {
++      clearTimeout(timer);
++      reject(new Error("chase stopped"));
++    };
++    const timer = setTimeout(() => {
++      signal.removeEventListener("abort", abort);
++      resolve();
++    }, 2000);
++    signal.addEventListener("abort", abort, { once: true });
++    if (signal.aborted) {
++      signal.removeEventListener("abort", abort);
++      abort();
++    }
++  });
++}
+--- a/packages/player/src/worker.ts
++++ b/packages/player/src/worker.ts
+@@ -28,6 +28,9 @@
+ } from "./protocol.js";
+ import { defaultPoolSize, PicturePool } from "./pool.js";
+ import {
++  readChaseStatus,
++  chaseDelay,
++  type ChaseSnapshot,
+   isRangeExhaustion,
+   openSource,
+   readSlice,
+@@ -207,7 +210,13 @@
+     seek: (time) => post({ type: "seek", id, time }),
+     onMark: (name) => mark(id, name),
+     onBlocked: (blocked) => post({ type: "blocked", id, blocked }),
+-    onError: (error) => post({ type: "error", id, message: error.message }),
++    onError: (error) =>
++      post({
++        type: "error",
++        id,
++        message: error.message,
++        recoverable: Boolean(command.chaseStatusUrl),
++      }),
+   });
+   const handle = created.mediaSource.handle;
+   post({ type: "handle", id, handle, managed: created.managed }, [handle]);
+@@ -277,6 +286,134 @@
+   #index: Sample[] = [];
+   /** Observed GOPs and the program-table-safe byte that can reach them. */
+   #restarts: Sample[] = [];
++  #chase: ChaseSnapshot | null = null;
++  #url = "";
++  #statusUrl = "";
++  #chaseErrorAt = 0;
++  #chasePhase: "reading" | "waiting" | "reconnecting" = "reading";
++  #completeObservedAt = 0;
++  #followTask: Promise<void> | null = null;
++  #chaseFinished = false;
++  #chaseMeasuredSize = 0;
++  #chaseRecoveryAt = 0;
++  #playhead = 0;
++
++  async #refreshChase(): Promise<void> {
++    const next = await readChaseStatus(this.#statusUrl, this.#life.signal);
++    if (
++      this.#chase &&
++      (next.identity !== this.#chase.identity ||
++        next.recordingStart !== this.#chase.recordingStart ||
++        next.size < this.#chase.size)
++    )
++      throw new Error("recording changed while playing");
++    const changed = !this.#chase || next.size !== this.#chase.size;
++    if (changed || !next.complete) this.#completeObservedAt = 0;
++    if (next.complete && !this.#completeObservedAt)
++      this.#completeObservedAt = performance.now();
++    this.#chase = next;
++    this.#totalBytes = next.size;
++    this.#chaseErrorAt = 0;
++    for (const url of [this.#url, this.#statusUrl]) {
++      const pinned = new URL(url);
++      pinned.searchParams.set("identity", next.identity);
++      pinned.searchParams.set("recordingStart", String(next.recordingStart));
++      if (url === this.#url) this.#url = pinned.href;
++      else this.#statusUrl = pinned.href;
++    }
++    if (next.size > this.#chaseMeasuredSize && this.#origin !== null)
++      await this.#measure();
++  }
++
++  async #followChase(): Promise<void> {
++    while (
++      this.#command.id === current &&
++      !this.#life.signal.aborted &&
++      !this.#chaseFinished
++    ) {
++      try {
++        await this.#refreshChase();
++        if (this.#chaseFinished || this.#life.signal.aborted) return;
++        post({
++          type: "chase",
++          id: this.#command.id,
++          phase: this.#chasePhase,
++          size: this.#chase!.size,
++          complete: this.#chase!.complete,
++          sourceUrl: this.#url,
++          statusUrl: this.#statusUrl,
++        });
++      } catch (error) {
++        if (this.#life.signal.aborted) return;
++        this.#chaseErrorAt ||= performance.now();
++        this.#chasePhase = "reconnecting";
++        post({
++          type: "chase",
++          id: this.#command.id,
++          phase: "reconnecting",
++          size: this.#chase?.size ?? 0,
++          complete: false,
++        });
++        if (performance.now() - this.#chaseErrorAt >= 30000) {
++          post({
++            type: "error",
++            id: this.#command.id,
++            message: "録画状態を確認できません: " + describe(error),
++          });
++          abandon();
++          return;
++        }
++      }
++      try {
++        await chaseDelay(this.#life.signal);
++      } catch {
++        return;
++      }
++    }
++  }
++
++  async #openChase(
++    offset: number,
++    signal: AbortSignal,
++  ): Promise<Source | null> {
++    let failedAt = 0;
++    while (this.#command.id === current && !signal.aborted) {
++      const state = this.#chase;
++
++      if (state && offset === state.size) {
++        if (
++          state.complete &&
++          this.#completeObservedAt &&
++          performance.now() - this.#completeObservedAt >= 2000 &&
++          !this.#chaseErrorAt
++        )
++          return null;
++        this.#chasePhase = this.#chaseErrorAt ? "reconnecting" : "waiting";
++      } else if (state && offset < state.size && !this.#chaseErrorAt) {
++        try {
++          const source = await openSource(this.#url, signal, offset, 10000);
++          if (source.totalBytes === null || source.totalBytes < state.size) {
++            source.close();
++            throw new Error("recording size decreased");
++          }
++          if (source.totalBytes > state.size) {
++            this.#chase = { ...state, size: source.totalBytes };
++            this.#completeObservedAt = 0;
++          }
++          this.#chasePhase = "reading";
++          return source;
++        } catch {
++          if (signal.aborted) throw new Error("chase stopped");
++          failedAt ||= performance.now();
++          if (performance.now() - failedAt >= 30000)
++            throw new Error("録画データに再接続できません");
++          this.#chasePhase = "reconnecting";
++        }
++      }
++      await chaseDelay(signal);
++    }
++    throw new Error("chase stopped");
++  }
+ 
+   constructor(command: LoadCommand) {
+     this.#command = command;
+@@ -295,6 +432,14 @@
+   /** Read the file from the beginning. */
+   async start(): Promise<void> {
+     flow.set(true);
++    this.#url = this.#command.url;
++    this.#statusUrl = this.#command.chaseStatusUrl ?? "";
++    if (this.#statusUrl) {
++      // The monitor retries initial metadata failures too; #openChase waits for it.
++      this.#followTask = this.#followChase().finally(() => {
++        this.#followTask = null;
++      });
++    }
+     await this.#run(0);
+   }
+ 
+@@ -314,6 +459,13 @@
+    */
+   async seek(time: number): Promise<void> {
+     if (this.#totalBytes === null || this.#duration === null) return;
++    if (this.#statusUrl && this.#chaseFinished) {
++      this.#chaseFinished = false;
++      if (!this.#followTask)
++        this.#followTask = this.#followChase().finally(() => {
++          this.#followTask = null;
++        });
++    }
+     mark(this.#command.id, "seek");
+     // Stop reading where we are before emptying the buffer, and before the
+     // search that now stands between the two. Whatever the running leg
+@@ -356,7 +508,7 @@
+     let offset = this.#byteFor(seconds);
+     for (let attempt = 0; attempt < SEEK_PROBE_ATTEMPTS; attempt++) {
+       const slice = await readSlice(
+-        this.#command.url,
++        this.#url,
+         offset,
+         SEEK_PROBE_BYTES,
+         signal,
+@@ -448,6 +600,8 @@
+   }
+ 
+   setCurrentTime(currentTime: number): void {
++    if (Math.abs(currentTime - this.#playhead) > 1) this.#chaseRecoveryAt = 0;
++    this.#playhead = currentTime;
+     this.#mseSink?.setCurrentTime(currentTime);
+   }
+ 
+@@ -494,25 +648,40 @@
+    * it arrives, which is what it did before any of this existed.
+    */
+   async #measure(): Promise<void> {
++    const controller = new AbortController();
++    const abort = () => controller.abort();
++    this.#life.signal.addEventListener("abort", abort, { once: true });
++    const timer = this.#statusUrl ? setTimeout(abort, 5000) : null;
+     try {
+       const tail = await readTail(
+-        this.#command.url,
++        this.#url,
+         TAIL_PROBE_BYTES,
+-        this.#life.signal,
++        this.#statusUrl ? controller.signal : this.#life.signal,
+       );
+       if (!tail || this.#command.id !== current) return;
++      if (this.#statusUrl && this.#chase) {
++        if (tail.totalBytes < this.#chase.size) return;
++        if (tail.totalBytes > this.#chase.size) {
++          this.#chase = { ...this.#chase, size: tail.totalBytes };
++          this.#completeObservedAt = 0;
++        }
++      }
+       this.#totalBytes = tail.totalBytes;
+       this.#endTicks = lastTimestamp(tail.data);
++      if (this.#endTicks !== null) this.#chaseMeasuredSize = tail.totalBytes;
+       mark(this.#command.id, "measured");
+       this.#announceDuration();
+     } catch {
+       // An input that cannot be measured is one to play as it comes.
++    } finally {
++      if (timer !== null) clearTimeout(timer);
++      this.#life.signal.removeEventListener("abort", abort);
+     }
+   }
+ 
+   /** Announce the length, once both ends of it are known. */
+   #announceDuration(): void {
+-    if (this.#duration !== null) return;
++    if (this.#duration !== null && !this.#statusUrl) return;
+     if (
+       this.#origin === null ||
+       this.#endTicks === null ||
+@@ -522,6 +691,7 @@
+     const duration =
+       ticksSince(this.#origin, this.#endTicks) / TICKS_PER_SECOND;
+     if (!(duration > 0)) return;
++    if (this.#duration !== null && duration <= this.#duration) return;
+     this.#duration = duration;
+     // The page is told whichever side holds the MediaSource: this is what
+     // turns the element into something a viewer can seek in, and only the page
+@@ -567,7 +737,16 @@
+       if (!this.#running(leg)) return;
+       let source: Source;
+       try {
+-        source = await openSource(this.#command.url, signal, offset);
++        const opened = this.#statusUrl
++          ? await this.#openChase(offset, signal)
++          : await openSource(this.#url, signal, offset);
++        if (!opened) {
++          this.#chaseFinished = true;
++          await this.#sink.finish();
++          post({ type: "completed", id });
++          return;
++        }
++        source = opened;
+       } catch (error) {
+         // The range open owns this failure, so it carries where reading
+         // stood. Everything below -- WASM, pool, transcoder, and sink --
+@@ -579,7 +758,7 @@
+       this.#totalBytes ??= source.totalBytes;
+       // An input whose length the server will not state is a live one: it has
+       // no end to read, and nothing to work a seek out of.
+-      if (this.#totalBytes !== null && !this.#measured) {
++      if (!this.#statusUrl && this.#totalBytes !== null && !this.#measured) {
+         this.#measured = true;
+         void this.#measure();
+       }
+@@ -611,6 +790,24 @@
+       await this.#convert(leg, source, converter);
+     } catch (error) {
+       if (!this.#running(leg) || signal.aborted) return;
++      if (this.#statusUrl) {
++        this.#chaseRecoveryAt ||= performance.now();
++        if (performance.now() - this.#chaseRecoveryAt < 30000) {
++          this.#chasePhase = "reconnecting";
++          try {
++            await chaseDelay(signal);
++          } catch {
++            return;
++          }
++          if (!this.#running(leg)) return;
++          if (this.#duration !== null) await this.seek(this.#playhead);
++          else {
++            this.#sink.reset();
++            await this.#run(0);
++          }
++          return;
++        }
++      }
+       post({ type: "error", id: this.#command.id, message: describe(error) });
+       abandon();
+     }
+@@ -648,17 +845,17 @@
+           }
+           if (!response) {
+             try {
+-              response = await openSource(
+-                this.#command.url,
+-                this.#leg!.signal,
+-                nextByte,
+-              );
++              response = this.#statusUrl
++                ? await this.#openChase(nextByte, this.#leg!.signal)
++                : await openSource(this.#url, this.#leg!.signal, nextByte);
++              if (!response) return;
+             } catch (error) {
+               // Only a refused reopen can complete a known finite range.
+               // Reader and queue failures must never masquerade as EOF.
+               if (
+                 this.#running(leg) &&
+                 !this.#leg!.signal.aborted &&
++                !this.#statusUrl &&
+                 isRangeExhaustion(nextByte, this.#totalBytes, error)
+               )
+                 return;
+@@ -670,11 +867,29 @@
+           let reopen = false;
+           for (;;) {
+             const readStarted = performance.now();
+-            const result = await reader.read();
++            let result: ReadableStreamReadResult<Uint8Array>;
++            try {
++              result = await reader.read();
++            } catch (error) {
++              if (!this.#statusUrl || this.#leg!.signal.aborted) throw error;
++              response.close();
++              response = null;
++              await chaseDelay(this.#leg!.signal);
++              this.#chasePhase = "reconnecting";
++              reopen = true;
++              break;
++            }
+             this.#readingMs += performance.now() - readStarted;
+             if (!this.#running(leg)) return;
+             if (result.done) {
+               response.close();
++              if (this.#statusUrl) {
++                const empty = nextByte === response.offset;
++                response = null;
++                reopen = true;
++                if (empty) await chaseDelay(this.#leg!.signal);
++                break;
++              }
+               ended = true;
+               available.set(true);
+               return;
+@@ -724,7 +939,12 @@
+               break;
+             }
+           }
+-          await refill.wait();
++          if (!(
++            this.#statusUrl &&
++            reopen &&
++            queuedBytes < INPUT_QUEUE_HIGH_WATER_BYTES
++          ))
++            await refill.wait();
+           if (!this.#running(leg)) return;
+           if (!reopen) continue;
+         }
+@@ -781,6 +1001,7 @@
+     this.#report(converter);
+     await this.#sink.finish();
+     if (!this.#running(leg)) return;
++    this.#chaseFinished = true;
+     post({ type: "completed", id });
+     converter.free();
+     this.#transcoder = null;
+@@ -845,6 +1066,7 @@
+     const origin = converter.originTicks;
+     if (origin === null) return;
+     this.#origin = origin;
++    if (this.#statusUrl) void this.#measure();
+     this.#announceDuration();
+     for (const fragment of this.#private) this.#postPrivate(fragment);
+     this.#private = [];
+@@ -1004,6 +1226,9 @@
+     case "seek":
+       void playback?.seek(command.time);
+       break;
++    case "recover":
++      void playback?.seek(command.time);
++      break;
+     case "audio":
+       playback?.selectAudio(command.pid, command.dualMonoSub);
+       break;
+--- a/packages/player/src/player.ts
++++ b/packages/player/src/player.ts
+@@ -88,6 +88,8 @@
+   wasmUrl?: string | URL;
+   /** Where the module Worker is. Defaults to the copy emitted beside this package. */
+   workerUrl?: string | URL;
++  /** Off by default. Metadata endpoint for a growing recording. */
++  chaseStatusUrl?: string;
+   /**
+    * Which side runs MediaSource. `'auto'` takes the worker wherever the
+    * browser has MSE in Workers, and the page otherwise.
+@@ -197,6 +199,11 @@
+ export interface Mpeg2TsPlayerEventMap {
+   statechange: CustomEvent<{ state: PlayerState }>;
+   progress: CustomEvent<Progress>;
++  chase: CustomEvent<{
++    phase: "reading" | "waiting" | "reconnecting";
++    size: number;
++    complete: boolean;
++  }>;
+   stats: CustomEvent<Stats>;
+   /**
+    * What services the transport stream announced, and which of them is being
+@@ -340,6 +347,25 @@
+   /** Whether deinterlacing was asked for. */
+   #wanted = false;
+   #destroyed = false;
++  #chaseLastTime = 0;
++  #chaseLastAdvance = 0;
++  #chaseLastWorker = 0;
++  #chaseLastGrowth = 0;
++  #chaseSize = 0;
++  #chaseStallAt = 0;
++  #chaseRecoveredAt = 0;
++  #chaseComplete = false;
++  #chasePhase = "reading";
++  #chaseSeekAt = 0;
++  #chaseLastWork = 0;
++  #chaseFrames = 0;
++  #chasePinnedSource = "";
++  #chasePinnedStatus = "";
++  #chaseHardRecovery = false;
++  #chaseSinkError = false;
++  #chaseRestarting = false;
++  #chaseResumeTime: number | null = null;
++  #chaseResumePlaying = false;
+ 
+   constructor(video: HTMLVideoElement, options: Mpeg2TsPlayerOptions = {}) {
+     super();
+@@ -550,6 +576,25 @@
+     this.#applyDeinterlace();
+     this.#loadedAt = now();
+     this.#markedAt = this.#loadedAt;
++    this.#chaseLastAdvance =
++      this.#chaseLastWorker =
++      this.#chaseLastGrowth =
++        this.#loadedAt;
++    this.#chaseLastTime =
++      this.#chaseSize =
++      this.#chaseStallAt =
++      this.#chaseRecoveredAt =
++        0;
++    this.#chaseComplete = false;
++    this.#chaseSinkError = false;
++    this.#chaseLastWork = this.#loadedAt;
++    this.#chaseFrames = 0;
++    this.#chaseSeekAt = 0;
++    this.#chasePhase = "reading";
++    if (!this.#chaseRestarting) {
++      this.#chaseHardRecovery = false;
++      this.#chaseResumeTime = null;
++    }
+     const worker = this.#ensureWorker();
+     const promise = new Promise<void>((resolve, reject) => {
+       this.#pending = { resolve, reject };
+@@ -559,6 +604,7 @@
+       type: "load",
+       id,
+       url: String(url),
++      chaseStatusUrl: this.#chasePinnedStatus || this.#options.chaseStatusUrl,
+       wasmUrl:
+         this.#options.wasmUrl === undefined
+           ? null
+@@ -659,7 +705,9 @@
+       );
+       worker.onmessage = this.#onMessage;
+       worker.onerror = (event) =>
+-        this.#fail(new Error(event.message || "the worker failed"));
++        this.#queueChaseRecovery(
++          new Error(event.message || "the worker failed"),
++        );
+       this.#worker = worker;
+     }
+     return this.#worker;
+@@ -668,7 +716,24 @@
+   #onMessage = (event: MessageEvent<Notification>): void => {
+     const notification = event.data;
+     if (notification.id !== this.#generation) return;
++    if (this.#options.chaseStatusUrl) this.#chaseLastWorker = now();
+     switch (notification.type) {
++      case "chase":
++        if (notification.sourceUrl)
++          this.#chasePinnedSource = notification.sourceUrl;
++        if (notification.statusUrl)
++          this.#chasePinnedStatus = notification.statusUrl;
++        if (notification.size > this.#chaseSize) this.#chaseLastGrowth = now();
++        this.#chaseSize = notification.size;
++        this.#chaseComplete = notification.complete;
++        this.#chasePhase = notification.phase;
++        this.#emit(
++          "chase",
++          this.#chaseStallAt
++            ? { ...notification, phase: "reconnecting" }
++            : notification,
++        );
++        break;
+       case "handle":
+         // A handle is attached the one way it can be, so the `<source>` child
+         // #attachManaged uses is not on offer here; what a managed source
+@@ -692,6 +757,7 @@
+         );
+         break;
+       case "fragment":
++        if (this.#options.chaseStatusUrl) this.#chaseLastWork = now();
+         this.#deinterlacer?.encodedVideo?.append(notification.data);
+         this.#sink?.push(
+           notification.data,
+@@ -707,6 +773,7 @@
+         this.#duration = notification.duration;
+         this.#sink?.setDuration(notification.duration);
+         this.#emit("seekable", { duration: notification.duration });
++        this.#restoreChase();
+         break;
+       case "reset":
+         this.#deinterlacer?.encodedVideo?.reset();
+@@ -746,6 +813,9 @@
+         });
+         break;
+       case "stats":
++        if (notification.stats.videoFrames > this.#chaseFrames)
++          this.#chaseLastWork = now();
++        this.#chaseFrames = notification.stats.videoFrames;
+         this.#emit("stats", notification.stats);
+         break;
+       case "blocked":
+@@ -755,6 +825,10 @@
+         this.#drainSink();
+         break;
+       case "completed":
++        if (this.#options.chaseStatusUrl && this.#pending) {
++          this.#fail(new Error("録画に再生可能な映像がありません"));
++          break;
++        }
+         this.#deinterlacer?.encodedVideo?.finish();
+         this.#setState("completed");
+         // Nothing more will be appended, so the buffer cannot fill again and
+@@ -768,7 +842,9 @@
+         else this.#deinterlacer?.encodedVideo?.append(notification.data);
+         break;
+       case "error":
+-        this.#fail(new Error(notification.message));
++        if (notification.recoverable)
++          this.#queueChaseRecovery(new Error(notification.message));
++        else this.#fail(new Error(notification.message));
+         break;
+     }
+   };
+@@ -785,7 +861,7 @@
+       // says so, and the load is what has to hear it.
+       sink = this.#sink ?? this.#createSink(id);
+     } catch (error) {
+-      this.#fail(toError(error));
++      this.#queueChaseRecovery(toError(error));
+       return;
+     }
+     sink.open(mimeCodec, data).then(
+@@ -797,7 +873,7 @@
+           .ready()
+           .then(() => this.#report(id, { type: "flow", id, ready: true })),
+       (error: unknown) => {
+-        if (id === this.#generation) this.#fail(toError(error));
++        if (id === this.#generation) this.#queueChaseRecovery(toError(error));
+       },
+     );
+   }
+@@ -821,7 +897,7 @@
+           this.#setState(blocked ? "buffer-full" : "converting");
+       },
+       onError: (error) => {
+-        if (id === this.#generation) this.#fail(error);
++        if (id === this.#generation) this.#queueChaseRecovery(error);
+       },
+     });
+     this.#sink = sink;
+@@ -876,7 +952,7 @@
+         if (id === this.#generation) this.#stopPlayhead();
+       },
+       (error: unknown) => {
+-        if (id === this.#generation) this.#fail(toError(error));
++        if (id === this.#generation) this.#queueChaseRecovery(toError(error));
+       },
+     );
+   }
+@@ -890,6 +966,7 @@
+    * the input again from where the viewer asked to be.
+    */
+   #onSeeking = (): void => {
++    if (this.#options.chaseStatusUrl) this.#chaseSeekAt = now();
+     if (this.#duration === null) return;
+     if (this.#state === "idle" || this.#state === "error") return;
+     const time = this.video.currentTime;
+@@ -984,14 +1061,136 @@
+    */
+   #reportPlayhead = (): void => {
+     const currentTime = this.video.currentTime;
++    if (this.#options.chaseStatusUrl) {
++      this.#restoreChase();
++      this.#watchChase();
++    }
+     if (this.#sinkKind === "main") this.#sink?.setCurrentTime(currentTime);
+-    else
++    if (this.#sinkKind !== "main" || this.#options.chaseStatusUrl)
+       this.#worker?.postMessage({
+         type: "time",
+         id: this.#generation,
+         currentTime,
+       });
+   };
++
++  #restoreChase(): void {
++    if (
++      this.#chaseResumeTime === null ||
++      this.#duration === null ||
++      this.video.readyState < 1 ||
++      this.#pending
++    )
++      return;
++    const target = this.#chaseResumeTime;
++    this.#chaseResumeTime = null;
++    this.video.currentTime = Math.min(target, this.#duration);
++    if (this.#chaseResumePlaying) void this.video.play().catch(() => {});
++    this.#chaseRestarting = false;
++  }
++
++  #watchChase(): void {
++    const at = now();
++    const video = this.video;
++    if (
++      !this.#chaseRestarting &&
++      !this.#chaseSinkError &&
++      Math.abs(video.currentTime - this.#chaseLastTime) > 0.05
++    ) {
++      this.#chaseLastTime = video.currentTime;
++      this.#chaseLastAdvance = at;
++      this.#chaseStallAt = this.#chaseRecoveredAt = 0;
++      this.#chaseHardRecovery = false;
++      return;
++    }
++    if (
++      !this.#chaseRestarting &&
++      !this.#chaseSinkError &&
++      ((video.paused && this.#pending === null && !video.error) || video.ended)
++    ) {
++      this.#chaseLastAdvance = at;
++      this.#chaseStallAt = this.#chaseRecoveredAt = 0;
++      return;
++    }
++    const tailWait =
++      this.#chasePhase === "waiting" &&
++      !this.#chaseComplete &&
++      this.#duration !== null &&
++      video.currentTime >= this.#duration - 2 &&
++      at - this.#chaseLastGrowth < 10000 &&
++      at - this.#chaseLastWorker < 10000;
++    const converting =
++      !this.#isBuffered(video.currentTime + 0.1) &&
++      at - this.#chaseLastWork < 10000;
++    if (
++      !this.#chaseStallAt &&
++      (tailWait || converting || at - this.#chaseSeekAt < 10000)
++    ) {
++      this.#chaseLastAdvance = at;
++      return;
++    }
++    if (at - this.#chaseLastAdvance < 10000) return;
++    this.#chaseStallAt ||= this.#chaseLastAdvance;
++    if (at - this.#chaseStallAt >= 30000) {
++      this.#worker?.postMessage({
++        type: "stop",
++        id: this.#generation,
++      } satisfies Command);
++      this.#worker?.terminate();
++      this.#worker = null;
++      this.#fail(
++        new Error("追っかけ再生を復旧できませんでした。再試行してください。"),
++      );
++      return;
++    }
++    this.#emit("chase", {
++      phase: "reconnecting",
++      size: this.#chaseSize,
++      complete: this.#chaseComplete,
++    });
++    if (
++      !this.#chaseHardRecovery &&
++      this.#chasePinnedSource &&
++      (this.#chaseSinkError ||
++        video.error ||
++        at - this.#chaseLastWorker >= 10000 ||
++        at - this.#chaseStallAt >= 20000)
++    ) {
++      this.#chaseHardRecovery = true;
++      this.#chaseRestarting = true;
++      this.#chaseResumeTime = this.#chaseLastTime;
++      this.#chaseResumePlaying =
++        !video.paused ||
++        !!video.error ||
++        this.#chaseSinkError ||
++        !!this.#pending;
++      const deadline = this.#chaseStallAt;
++      const advanced = this.#chaseLastAdvance;
++      this.#worker?.terminate();
++      this.#worker = null;
++      // Recreate only after a soft recovery failed. Keep the media element,
++      // caption controls and fullscreen container, and never extend the deadline.
++      const pending = this.#pending;
++      this.#pending = null;
++      void this.load(this.#chasePinnedSource).then(
++        () => pending?.resolve(),
++        (error) => pending?.reject(error),
++      );
++      this.#chaseLastTime = this.#chaseResumeTime ?? 0;
++      this.#chaseStallAt = deadline;
++      this.#chaseLastAdvance = advanced;
++      this.#chaseRecoveredAt = at;
++      return;
++    }
++    if (!this.#chaseRecoveredAt && this.#duration !== null) {
++      this.#chaseRecoveredAt = at;
++      this.#worker?.postMessage({
++        type: "recover",
++        id: this.#generation,
++        time: Math.min(video.currentTime, this.#duration),
++      } satisfies Command);
++    }
++  }
+ 
+   #report(id: number, command: Command): void {
+     if (id === this.#generation) this.#worker?.postMessage(command);
+@@ -1030,7 +1229,21 @@
+     this.video.load();
+   }
+ 
++  #queueChaseRecovery(error: Error): void {
++    if (!this.#options.chaseStatusUrl) {
++      this.#fail(error);
++      return;
++    }
++    this.#chaseSinkError = true;
++    this.#chaseStallAt ||= now();
++    this.#chaseLastAdvance = Math.min(this.#chaseLastAdvance, now() - 10000);
++    this.#startPlayhead();
++    this.#watchChase();
++  }
++
+   #fail(error: Error): void {
++    this.#chaseRestarting = false;
++    this.#chaseResumeTime = null;
+     this.#teardown();
+     this.#setState("error");
+     this.#settle(error);
+--- a/packages/player/src/protocol.ts
++++ b/packages/player/src/protocol.ts
+@@ -147,6 +147,8 @@
+   type: "load";
+   id: number;
+   url: string;
++  /** Opt-in metadata endpoint for a growing recording. */
++  chaseStatusUrl?: string;
+   /** Where the `.wasm` is, or null to take the copy next to the worker. */
+   wasmUrl: string | null;
+   oversample: number | undefined;
+@@ -220,9 +222,19 @@
+       pid: number | null;
+       dualMonoSub: boolean | null;
+     }
++  | { type: "recover"; id: number; time: number }
+   | { type: "stop"; id: number };
+ 
+ export type Notification =
++  | {
++      type: "chase";
++      id: number;
++      phase: "reading" | "waiting" | "reconnecting";
++      size: number;
++      complete: boolean;
++      sourceUrl?: string;
++      statusUrl?: string;
++    }
+   | {
+       /** Attach this to the media element. Worker-sink loads only. */
+       type: "handle";
+@@ -303,7 +315,7 @@
+   | { type: "finish"; id: number }
+   /** The whole input has been converted. */
+   | { type: "completed"; id: number }
+-  | { type: "error"; id: number; message: string };
++  | { type: "error"; id: number; message: string; recoverable?: boolean };
+ 
+ /**
+  * The steps of getting from a URL to a picture, in the order they happen.

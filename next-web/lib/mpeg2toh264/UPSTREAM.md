@@ -23,13 +23,14 @@ vendored or imported; it is LGPL-2.1-or-later and intentionally excluded.
 
 ## Vendored files
 
-The following files are copied without content modification.
+The following files are copied from the build output. The player build includes
+`chase-mode.patch` applied to the fixed upstream commit.
 
 - `packages/player/dist/index.js`
   -> `next-web/lib/mpeg2toh264/index.js`
 
-- `packages/player/dist/assets/worker-CdUcgpWr.js`
-  -> `next-web/lib/mpeg2toh264/assets/worker-CdUcgpWr.js`
+- `packages/player/dist/assets/worker-BUrAso_o.js`
+  -> `next-web/lib/mpeg2toh264/assets/worker-BUrAso_o.js`
 
 - `node_modules/aribb24.js/dist/aribb24.mjs`
   -> `next-web/lib/mpeg2toh264/aribb24.js`
@@ -43,8 +44,8 @@ file is required at runtime. Source maps and `.d.ts` files are not runtime asset
 
 Runtime SHA-256:
 
-- `index.js`: `caccf468a71e8b90de594653478c9cc2dcdad5d35e3c1543535425af31055009`
-- `assets/worker-CdUcgpWr.js`: `5dc589fc9dff0e5ff5132a17004f40c578822ed4251778e5d539335c4672ccb8`
+- `index.js`: `3e66661bc5b470fc295df7cc10370c13040d4f4d7d2b1e4cc249ff61d3af76f2`
+- `assets/worker-BUrAso_o.js`: `4b5e7d4bf108baec1fb3bfab9f68ab38675bd28a74e38fc0161fe09ec51c3d48`
 
 ## Licenses
 
@@ -119,3 +120,30 @@ or external mpeg2toh264 checkout is required at Chinachu runtime.
 
 Do not assume generated asset filenames remain unchanged between upstream
 versions.
+
+## Chinachu chase mode build
+
+Apply `chase-mode.patch` to commit
+`69f2a47aa5bbeb8ffce57ecf5408eaa85a59d7d1` in a separate source directory:
+
+```sh
+patch -p1 < /path/to/Chinachu/next-web/lib/mpeg2toh264/chase-mode.patch
+npm ci --ignore-scripts
+bash tools/build-wasm.sh
+npm run build --workspace @mpeg2toh264/player
+```
+
+Build environment used: Node.js 24.22.2, npm 11.19.1, Rust 1.99.0,
+wasm32-unknown-unknown, wasm-bindgen CLI 0.2.126. Use the upstream lockfiles;
+no demo/yadif build or Chinachu dependency change is required.
+Copy `packages/player/dist/index.js` and its referenced `dist/assets/worker-*.js`.
+Do not edit the generated bundles. Hashes above identify the copied output;
+they are not checked at runtime.
+
+The patch changes source.ts, worker.ts, player.ts and protocol.ts only.
+`chaseStatusUrl` enables the mode; omitting it keeps finite-file/live behavior.
+Input is `/api/recording/:id/chase.m2ts`, with metadata at `chase.json`.
+The API pins recording start and file identity without exposing file paths.
+It serves finite ranges, including across same-filesystem renames. Replacing
+an inode, including a copy to another filesystem, is rejected rather than joined.
+No change is made to conversion, caption sources or Operator.

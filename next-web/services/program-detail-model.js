@@ -372,6 +372,11 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
       livePreviewUrl: livePreviewAvailable
         ? `/api/channel/${encodeURIComponent(channelId)}/preview.jpg?id=${encodeURIComponent(programId)}&start=${start}&end=${end}`
         : null,
+      chaseModel: state.key === 'recording' && detail.currentSource === 'recording' &&
+        programId !== null && finitePositive(program.operatorRecordingStart) !== null &&
+        validText(program.recorded) !== null && program.tuner?.isScrambling !== true
+        ? { id: programId, title: validText(program.fullTitle) || validText(program.title) || 'タイトル未取得',
+          recordingStart: program.operatorRecordingStart, programStart: start } : null,
       recordedId,
       playable,
       canCreateThumbnail: recordedResourceAvailable && ['recorded', 'aborted'].includes(state.key) &&

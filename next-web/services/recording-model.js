@@ -132,6 +132,9 @@ export function buildRecordingViewModels(programs, now = Date.now(), options = {
       detailUrl: programDetailUrl({ id }),
       status,
       statusText: status === 'preparing' ? '準備中' : '',
+      chaseModel: recordingStart !== null && typeof program.recorded === 'string' && program.recorded &&
+        program.tuner?.isScrambling !== true ? { id, title: String(program.title || program.fullTitle || 'タイトル未取得'),
+          recordingStart, programStart: start } : null,
       liveChannel: channelId === null ? null : { id: channelId, name: channelName },
       liveProgram: { id, title: program.title, fullTitle: program.fullTitle, detail: program.detail, start, end },
       previewKey: previewEligible ? `${id}:${recordingStart}:${program.recorded}` : null,
