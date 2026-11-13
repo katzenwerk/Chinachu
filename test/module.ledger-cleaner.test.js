@@ -9,6 +9,12 @@ const cleaner = require('../lib/ledger-cleaner');
 const cleanerJobs = require('../lib/ledger-cleaner-jobs');
 const reservationStore = require('../lib/reservation-store');
 const matching = require('../app-matching');
+const { createFiles } = require('../lib/recorded-maintenance-files');
+const storageHealth = require('../lib/storage-health');
+const { createMaintenance } = require('../lib/recorded-maintenance');
+const recordedThumbnail = require('../lib/recorded-thumbnail');
+const vm = require('vm');
+const { EventEmitter } = require('events');
 
 function program(id, recordedPath, overrides) {
 	const start = Date.now() - 2 * 60 * 60 * 1000;
@@ -125,7 +131,7 @@ test('dry-run indexes once and classifies normal, unique, ambiguous, missing, an
 	}
 });
 
-test('apply revalidates and updates only recorded, reserves2, and match while preserving files and CSV', function () {
+test('apply revalidates and updates only recorded, reserves2, and match while preserving files and CSV', async function () {
 	const fixture = createFixture();
 	try {
 		const found = program('recorded-missing-found', path.join(fixture.recordings, 'recorded-missing-found.m2ts'));
@@ -172,6 +178,56 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		fs.writeFileSync(retainedProgram.recorded, 'restored fixture');
 		cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
 		assert.equal(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).find(row => row.key === retainedMatch.key).fileMissing, undefined);
+
+		// Automatic source checks retain history, including when a parent directory disappeared.
+		const files = createFiles(fixture.root, { recordedDir: fixture.recordings });
+		fs.symlinkSync(path.join(__dirname, '../lib'), path.join(fixture.root, 'lib'), 'dir');
+		const outputDir = path.join(fixture.data, 'thumbnails'), logs = [];
+		let maintenance, idle, spawns = 0;
+		const thumbnail = recordedThumbnail.createGenerator({ outputDir, probe: async () => 30,
+			onStatus: (id, value) => maintenance.thumbnailStatus(id, value),
+			spawn: (_command, args) => {
+				spawns++;
+				const child = new EventEmitter();
+				fs.writeFileSync(args.at(-1), 'fixture jpeg');
+				setImmediate(() => child.emit('close', 0));
+				return child;
+			} });
+		maintenance = createMaintenance({ root: fixture.root, config: { recordedDir: fixture.recordings }, thumbnail,
+			canStart: () => true, thumbnailAllowed: () => true, wake: () => idle(), log: line => logs.push(line) });
+		const runThumbnail = id => new Promise((resolve, reject) => {
+			idle = resolve;
+			if (!maintenance.startAutoThumbnail(files.target(id).program)) reject(new Error('thumbnail not started'));
+		});
+		await runThumbnail('normal');
+		assert.equal(thumbnail.getTaskStatus('normal').status, 'complete');
+		assert.equal(fs.readFileSync(path.join(outputDir, 'normal.jpg'), 'utf8'), 'fixture jpeg');
+		assert.equal(spawns, 1);
+		const beforeHistory = ['recorded', 'reserves2'].map(name => fs.readFileSync(fixture.files[name], 'utf8'));
+		fs.unlinkSync(retainedProgram.recorded);
+		await runThumbnail('retained-file');
+		await runThumbnail('ambiguous');
+		assert.deepStrictEqual(logs, ['AUTO THUMBNAIL: source missing #retained-file', 'AUTO THUMBNAIL: source missing #ambiguous']);
+		assert.equal(spawns, 1);
+		const missingRows = JSON.parse(fs.readFileSync(fixture.files.match, 'utf8'));
+		assert.deepStrictEqual(missingRows.find(row => row.key === retainedMatch.key).fileMissing.recordedId, 'retained-file');
+		assert.ok(missingRows.find(row => row.key === retainedMatch.key).fileMissing.checkedAt > 0);
+		assert.equal(missingRows.find(row => row.recording.recordedId === 'ambiguous').fileMissing.recordedId, 'ambiguous');
+		['recorded', 'reserves2'].forEach((name, i) => assert.equal(fs.readFileSync(fixture.files[name], 'utf8'), beforeHistory[i]));
+		// Use Operator's actual selector with no transient failure status: exclusion must be durable.
+		const operator = fs.readFileSync(path.join(__dirname, '../app-operator.js'), 'utf8');
+		const selection = vm.createContext({ config: {}, recorded: [retainedProgram], recording: [], activeRecordingOutputs: new Set(),
+			path, __dirname: fixture.root, MATCH_DATA_FILE: fixture.files.match, RECORDED_THUMBNAIL_DIR: outputDir,
+			reservationStore, recordedThumbnail, recordedThumbnailGenerator: { getTaskStatus: () => null },
+			require: () => require('../lib/match-detail-resolver') });
+		vm.runInContext(operator.slice(operator.indexOf('function getAutoThumbnailSummary()'),
+			operator.indexOf('function stopAutoIfRecordingLimitExceeded()')), selection);
+		assert.equal(selection.getAutoThumbnailSummary().candidate, null);
+		maintenance.stop(); thumbnail.stop();
+		fs.writeFileSync(retainedProgram.recorded, 'restored fixture');
+		cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
+		assert.equal(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).find(row => row.key === retainedMatch.key).fileMissing, undefined);
+		assert.equal(selection.getAutoThumbnailSummary().candidate.id, 'retained-file');
 
 		assert.strictEqual(matches.find(item => item.recording.recordedId === 'relocated').recording.path, undefined);
 		assert.strictEqual(JSON.parse(fs.readFileSync(fixture.files.reserves, 'utf8')).length, 0);
@@ -397,7 +453,7 @@ test('history cleanup removes ended skips by default and missed entries only whe
 	}
 });
 
-test('apply rejects stale ledgers and an incomplete root without changing data', function () {
+test('apply rejects stale ledgers and an incomplete root without changing data', async function (t) {
 	const fixture = createFixture();
 	try {
 		const plan = createPlan(fixture);
@@ -421,6 +477,48 @@ test('apply rejects stale ledgers and an incomplete root without changing data',
 		assert.strictEqual(incomplete.summary.recordedMissingHistoryHeld, 0);
 		assert.strictEqual(incomplete.results.find(item => item.id === 'recorded-missing-uninspected').automatic, true);
 		assert.throws(() => cleaner.applyPlan(fixture.root, incomplete), /Every registered recording root/);
+
+		const files = createFiles(fixture.root, { recordedDir: fixture.recordings });
+		const absent = fixture.programs.find(row => row.id === 'missing');
+		writeJson(fixture.files.match, [match(absent)]);
+		const originalMatch = fs.readFileSync(fixture.files.match, 'utf8');
+		const inspect = (beforeCommit) => files.inspect(files.target(absent.id), { saveMissing: true, beforeCommit });
+		const health = storageHealth.inspectDestination;
+		const mountMock = t.mock.method(storageHealth, 'inspectDestination', (...args) => ({ ...health(...args), status: 'not-mounted' }));
+		assert.equal((await inspect()).state, 'failed');
+		mountMock.mock.restore();
+		let checks = 0;
+		const changedMount = t.mock.method(storageHealth, 'inspectDestination', (...args) => {
+			const result = health(...args);
+			return { ...result, mountFingerprint: ++checks < 3 ? 'before' : 'after' };
+		});
+		assert.equal((await inspect()).state, 'failed');
+		changedMount.mock.restore();
+		for (const code of ['EIO', 'EACCES']) {
+			const failure = t.mock.method(fs.promises, 'lstat', async () => { throw Object.assign(new Error(code), { code }); });
+			assert.equal((await inspect()).state, 'failed');
+			failure.mock.restore();
+		}
+		assert.equal(fs.readFileSync(fixture.files.match, 'utf8'), originalMatch);
+		assert.equal((await inspect(() => {
+			const rows = JSON.parse(fs.readFileSync(fixture.files.recorded, 'utf8'));
+			rows.find(row => row.id === absent.id).recorded += '.changed';
+			writeJson(fixture.files.recorded, rows);
+		})).state, 'failed');
+		assert.equal(fs.readFileSync(fixture.files.match, 'utf8'), originalMatch);
+		writeJson(fixture.files.recorded, fixture.programs);
+		assert.equal((await inspect(() => writeJson(fixture.files.recording, [absent]))).state, 'failed');
+		writeJson(fixture.files.recording, [fixture.programs[4]]);
+		assert.equal((await inspect(() => writeJson(fixture.files.match, []))).state, 'failed');
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')), []);
+		writeJson(fixture.files.match, [match(absent), match(absent)]);
+		assert.equal((await inspect()).state, 'failed');
+		assert.ok(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).every(row => !row.fileMissing));
+		writeJson(fixture.files.match, [match(absent)]);
+		const writeFailure = t.mock.method(reservationStore, 'writeArrayAtomic', () => { throw new Error('write failed'); });
+		assert.equal((await inspect()).state, 'failed');
+		writeFailure.mock.restore();
+		assert.equal(fs.readFileSync(fixture.files.match, 'utf8'), originalMatch);
 	} finally {
 		fixture.close();
 	}
