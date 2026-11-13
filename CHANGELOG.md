@@ -1,3 +1,18 @@
+# Chinachu 0.10.7-thorn.39
+
+## Recording Playback
+
+- Add chase playback for ongoing recordings in the WUI, with separate LIVE and chase-playback actions from recording cards and programme details.
+- Update the bundled `mpeg2toh264` player and worker to read growing TS files, seek within available recorded data, reconnect after interrupted reads, and offer playback retry.
+
+## Recording Maintenance
+
+- When automatic thumbnail maintenance finds a missing file, verify the recording destination mount and ledger consistency before recording `match.fileMissing`. Stop automatic retries once the absence is confirmed.
+
+## Web UI
+
+- Delay opening programme details until programme and series data are applied. Clean up pending requests and subscriptions if the dialog closes before loading completes.
+
 # Chinachu 0.10.7-thorn.38
 
 ## Web UI
