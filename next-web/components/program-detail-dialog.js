@@ -313,8 +313,6 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   dialog.setAttribute('aria-label', '番組詳細');
   dialog.innerHTML = '<article><div class="program-modal-loading">番組詳細を取得しています…</div></article>';
   document.body.append(dialog);
-  dialog.showModal();
-  activeDialog = dialog;
   let disposed = false;
   let controller = null;
   let logo = null;
@@ -603,7 +601,11 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     ruleDialog = editor;
   }
 
-  const close = () => dialog.close();
+  const close = () => {
+    dialog.close();
+    // 未表示のdialogはcloseイベントが発生しないため、取得中でも後始末する。
+    dispose();
+  };
   const play = async model => {
     close();
     if (model.media.playable) {
@@ -939,6 +941,9 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
         latestSeriesContext = seriesContext;
         latestSeriesError = seriesError;
         await render(model, seriesContext, seriesError);
+        if (disposed || requestController.signal.aborted) return;
+        // 初回は番組情報・シリーズ情報を反映してから表示する。
+        if (!dialog.open) dialog.showModal();
         if (pendingInitialAction !== null) {
           const action = pendingInitialAction;
           pendingInitialAction = null;
@@ -975,6 +980,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
         error.className = 'program-modal-loading is-error';
         error.textContent = message;
         dialog.querySelector('article').replaceChildren(error);
+        if (!dialog.open) dialog.showModal();
       }
       return false;
     }
@@ -992,7 +998,8 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     if (backdropPointerDown && event.target === dialog) close();
     backdropPointerDown = false;
   });
-  dialog.addEventListener('close', () => {
+  function dispose() {
+    if (disposed) return;
     disposed = true;
     maintenanceDialog?.close();
     controller?.abort();
@@ -1010,10 +1017,13 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     unsubscribeSeries();
     logo?.dispose();
     dialog.remove();
-    if (activeDialog === dialog) activeDialog = null;
-  }, { once: true });
+    if (activeDialog?.dialog === dialog) activeDialog = null;
+  }
+  dialog.addEventListener('close', dispose, { once: true });
+  const handle = { close, dialog, reload: load };
+  activeDialog = handle;
   load();
-  return { close, dialog, reload: load };
+  return handle;
 }
 
 export function installProgramDetailDialogLinks(root = document) {
