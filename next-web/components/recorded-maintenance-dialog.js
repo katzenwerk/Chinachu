@@ -14,7 +14,7 @@ function fact(host, name, value) {
   dt.textContent = name; dd.textContent = String(value);
   host.append(dt, dd);
 }
-export function createSavedTsSummary(value) {
+export function createSavedTsSummary(value, { onPlay = null, compactEvents = false, broadcastStart = null } = {}) {
   if (!value) return null;
   const section = document.createElement('section');
   section.className = 'program-saved-ts-summary';
@@ -45,12 +45,13 @@ export function createSavedTsSummary(value) {
       const line = document.createElement('tr');
       for (const [, key, format] of fields) {
         const cell = document.createElement('td');
-        cell.textContent = present(row[key]) ? (format ? format(row[key]) : row[key]) : '不明';
+        cell.append(present(row[key]) ? (format ? format(row[key]) : row[key]) : '不明');
         line.append(cell);
       }
       body.append(line);
     }
     table.append(caption, head, body); wrap.append(table); host.append(wrap);
+    return wrap;
   }
   function sampleLabel(name, rows, total, truncated) {
     if (Number.isFinite(total) && total > rows.length) return `${name}（全${total}件中、詳細${rows.length}件）`;
@@ -73,28 +74,82 @@ export function createSavedTsSummary(value) {
     if (sample.kind === 'repeat-excess') return `${change}（繰り返し過多）`;
     if (!Number.isInteger(sample.expectedCc) || !Number.isInteger(sample.actualCc)) return change;
     const difference = (sample.actualCc - sample.expectedCc + 16) % 16;
-    return `${change}（期待${sample.expectedCc}・差${difference}）`;
+    return `${change}（差${difference}）`;
   }
   const events = [
     ...gaps.map(sample => ({ type: 'gap', sample, byteOffset: sample.fromOffset })),
     ...cc.map(sample => ({ type: 'cc', sample, byteOffset: sample.byteOffset }))
   ].sort((a, b) => (Number.isFinite(a.byteOffset) ? a.byteOffset : Number.MAX_SAFE_INTEGER) -
     (Number.isFinite(b.byteOffset) ? b.byteOffset : Number.MAX_SAFE_INTEGER));
+  function playbackTime(time) {
+    const match = /^(\d+):([0-5]\d):([0-5]\d)(?:\.(\d{1,3}))?$/.exec(String(time));
+    if (!onPlay || !match) return String(time);
+    // Saved PCR observations are approximate and can restart after clock resets.
+    const seconds = Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) +
+      Number(`0.${match[4] || '0'}`);
+    if (!Number.isFinite(seconds)) return String(time);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'program-saved-ts-play-time';
+    button.textContent = `▶ ${time}`;
+    button.title = '5秒前から再生（PCR由来の推定位置）';
+    button.setAttribute('aria-label', `${time}の5秒前から再生`);
+    button.addEventListener('click', () => onPlay(Math.max(0, Math.floor(seconds) - 5)));
+    return button;
+  }
+  function broadcastTime(tot) {
+    // Analyzer TOT strings already contain JST calendar fields, without a zone.
+    const match = /^(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):([0-5]\d):([0-5]\d)$/.exec(String(tot));
+    if (!match || Number(match[4]) > 23) return String(tot);
+    const dayMs = 86400000;
+    const totDay = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    const baseDay = Number.isFinite(broadcastStart) && broadcastStart > 0
+      ? Math.floor((broadcastStart + 9 * 3600000) / dayMs) : null;
+    const days = baseDay === null ? 0 : Math.max(0, Math.floor(totDay / dayMs) - baseDay);
+    return `${String(Number(match[4]) + days * 24).padStart(2, '0')}:${match[5]}:${match[6]}`;
+  }
   if (events.length) {
     const rows = events.map(({ type, sample }) => ({
       start: type === 'gap' ? sample.fromPcr : sample.pcr,
       tot: sample.tot,
-      type: type === 'gap' ? 'GAP' : `PID ${pid(sample.pid)}`,
+      type: type === 'gap' ? 'GAP' : pid(sample.pid),
       content: type === 'gap'
-        ? `${Number.isFinite(sample.deltaMs) ? (sample.deltaMs / 1000).toFixed(2) + '秒' : '不明'}${sample.lowData === true ? '（低データ量疑い）' : ''}`
+        ? `${compactEvents ? '' : '時間差 '}${Number.isFinite(sample.deltaMs) ? (sample.deltaMs / 1000).toFixed(2) + '秒' : '不明'}${sample.lowData === true ? (compactEvents ? '（低下疑い）' : '（低データ量疑い）') : ''}`
         : ccContent(sample)
     }));
-    table(section, sampleLabel('異常発生一覧', rows,
-      (result.ccErrorEvents || 0) + (result.pcrGapEvents || 0), result.ccSamplesTruncated || result.pcrGapSamplesTruncated), rows, [
-      ['開始時間', 'start'], ['放送時刻（TOT）', 'tot'],
-      ['種別', 'type'], ['欠落候補・内容', 'content']
-    ]);
-    note(section, 'PCR観測時刻は厳密な再生位置ではありません。GAPは時間飛び候補で、欠落の確定ではありません。CC差は実際の欠落パケット数を示すものではありません。');
+    if (compactEvents) {
+      const wrap = table(section, sampleLabel('異常発生一覧', rows,
+        (result.ccErrorEvents || 0) + (result.pcrGapEvents || 0), result.ccSamplesTruncated || result.pcrGapSamplesTruncated), rows, [
+        ['開始時間', 'start', playbackTime], ['放送時刻', 'tot', broadcastTime],
+        ['種別', 'type'], ['内容', 'content']
+      ]);
+      wrap.classList.add('program-saved-ts-events-table');
+    } else {
+      const eventsHeading = document.createElement('h5');
+      eventsHeading.className = 'program-saved-ts-events-heading';
+      eventsHeading.textContent = sampleLabel('異常発生一覧', rows,
+        (result.ccErrorEvents || 0) + (result.pcrGapEvents || 0), result.ccSamplesTruncated || result.pcrGapSamplesTruncated);
+      const eventsList = document.createElement('ol');
+      eventsList.className = 'program-saved-ts-events';
+      for (const row of rows) {
+        const item = document.createElement('li');
+        const facts = document.createElement('dl');
+        for (const [name, key, inline] of [
+          ['開始時間：', 'start', true], ['放送時刻（TOT）：', 'tot', true],
+          ['種別', 'type', false], ['内容', 'content', false]
+        ]) {
+          const pair = document.createElement('div');
+          if (inline) pair.className = 'is-inline';
+          const label = document.createElement('dt'); label.textContent = name;
+          const value = document.createElement('dd');
+          value.append(present(row[key]) ? (key === 'start' ? playbackTime(row[key]) : row[key]) : '不明');
+          pair.append(label, value); facts.append(pair);
+        }
+        item.append(facts); eventsList.append(item);
+      }
+      section.append(eventsHeading, eventsList);
+    }
+    note(section, 'GAPは時刻の飛び、CC差は放送データの連続番号のずれを示します。どちらも映像・音声の欠落を確定するものではありません。表示時刻は目安です。');
   } else if ((result.ccErrorEvents || 0) + (result.pcrGapEvents || 0) > 0) {
     note(section, '異常の発生位置は保存されていません。');
   }

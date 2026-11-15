@@ -138,7 +138,7 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 			};
 			// Missing Range/timestamp support falls back to ordinary playback;
 			// once a seek started, a stalled load is reported instead of played at an unknown position.
-			const timer = window.setTimeout(() => finish(applied ? new Error('指定した話数の再生位置を読み込めませんでした') : null), 15000);
+			const timer = window.setTimeout(() => finish(applied ? new Error('指定した再生位置を読み込めませんでした') : null), 15000);
 			cancelInitialSeek = finish;
 			player.addEventListener('seekable', apply);
 			for (const name of ['loadedmetadata', 'durationchange', 'canplay', 'seeked']) video.addEventListener(name, apply);

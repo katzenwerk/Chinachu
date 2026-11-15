@@ -212,10 +212,24 @@ button.program-modal-thumbnail.is-empty span { top: 50%; left: 50%; transform: t
 .program-saved-ts-summary details { min-width: 0; }
 .program-saved-ts-summary summary { cursor: pointer; }
 .program-saved-ts-summary details > :not(summary) { margin-top: 8px; }
+.program-saved-ts-events-heading { margin: 0; font: inherit; font-weight: var(--font-title-weight); }
+.program-saved-ts-events { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.program-saved-ts-events > li { min-width: 0; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.program-saved-ts-summary .program-saved-ts-events dl { grid-template-columns: minmax(0,1fr); gap: 8px; }
+.program-saved-ts-events dl > div { display: grid; gap: 2px; min-width: 0; }
+.program-saved-ts-events dl > .is-inline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; }
+.program-saved-ts-events dt,.program-saved-ts-events dd { min-width: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
 .program-saved-ts-table-scroll { min-width: 0; max-width: 100%; overflow-x: auto; }
 .program-saved-ts-table-scroll table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .program-saved-ts-table-scroll caption { text-align: left; padding-bottom: 6px; font-weight: var(--font-title-weight); }
 .program-saved-ts-table-scroll th,.program-saved-ts-table-scroll td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.program-saved-ts-events-table table { table-layout: fixed; }
+.program-saved-ts-events-table th,.program-saved-ts-events-table td { padding: 4px; font-variant-numeric: tabular-nums; }
+.program-saved-ts-events-table th:nth-child(1),.program-saved-ts-events-table td:nth-child(1) { width: 27%; text-align: left; }
+.program-saved-ts-events-table th:nth-child(2),.program-saved-ts-events-table td:nth-child(2) { width: 24%; text-align: center; }
+.program-saved-ts-events-table th:nth-child(3),.program-saved-ts-events-table td:nth-child(3) { width: 15%; text-align: center; }
+.program-saved-ts-events-table td:nth-child(4) { overflow: hidden; text-overflow: ellipsis; }
+.program-saved-ts-play-time { padding: 0; border: 0; background: transparent; color: var(--link-color); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .program-saved-ts-summary pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-height: 420px) {

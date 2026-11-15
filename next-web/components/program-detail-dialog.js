@@ -168,7 +168,7 @@ function seriesDecisionLabel(context, error) {
   return context.episodeConfirmed ? 'TID・EP自動確定' : 'TID自動確定・EP未確定';
 }
 
-function createManagement(model, seriesContext, seriesError) {
+function createManagement(model, seriesContext, seriesError, onPlay) {
   const aside = document.createElement('aside');
   aside.className = 'program-modal-management';
   const heading = document.createElement('h3');
@@ -223,7 +223,11 @@ function createManagement(model, seriesContext, seriesError) {
   aside.append(heading, facts);
   aside.append(analysis);
   if (tsDropSummary) aside.append(tsDropSummary);
-  const savedTsSummary = createSavedTsSummary(model.savedTsAnalysis);
+  const savedTsSummary = createSavedTsSummary(model.savedTsAnalysis, {
+    onPlay: model.media.playable ? onPlay : null,
+    compactEvents: true,
+    broadcastStart: model.broadcast.start
+  });
   if (savedTsSummary) aside.append(savedTsSummary);
   if (seriesError) {
     const notice = document.createElement('p');
@@ -606,10 +610,10 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     // 未表示のdialogはcloseイベントが発生しないため、取得中でも後始末する。
     dispose();
   };
-  const play = async model => {
+  const play = async (model, startSeconds = 0) => {
     close();
     if (model.media.playable) {
-      await openRecordedPlaybackOverlay({ playable: true, recordedId: model.media.recordedId, title: model.title });
+      await openRecordedPlaybackOverlay({ playable: true, recordedId: model.media.recordedId, title: model.title, startSeconds });
     } else if (model.media.liveModel) {
       await openRecordingLiveOverlay(model.media.liveModel);
     }
@@ -714,7 +718,9 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     const thumbnailHost = document.createElement('div');
     if (!model.media.livePreviewUrl) clearLivePreview();
     right.append(thumbnailHost);
-    const management = createManagement(model, seriesContext, seriesError);
+    const management = createManagement(model, seriesContext, seriesError, startSeconds => {
+      void play(model, startSeconds).catch(error => window.alert(String(error?.message || error)));
+    });
     const description = createDescription(model);
     right.append(management);
     body.append(description, right);
