@@ -142,6 +142,7 @@ export async function openRecordedPlaybackOverlay(model) {
   const chaseStatusUrl = model.chase ? new URL(`${chaseBase}.json${chaseSuffix}`, document.baseURI).href : undefined;
   player = module.createRecordedPlayer(frame, {
     chaseStatusUrl,
+    startSeconds: model.chase ? 0 : model.startSeconds,
     compatUrl: model.chase ? undefined : `/api/recorded/${encodedId}/watch.mp4?profile=compat`,
     compatHlsUrl: model.chase ? undefined : `/api/recorded/${encodedId}/watch-hls.json?profile=compat`,
     onStatus: text => { if (!closed) status.textContent = text; },

@@ -22,7 +22,7 @@ function isDesktopNonSafariEnvironment(nav) {
 		/(?:Windows NT|Macintosh|X11|CrOS)/i.test(userAgent);
 }
 
-export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compatHlsUrl, chaseStatusUrl, onStatus = () => {} }) {
+export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compatHlsUrl, chaseStatusUrl, startSeconds = 0, onStatus = () => {} }) {
 	const stage = document.createElement('div');
 	stage.className = 'program-ts-stage';
 	const picture = document.createElement('div');
@@ -106,6 +106,45 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 	let requestedUrl = null;
 	let resumeTime = 0;
 	let pendingRestore = null;
+	let cancelInitialSeek = null;
+	function seekInitialPosition() {
+		if (chaseStatusUrl || !Number.isFinite(startSeconds) || startSeconds <= 0) return Promise.resolve();
+		return new Promise((resolve, reject) => {
+			let applied = false;
+			const finish = error => {
+				window.clearTimeout(timer);
+				player.removeEventListener('seekable', apply);
+				for (const name of ['loadedmetadata', 'durationchange', 'canplay', 'seeked']) video.removeEventListener(name, apply);
+				cancelInitialSeek = null;
+				if (error) reject(error);
+				else resolve();
+			};
+			const apply = () => {
+				if (destroyed || playerDestroyed) return finish();
+				if (applied) {
+					if (!video.seeking && video.readyState >= 2 && video.currentTime >= startSeconds) finish();
+					return;
+				}
+				if (player.duration === null || video.readyState < 1) return;
+				// A shortened recording cannot contain the requested episode.
+				if (startSeconds >= player.duration) return finish();
+				for (let index = 0; index < video.seekable.length; index++) {
+					if (startSeconds < video.seekable.start(index) || startSeconds > video.seekable.end(index)) continue;
+					applied = true;
+					try { video.currentTime = startSeconds; }
+					catch (error) { finish(error); }
+					return;
+				}
+			};
+			// Missing Range/timestamp support falls back to ordinary playback;
+			// once a seek started, a stalled load is reported instead of played at an unknown position.
+			const timer = window.setTimeout(() => finish(applied ? new Error('指定した話数の再生位置を読み込めませんでした') : null), 15000);
+			cancelInitialSeek = finish;
+			player.addEventListener('seekable', apply);
+			for (const name of ['loadedmetadata', 'durationchange', 'canplay', 'seeked']) video.addEventListener(name, apply);
+			apply();
+		});
+	}
 	const retryButton = document.createElement('button');
 	retryButton.type = 'button';
 	retryButton.textContent = '再試行';
@@ -147,6 +186,7 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 	};
 	const failed = event => {
 		if (destroyed) return;
+		cancelInitialSeek?.(event.detail.error);
 		if (pendingRestore) {
 			player.removeEventListener('seekable', pendingRestore);
 			video.removeEventListener('loadedmetadata', pendingRestore);
@@ -171,6 +211,7 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 	const disposeMpegPlayer = () => {
 		if (playerDestroyed) return;
 		playerDestroyed = true;
+		cancelInitialSeek?.();
 		player.removeEventListener('private_stream_1', feed);
 		player.removeEventListener('private_stream_2', feed);
 		player.removeEventListener('error', failed);
@@ -453,6 +494,8 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 				if (playerDestroyed || destroyed) return;
 				throw error;
 			}
+			if (destroyed || playerDestroyed) return;
+			await seekInitialPosition();
 			if (destroyed || playerDestroyed) return;
 			status.textContent = '';
 			try {

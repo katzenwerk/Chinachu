@@ -591,6 +591,32 @@ function seriesEventContext(event, context) {
   };
 }
 
+// Episode boundaries are schedule-based estimates, not scene/chapter markers.
+function episodePlaybackStart(context, recording) {
+  const episodes = context?.episodes;
+  const selected = context?.selectedEpisode;
+  if (!context?.multipleEpisodeConfirmed || !context.episodeConfirmed ||
+      !Array.isArray(episodes) || episodes.length < 2 || !episodes.includes(selected) ||
+      !episodes.every((number, index) => Number.isSafeInteger(number) && number > 0 &&
+        (index === 0 || number === episodes[index - 1] + 1)) ||
+      recording.detailSource !== 'recorded' || Number(recording.operatorInterruptionCount) > 0) return 0;
+  const start = Number(context.event?.start);
+  const end = Number(context.event?.end);
+  if (!(start > 0) || !Number.isFinite(end) || end <= start) return 0;
+  const minutes = Math.floor((end - start) / 60000 / episodes.length);
+  if (minutes < 1) return 0;
+  const recordingStart = Number(recording.operatorRecordingStart);
+  // Operator stamps the output setup, before piping TS. This corrects the
+  // wall-clock offset approximately; it does not claim an exact first-PTS time.
+  const offset = Number.isFinite(recordingStart) && recordingStart > 0 ? (start - recordingStart) / 1000 : 0;
+  const seconds = (selected - episodes[0]) * minutes * 60 + offset;
+  const recordingEnd = Number(recording.operatorRecordingEnd);
+  const actual = Number(recording.operatorActualSeconds) ||
+    (recordingStart > 0 && recordingEnd > recordingStart ? (recordingEnd - recordingStart) / 1000 : 0);
+  const limits = [Number(recording.recordedDurationSeconds), actual].filter(value => Number.isFinite(value) && value > 0);
+  return Number.isFinite(seconds) && seconds > 0 && limits.every(limit => seconds < limit) ? seconds : 0;
+}
+
 function eventWarnings(event) {
   const unique = new Map();
   for (const recording of event.recordings || []) {
@@ -653,17 +679,19 @@ function appendEventLogo(host, event, context, options = {}) {
     button.classList.add('is-deleted');
   }
   button.addEventListener('click', () => context.openDetail(context.eventIndex?.get(event.key) || seriesEventContext(event, context)));
+  const menuContext = () => ({ ...(context.eventIndex?.get(event.key) || seriesEventContext(event, context)),
+    selectedEpisode: options.selectedEpisode ?? null });
   button.addEventListener('contextmenu', eventObject => {
     eventObject.preventDefault();
     eventObject.stopPropagation();
-    context.openEventMenu(context.eventIndex?.get(event.key) || seriesEventContext(event, context), { x: eventObject.clientX, y: eventObject.clientY }, options.kind);
+    context.openEventMenu(menuContext(), { x: eventObject.clientX, y: eventObject.clientY }, options.kind);
   });
   button.addEventListener('keydown', eventObject => {
     if (eventObject.key === 'ContextMenu' || eventObject.key === 'F10' && eventObject.shiftKey) {
       eventObject.preventDefault();
       eventObject.stopPropagation();
       const rect = button.getBoundingClientRect();
-      context.openEventMenu(context.eventIndex?.get(event.key) || seriesEventContext(event, context), { x: rect.left + 16, y: rect.top + 16 }, options.kind);
+      context.openEventMenu(menuContext(), { x: rect.left + 16, y: rect.top + 16 }, options.kind);
     }
   });
   wrapper.append(button);
@@ -677,17 +705,17 @@ function eventTimeLabel(event) {
   return `${dateTime(event.start)} · ${text(event.channel?.name, '局名未取得')}`;
 }
 
-function appendOverflowEvent(host, event, context, kind) {
+function appendOverflowEvent(host, event, context, kind, selectedEpisode) {
   const row = document.createElement('div');
   row.className = 'series-event-overflow-row';
-  appendEventLogo(row, event, context, { kind });
+  appendEventLogo(row, event, context, { kind, selectedEpisode });
   const label = document.createElement('span');
   label.textContent = eventTimeLabel(event);
   row.append(label);
   host.append(row);
 }
 
-function appendEventRow(host, label, count, events, context, kind) {
+function appendEventRow(host, label, count, events, context, kind, selectedEpisode = null) {
   if (!events.length) return;
   const row = document.createElement('div');
   row.className = `series-event-row is-${kind}`;
@@ -697,7 +725,7 @@ function appendEventRow(host, label, count, events, context, kind) {
   const logos = document.createElement('div');
   logos.className = 'series-recording-logos';
   const limit = 3;
-  events.slice(0, limit).forEach(event => appendEventLogo(logos, event, context, { kind }));
+  events.slice(0, limit).forEach(event => appendEventLogo(logos, event, context, { kind, selectedEpisode }));
   const omitted = events.slice(limit);
   if (omitted.length) {
     const overflow = document.createElement('details');
@@ -708,7 +736,7 @@ function appendEventRow(host, label, count, events, context, kind) {
     summary.setAttribute('aria-label', `${label}の残り${omitted.length}件を表示`);
     const panel = document.createElement('div');
     panel.className = 'series-event-overflow-panel';
-    omitted.forEach(event => appendOverflowEvent(panel, event, context, kind));
+    omitted.forEach(event => appendOverflowEvent(panel, event, context, kind, selectedEpisode));
     overflow.append(summary, panel);
     logos.append(overflow);
   }
@@ -756,7 +784,7 @@ function createEpisodeCard(episode, size, context) {
       .sort(recordingEventOrder);
     const reservationEvents = episode.events.filter(event => event.reservation !== null)
       .sort((left, right) => Number(left.start || 0) - Number(right.start || 0));
-    appendEventRow(eventRows, '録画履歴', episode.recordings.length, recordingEvents, context, 'recording');
+    appendEventRow(eventRows, '録画履歴', episode.recordings.length, recordingEvents, context, 'recording', episode.confirmed ? episode.number : null);
     appendEventRow(eventRows, '予約', episode.reservations.length, reservationEvents, context, 'reservation');
     if (eventRows.childElementCount) body.append(eventRows);
   }
@@ -1118,7 +1146,8 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
           initialAction: action === 'detail' ? null : action, onChanged: () => scheduleRefresh(0) });
       } else if (action === 'play') {
         void openRecordedPlaybackOverlay({ playable: true, recordedId: item.recordedId,
-          title: item.fullTitle || item.title || 'タイトル未取得' }).catch(showMenuError);
+          title: item.fullTitle || item.title || 'タイトル未取得',
+          startSeconds: episodePlaybackStart(item.seriesContext, item) }).catch(showMenuError);
       } else if (action === 'download') {
         const anchor = document.createElement('a');
         anchor.href = `/api/recorded/${encodeURIComponent(item.recordedId)}/file.m2ts`;
