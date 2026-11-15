@@ -14,7 +14,7 @@
 .program-detail-statuses,.program-detail-attributes { display: flex; flex-wrap: wrap; gap: 7px; }
 .program-detail-status,.program-detail-attributes span { display: inline-flex; align-items: center; min-height: 25px; padding: 2px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel-subtle); color: var(--muted); font-size: 12px; }
 .program-detail-status.is-recording { border-color: var(--danger-border); color: var(--danger); }
-.program-detail-status.is-recorded { border-color: #82b89a; color: var(--brand-strong); }
+.program-detail-status.is-recorded { border-color: #82b89a; color: var(--recorded-state-ink); }
 .program-detail-status.is-reserved { border-color: #91abc8; color: var(--info); }
 .program-detail-status.is-missed,.program-detail-status.is-file-deleted,.program-detail-status.is-file-missing { border-color: var(--danger-border); color: var(--danger); }
 .program-detail-status.is-skipped,.program-detail-status.is-file-unknown { border-color: var(--warning-border); color: var(--warning); }
@@ -84,7 +84,7 @@ button.program-detail-media-poster:focus-visible { outline: 3px solid var(--info
 .program-detail-recording-path .button { flex: 0 0 auto; min-height: 30px; padding: 3px 9px; font-size: 11px; }
 .program-detail-recording-path code { display: block; max-height: 132px; overflow: auto; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-subtle); color: var(--text); font: 12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; overflow-wrap: anywhere; white-space: pre-wrap; word-break: break-all; }
 .program-detail-recording-path [role="status"] { margin: 0; color: var(--muted); font-size: 11px; }
-.program-detail-recording-path [role="status"].is-success { color: var(--brand-strong); }
+.program-detail-recording-path [role="status"].is-success { color: var(--recorded-state-ink); }
 .program-detail-recording-path [role="status"].is-error { color: var(--danger); }
 .program-detail-copy-source { position: fixed; left: -10000px; width: 1px; height: 1px; opacity: 0; }
 .program-detail-notices { display: grid; gap: 8px; margin-top: var(--space-5); }
@@ -124,7 +124,7 @@ button.program-detail-media-poster:focus-visible { outline: 3px solid var(--info
 .program-modal-title { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
 .program-modal-status,.program-modal-status-reason { display: inline-flex; flex: 0 0 auto; align-items: center; min-height: 24px; margin-top: 3px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel-subtle); color: var(--muted); font-size: 11px; white-space: nowrap; }
 .program-modal-status[data-state="recording"],.program-modal-status[data-state="aborted"],.program-modal-status[data-state="missed"],.program-modal-status[data-state="deleted"] { border-color: var(--danger-border); color: var(--danger); }
-.program-modal-status[data-state="recorded"] { border-color: #82b89a; color: var(--brand-strong); }
+.program-modal-status[data-state="recorded"] { border-color: #82b89a; color: var(--recorded-state-ink); }
 .program-modal-status[data-state="reserved"] { border-color: #91abc8; color: var(--info); }
 .program-modal-status[data-state="skipped"],.program-modal-status-reason { border-color: var(--warning-border); background: color-mix(in srgb,var(--warning) 8%,transparent); color: var(--warning); }
 .program-modal-status-reason { font-weight: 400; }

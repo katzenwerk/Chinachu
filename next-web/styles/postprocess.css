@@ -24,7 +24,7 @@
 .postprocess-state.is-waiting,.postprocess-state.is-idle { color: var(--muted); background: var(--panel-subtle); }
 .postprocess-state.is-warning { color: #a74b0b; background: #fff0d9; }
 .postprocess-state.is-failed { color: #c32222; background: #ffebeb; }
-.postprocess-detail-link { color: var(--brand-strong); text-decoration: none; overflow-wrap: anywhere; }
+.postprocess-detail-link { color: var(--brand-text); text-decoration: none; overflow-wrap: anywhere; }
 .postprocess-detail-link:hover { text-decoration: underline; }
 .postprocess-current { display: grid; gap: 12px; }
 .postprocess-current-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }

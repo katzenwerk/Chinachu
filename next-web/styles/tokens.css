@@ -1,3 +1,61 @@
+/* Six-colour palettes live here only; the menu reads these same variables. */
+:root {
+  --palette-thorn-base-light: #246B4C; --palette-thorn-main-light-light: #E8F3ED; --palette-thorn-accent-light: #347F5F; --palette-thorn-sub-light-light: #DDEBE2; --palette-thorn-bg-light: #F0F4F1; --palette-thorn-text-light: #1D3024;
+  --palette-thorn-base-dark: #246B4C; --palette-thorn-main-light-dark: #344B40; --palette-thorn-accent-dark: #7AB995; --palette-thorn-sub-light-dark: #405D4C; --palette-thorn-bg-dark: #171F1A; --palette-thorn-text-dark: #EDF5EF;
+  --palette-gamma-base-light: #C24186; --palette-gamma-main-light-light: #F9EAF2; --palette-gamma-accent-light: #B3005F; --palette-gamma-sub-light-light: #F5DFEA; --palette-gamma-bg-light: #F7F3F6; --palette-gamma-text-light: #34252D;
+  --palette-gamma-base-dark: #C24186; --palette-gamma-main-light-dark: #363438; --palette-gamma-accent-dark: #D67FAE; --palette-gamma-sub-light-dark: #51414A; --palette-gamma-bg-dark: #202124; --palette-gamma-text-dark: #F3F0F2;
+  --palette-garnet-base-light: #A62F3B; --palette-garnet-main-light-light: #F7EBED; --palette-garnet-accent-light: #B84451; --palette-garnet-sub-light-light: #F5DFE3; --palette-garnet-bg-light: #F7F3F3; --palette-garnet-text-light: #35282B;
+  --palette-garnet-base-dark: #8D2935; --palette-garnet-main-light-dark: #51373A; --palette-garnet-accent-dark: #DD7781; --palette-garnet-sub-light-dark: #634347; --palette-garnet-bg-dark: #201A1D; --palette-garnet-text-dark: #F5EFF0;
+  --palette-indigo-base-light: #3B4F85; --palette-indigo-main-light-light: #EDF0F7; --palette-indigo-accent-light: #516A9B; --palette-indigo-sub-light-light: #DDE4F4; --palette-indigo-bg-light: #F2F4F8; --palette-indigo-text-light: #2B3042;
+  --palette-indigo-base-dark: #354779; --palette-indigo-main-light-dark: #353F5B; --palette-indigo-accent-dark: #91A8DE; --palette-indigo-sub-light-dark: #475B84; --palette-indigo-bg-dark: #181D2B; --palette-indigo-text-dark: #EDF0F7;
+  --palette-teal-base-light: #2C6868; --palette-teal-main-light-light: #E5F1F0; --palette-teal-accent-light: #358486; --palette-teal-sub-light-light: #DAECEB; --palette-teal-bg-light: #F0F5F4; --palette-teal-text-light: #243637;
+  --palette-teal-base-dark: #245859; --palette-teal-main-light-dark: #355258; --palette-teal-accent-dark: #7CBABB; --palette-teal-sub-light-dark: #406667; --palette-teal-bg-dark: #172224; --palette-teal-text-dark: #EDF5F4;
+  --palette-violet-base-light: #655074; --palette-violet-main-light-light: #F0EAF3; --palette-violet-accent-light: #79648A; --palette-violet-sub-light-light: #E8DDF1; --palette-violet-bg-light: #F5F2F7; --palette-violet-text-light: #342C3B;
+  --palette-violet-base-dark: #554466; --palette-violet-main-light-dark: #484054; --palette-violet-accent-dark: #B39BC6; --palette-violet-sub-light-dark: #61526D; --palette-violet-bg-dark: #211B28; --palette-violet-text-dark: #F3EFF7;
+  --palette-terra-base-light: #965741; --palette-terra-main-light-light: #F7EBE4; --palette-terra-accent-light: #A76A50; --palette-terra-sub-light-light: #F3E2D6; --palette-terra-bg-light: #F7F4F0; --palette-terra-text-light: #372D28;
+  --palette-terra-base-dark: #844C3A; --palette-terra-main-light-dark: #514137; --palette-terra-accent-dark: #DCA282; --palette-terra-sub-light-dark: #6A4B3C; --palette-terra-bg-dark: #221D19; --palette-terra-text-dark: #F7F1EC;
+  --palette-saffron-base-light: #A2640F; --palette-saffron-main-light-light: #FCF4DF; --palette-saffron-accent-light: #E3A72A; --palette-saffron-sub-light-light: #F9E7BA; --palette-saffron-bg-light: #F8F4EC; --palette-saffron-text-light: #342D1E;
+  --palette-saffron-base-dark: #A06711; --palette-saffron-main-light-dark: #3B4041; --palette-saffron-accent-dark: #F1B754; --palette-saffron-sub-light-dark: #514A3C; --palette-saffron-bg-dark: #202225; --palette-saffron-text-dark: #F2F3F0;
+  --palette-tangerine-base-light: #C34A22; --palette-tangerine-main-light-light: #FCECE5; --palette-tangerine-accent-light: #EB7446; --palette-tangerine-sub-light-light: #F9D7CB; --palette-tangerine-bg-light: #F8F2EF; --palette-tangerine-text-light: #342822;
+  --palette-tangerine-base-dark: #BE502C; --palette-tangerine-main-light-dark: #3D4243; --palette-tangerine-accent-dark: #F29A78; --palette-tangerine-sub-light-dark: #54463F; --palette-tangerine-bg-dark: #202225; --palette-tangerine-text-dark: #F2F3F0;
+  /* Two-colour themes share text and ink defaults, but each has its own canvas and tints. */
+  --duo-bg-light: #F3F4F4; --duo-text-light: #25292C; --duo-surface-light: #fff;
+  --duo-bg-dark: #202225; --duo-text-dark: #F2F3F0; --duo-surface-dark: #292b2e;
+  --duo-ink-light: #fff; --duo-ink-dark: #202124;
+  --palette-signal-ember-base-light: #363A3B; --palette-signal-ember-accent-light: #C8784C; --palette-signal-ember-main-light-light: color-mix(in srgb,var(--palette-signal-ember-base-light) 12%,var(--palette-signal-ember-bg-light)); --palette-signal-ember-sub-light-light: color-mix(in srgb,var(--palette-signal-ember-accent-light) 22%,var(--palette-signal-ember-bg-light)); --palette-signal-ember-bg-light: #F3F1EE; --palette-signal-ember-text-light: var(--duo-text-light); --palette-signal-ember-base-ink-light: var(--duo-ink-light); --palette-signal-ember-accent-ink-light: var(--duo-ink-dark);
+  --palette-signal-ember-base-dark: #4A4B4D; --palette-signal-ember-accent-dark: #E59A6B; --palette-signal-ember-main-light-dark: color-mix(in srgb,var(--palette-signal-ember-base-dark) 14%,var(--palette-signal-ember-bg-dark)); --palette-signal-ember-sub-light-dark: color-mix(in srgb,var(--palette-signal-ember-accent-dark) 28%,var(--palette-signal-ember-bg-dark)); --palette-signal-ember-bg-dark: #222426; --palette-signal-ember-text-dark: var(--duo-text-dark); --palette-signal-ember-base-ink-dark: var(--duo-ink-light); --palette-signal-ember-accent-ink-dark: var(--duo-ink-dark);
+  --palette-carbon-citron-base-light: #303A35; --palette-carbon-citron-accent-light: #9AB551; --palette-carbon-citron-main-light-light: color-mix(in srgb,var(--palette-carbon-citron-base-light) 12%,var(--palette-carbon-citron-bg-light)); --palette-carbon-citron-sub-light-light: color-mix(in srgb,var(--palette-carbon-citron-accent-light) 22%,var(--palette-carbon-citron-bg-light)); --palette-carbon-citron-bg-light: #F3F5EC; --palette-carbon-citron-text-light: var(--duo-text-light); --palette-carbon-citron-base-ink-light: var(--duo-ink-light); --palette-carbon-citron-accent-ink-light: var(--duo-ink-dark);
+  --palette-carbon-citron-base-dark: #4B574B; --palette-carbon-citron-accent-dark: #B6CF6B; --palette-carbon-citron-main-light-dark: color-mix(in srgb,var(--palette-carbon-citron-base-dark) 14%,var(--palette-carbon-citron-bg-dark)); --palette-carbon-citron-sub-light-dark: color-mix(in srgb,var(--palette-carbon-citron-accent-dark) 28%,var(--palette-carbon-citron-bg-dark)); --palette-carbon-citron-bg-dark: #202522; --palette-carbon-citron-text-dark: var(--duo-text-dark); --palette-carbon-citron-base-ink-dark: var(--duo-ink-light); --palette-carbon-citron-accent-ink-dark: var(--duo-ink-dark);
+  --palette-slate-cyan-base-light: #354B56; --palette-slate-cyan-accent-light: #6A9FB1; --palette-slate-cyan-main-light-light: color-mix(in srgb,var(--palette-slate-cyan-base-light) 12%,var(--palette-slate-cyan-bg-light)); --palette-slate-cyan-sub-light-light: color-mix(in srgb,var(--palette-slate-cyan-accent-light) 22%,var(--palette-slate-cyan-bg-light)); --palette-slate-cyan-bg-light: #F0F5F6; --palette-slate-cyan-text-light: var(--duo-text-light); --palette-slate-cyan-base-ink-light: var(--duo-ink-light); --palette-slate-cyan-accent-ink-light: var(--duo-ink-dark);
+  --palette-slate-cyan-base-dark: #4B606E; --palette-slate-cyan-accent-dark: #90C4D2; --palette-slate-cyan-main-light-dark: color-mix(in srgb,var(--palette-slate-cyan-base-dark) 14%,var(--palette-slate-cyan-bg-dark)); --palette-slate-cyan-sub-light-dark: color-mix(in srgb,var(--palette-slate-cyan-accent-dark) 28%,var(--palette-slate-cyan-bg-dark)); --palette-slate-cyan-bg-dark: #1D2B31; --palette-slate-cyan-text-dark: var(--duo-text-dark); --palette-slate-cyan-base-ink-dark: var(--duo-ink-light); --palette-slate-cyan-accent-ink-dark: var(--duo-ink-dark);
+  --palette-ink-coral-base-light: #314257; --palette-ink-coral-accent-light: #C98079; --palette-ink-coral-main-light-light: color-mix(in srgb,var(--palette-ink-coral-base-light) 12%,var(--palette-ink-coral-bg-light)); --palette-ink-coral-sub-light-light: color-mix(in srgb,var(--palette-ink-coral-accent-light) 22%,var(--palette-ink-coral-bg-light)); --palette-ink-coral-bg-light: #F7F2EF; --palette-ink-coral-text-light: var(--duo-text-light); --palette-ink-coral-base-ink-light: var(--duo-ink-light); --palette-ink-coral-accent-ink-light: var(--duo-ink-dark);
+  --palette-ink-coral-base-dark: #4B5E73; --palette-ink-coral-accent-dark: #E3A7A0; --palette-ink-coral-main-light-dark: color-mix(in srgb,var(--palette-ink-coral-base-dark) 14%,var(--palette-ink-coral-bg-dark)); --palette-ink-coral-sub-light-dark: color-mix(in srgb,var(--palette-ink-coral-accent-dark) 28%,var(--palette-ink-coral-bg-dark)); --palette-ink-coral-bg-dark: #202B37; --palette-ink-coral-text-dark: var(--duo-text-dark); --palette-ink-coral-base-ink-dark: var(--duo-ink-light); --palette-ink-coral-accent-ink-dark: var(--duo-ink-dark);
+  --palette-asphalt-orchid-base-light: #3F3A45; --palette-asphalt-orchid-accent-light: #A28CB2; --palette-asphalt-orchid-main-light-light: color-mix(in srgb,var(--palette-asphalt-orchid-base-light) 12%,var(--palette-asphalt-orchid-bg-light)); --palette-asphalt-orchid-sub-light-light: color-mix(in srgb,var(--palette-asphalt-orchid-accent-light) 22%,var(--palette-asphalt-orchid-bg-light)); --palette-asphalt-orchid-bg-light: #F4F1F5; --palette-asphalt-orchid-text-light: var(--duo-text-light); --palette-asphalt-orchid-base-ink-light: var(--duo-ink-light); --palette-asphalt-orchid-accent-ink-light: var(--duo-ink-dark);
+  --palette-asphalt-orchid-base-dark: #56505E; --palette-asphalt-orchid-accent-dark: #BFABD0; --palette-asphalt-orchid-main-light-dark: color-mix(in srgb,var(--palette-asphalt-orchid-base-dark) 14%,var(--palette-asphalt-orchid-bg-dark)); --palette-asphalt-orchid-sub-light-dark: color-mix(in srgb,var(--palette-asphalt-orchid-accent-dark) 28%,var(--palette-asphalt-orchid-bg-dark)); --palette-asphalt-orchid-bg-dark: #242128; --palette-asphalt-orchid-text-dark: var(--duo-text-dark); --palette-asphalt-orchid-base-ink-dark: var(--duo-ink-light); --palette-asphalt-orchid-accent-ink-dark: var(--duo-ink-dark);
+  --palette-black-rose-base-light: #37323D; --palette-black-rose-accent-light: #BF7997; --palette-black-rose-main-light-light: color-mix(in srgb,var(--palette-black-rose-base-light) 12%,var(--palette-black-rose-bg-light)); --palette-black-rose-sub-light-light: color-mix(in srgb,var(--palette-black-rose-accent-light) 22%,var(--palette-black-rose-bg-light)); --palette-black-rose-bg-light: #F6F1F3; --palette-black-rose-text-light: var(--duo-text-light); --palette-black-rose-base-ink-light: var(--duo-ink-light); --palette-black-rose-accent-ink-light: var(--duo-ink-dark);
+  --palette-black-rose-base-dark: #544A58; --palette-black-rose-accent-dark: #DC9BB8; --palette-black-rose-main-light-dark: color-mix(in srgb,var(--palette-black-rose-base-dark) 14%,var(--palette-black-rose-bg-dark)); --palette-black-rose-sub-light-dark: color-mix(in srgb,var(--palette-black-rose-accent-dark) 28%,var(--palette-black-rose-bg-dark)); --palette-black-rose-bg-dark: #241F25; --palette-black-rose-text-dark: var(--duo-text-dark); --palette-black-rose-base-ink-dark: var(--duo-ink-light); --palette-black-rose-accent-ink-dark: var(--duo-ink-dark);
+  --palette-forest-ice-base-light: #2E4E46; --palette-forest-ice-accent-light: #7DAFC3; --palette-forest-ice-main-light-light: color-mix(in srgb,var(--palette-forest-ice-base-light) 12%,var(--palette-forest-ice-bg-light)); --palette-forest-ice-sub-light-light: color-mix(in srgb,var(--palette-forest-ice-accent-light) 22%,var(--palette-forest-ice-bg-light)); --palette-forest-ice-bg-light: #F1F6F4; --palette-forest-ice-text-light: var(--duo-text-light); --palette-forest-ice-base-ink-light: var(--duo-ink-light); --palette-forest-ice-accent-ink-light: var(--duo-ink-dark);
+  --palette-forest-ice-base-dark: #45665C; --palette-forest-ice-accent-dark: #9BCEDE; --palette-forest-ice-main-light-dark: color-mix(in srgb,var(--palette-forest-ice-base-dark) 14%,var(--palette-forest-ice-bg-dark)); --palette-forest-ice-sub-light-dark: color-mix(in srgb,var(--palette-forest-ice-accent-dark) 28%,var(--palette-forest-ice-bg-dark)); --palette-forest-ice-bg-dark: #1C2927; --palette-forest-ice-text-dark: var(--duo-text-dark); --palette-forest-ice-base-ink-dark: var(--duo-ink-light); --palette-forest-ice-accent-ink-dark: var(--duo-ink-dark);
+  --palette-choco-mint-base-light: #65C7B1; --palette-choco-mint-accent-light: #604439; --palette-choco-mint-main-light-light: color-mix(in srgb,var(--palette-choco-mint-base-light) 12%,var(--palette-choco-mint-bg-light)); --palette-choco-mint-sub-light-light: color-mix(in srgb,var(--palette-choco-mint-accent-light) 22%,var(--palette-choco-mint-bg-light)); --palette-choco-mint-bg-light: #F2F7F4; --palette-choco-mint-text-light: var(--duo-text-light); --palette-choco-mint-base-ink-light: var(--duo-ink-dark); --palette-choco-mint-accent-ink-light: var(--duo-ink-light);
+  --palette-choco-mint-base-dark: #80D7C4; --palette-choco-mint-accent-dark: #A4806A; --palette-choco-mint-main-light-dark: color-mix(in srgb,var(--palette-choco-mint-base-dark) 14%,var(--palette-choco-mint-bg-dark)); --palette-choco-mint-sub-light-dark: color-mix(in srgb,var(--palette-choco-mint-accent-dark) 28%,var(--palette-choco-mint-bg-dark)); --palette-choco-mint-bg-dark: #242120; --palette-choco-mint-text-dark: var(--duo-text-dark); --palette-choco-mint-base-ink-dark: var(--duo-ink-dark); --palette-choco-mint-accent-ink-dark: var(--duo-ink-dark);
+  --palette-cocoa-mint-base-light: #564036; --palette-cocoa-mint-accent-light: #7ABEA6; --palette-cocoa-mint-main-light-light: color-mix(in srgb,var(--palette-cocoa-mint-base-light) 12%,var(--palette-cocoa-mint-bg-light)); --palette-cocoa-mint-sub-light-light: color-mix(in srgb,var(--palette-cocoa-mint-accent-light) 22%,var(--palette-cocoa-mint-bg-light)); --palette-cocoa-mint-bg-light: #F5F0EB; --palette-cocoa-mint-text-light: var(--duo-text-light); --palette-cocoa-mint-base-ink-light: var(--duo-ink-light); --palette-cocoa-mint-accent-ink-light: var(--duo-ink-dark);
+  --palette-cocoa-mint-base-dark: #725549; --palette-cocoa-mint-accent-dark: #94D8C1; --palette-cocoa-mint-main-light-dark: color-mix(in srgb,var(--palette-cocoa-mint-base-dark) 14%,var(--palette-cocoa-mint-bg-dark)); --palette-cocoa-mint-sub-light-dark: color-mix(in srgb,var(--palette-cocoa-mint-accent-dark) 28%,var(--palette-cocoa-mint-bg-dark)); --palette-cocoa-mint-bg-dark: #302723; --palette-cocoa-mint-text-dark: var(--duo-text-dark); --palette-cocoa-mint-base-ink-dark: var(--duo-ink-light); --palette-cocoa-mint-accent-ink-dark: var(--duo-ink-dark);
+  --palette-matcha-olive-base-light: #57623B; --palette-matcha-olive-accent-light: #96B177; --palette-matcha-olive-main-light-light: color-mix(in srgb,var(--palette-matcha-olive-base-light) 12%,var(--palette-matcha-olive-bg-light)); --palette-matcha-olive-sub-light-light: color-mix(in srgb,var(--palette-matcha-olive-accent-light) 22%,var(--palette-matcha-olive-bg-light)); --palette-matcha-olive-bg-light: #F2F3E7; --palette-matcha-olive-text-light: var(--duo-text-light); --palette-matcha-olive-base-ink-light: var(--duo-ink-light); --palette-matcha-olive-accent-ink-light: var(--duo-ink-dark);
+  --palette-matcha-olive-base-dark: #6D7E4E; --palette-matcha-olive-accent-dark: #B8CD96; --palette-matcha-olive-main-light-dark: color-mix(in srgb,var(--palette-matcha-olive-base-dark) 14%,var(--palette-matcha-olive-bg-dark)); --palette-matcha-olive-sub-light-dark: color-mix(in srgb,var(--palette-matcha-olive-accent-dark) 28%,var(--palette-matcha-olive-bg-dark)); --palette-matcha-olive-bg-dark: #22271E; --palette-matcha-olive-text-dark: var(--duo-text-dark); --palette-matcha-olive-base-ink-dark: var(--duo-ink-light); --palette-matcha-olive-accent-ink-dark: var(--duo-ink-dark);
+  --palette-cocoa-sky-base-light: #564139; --palette-cocoa-sky-accent-light: #8EBDCF; --palette-cocoa-sky-main-light-light: color-mix(in srgb,var(--palette-cocoa-sky-base-light) 12%,var(--palette-cocoa-sky-bg-light)); --palette-cocoa-sky-sub-light-light: color-mix(in srgb,var(--palette-cocoa-sky-accent-light) 22%,var(--palette-cocoa-sky-bg-light)); --palette-cocoa-sky-bg-light: #F5F3F1; --palette-cocoa-sky-text-light: var(--duo-text-light); --palette-cocoa-sky-base-ink-light: var(--duo-ink-light); --palette-cocoa-sky-accent-ink-light: var(--duo-ink-dark);
+  --palette-cocoa-sky-base-dark: #73574C; --palette-cocoa-sky-accent-dark: #B4D9E8; --palette-cocoa-sky-main-light-dark: color-mix(in srgb,var(--palette-cocoa-sky-base-dark) 14%,var(--palette-cocoa-sky-bg-dark)); --palette-cocoa-sky-sub-light-dark: color-mix(in srgb,var(--palette-cocoa-sky-accent-dark) 28%,var(--palette-cocoa-sky-bg-dark)); --palette-cocoa-sky-bg-dark: #252B31; --palette-cocoa-sky-text-dark: var(--duo-text-dark); --palette-cocoa-sky-base-ink-dark: var(--duo-ink-light); --palette-cocoa-sky-accent-ink-dark: var(--duo-ink-dark);
+  --palette-aubergine-sage-base-light: #493C50; --palette-aubergine-sage-accent-light: #A4BCA2; --palette-aubergine-sage-main-light-light: color-mix(in srgb,var(--palette-aubergine-sage-base-light) 12%,var(--palette-aubergine-sage-bg-light)); --palette-aubergine-sage-sub-light-light: color-mix(in srgb,var(--palette-aubergine-sage-accent-light) 22%,var(--palette-aubergine-sage-bg-light)); --palette-aubergine-sage-bg-light: #F2F4EE; --palette-aubergine-sage-text-light: var(--duo-text-light); --palette-aubergine-sage-base-ink-light: var(--duo-ink-light); --palette-aubergine-sage-accent-ink-light: var(--duo-ink-dark);
+  --palette-aubergine-sage-base-dark: #65546D; --palette-aubergine-sage-accent-dark: #BDD2B8; --palette-aubergine-sage-main-light-dark: color-mix(in srgb,var(--palette-aubergine-sage-base-dark) 14%,var(--palette-aubergine-sage-bg-dark)); --palette-aubergine-sage-sub-light-dark: color-mix(in srgb,var(--palette-aubergine-sage-accent-dark) 28%,var(--palette-aubergine-sage-bg-dark)); --palette-aubergine-sage-bg-dark: #28232D; --palette-aubergine-sage-text-dark: var(--duo-text-dark); --palette-aubergine-sage-base-ink-dark: var(--duo-ink-light); --palette-aubergine-sage-accent-ink-dark: var(--duo-ink-dark);
+  --palette-bordeaux-ice-base-light: #5E3049; --palette-bordeaux-ice-accent-light: #86C6CB; --palette-bordeaux-ice-main-light-light: color-mix(in srgb,var(--palette-bordeaux-ice-base-light) 12%,var(--palette-bordeaux-ice-bg-light)); --palette-bordeaux-ice-sub-light-light: color-mix(in srgb,var(--palette-bordeaux-ice-accent-light) 22%,var(--palette-bordeaux-ice-bg-light)); --palette-bordeaux-ice-bg-light: #F0F5F6; --palette-bordeaux-ice-text-light: var(--duo-text-light); --palette-bordeaux-ice-base-ink-light: var(--duo-ink-light); --palette-bordeaux-ice-accent-ink-light: var(--duo-ink-dark);
+  --palette-bordeaux-ice-base-dark: #78455E; --palette-bordeaux-ice-accent-dark: #A7DADD; --palette-bordeaux-ice-main-light-dark: color-mix(in srgb,var(--palette-bordeaux-ice-base-dark) 14%,var(--palette-bordeaux-ice-bg-dark)); --palette-bordeaux-ice-sub-light-dark: color-mix(in srgb,var(--palette-bordeaux-ice-accent-dark) 28%,var(--palette-bordeaux-ice-bg-dark)); --palette-bordeaux-ice-bg-dark: #291F28; --palette-bordeaux-ice-text-dark: var(--duo-text-dark); --palette-bordeaux-ice-base-ink-dark: var(--duo-ink-light); --palette-bordeaux-ice-accent-ink-dark: var(--duo-ink-dark);
+  --palette-forest-coral-base-light: #2C4B42; --palette-forest-coral-accent-light: #D99385; --palette-forest-coral-main-light-light: color-mix(in srgb,var(--palette-forest-coral-base-light) 12%,var(--palette-forest-coral-bg-light)); --palette-forest-coral-sub-light-light: color-mix(in srgb,var(--palette-forest-coral-accent-light) 22%,var(--palette-forest-coral-bg-light)); --palette-forest-coral-bg-light: #F7F2EE; --palette-forest-coral-text-light: var(--duo-text-light); --palette-forest-coral-base-ink-light: var(--duo-ink-light); --palette-forest-coral-accent-ink-light: var(--duo-ink-dark);
+  --palette-forest-coral-base-dark: #44685C; --palette-forest-coral-accent-dark: #EBB0A3; --palette-forest-coral-main-light-dark: color-mix(in srgb,var(--palette-forest-coral-base-dark) 14%,var(--palette-forest-coral-bg-dark)); --palette-forest-coral-sub-light-dark: color-mix(in srgb,var(--palette-forest-coral-accent-dark) 28%,var(--palette-forest-coral-bg-dark)); --palette-forest-coral-bg-dark: #202B25; --palette-forest-coral-text-dark: var(--duo-text-dark); --palette-forest-coral-base-ink-dark: var(--duo-ink-light); --palette-forest-coral-accent-ink-dark: var(--duo-ink-dark);
+  --palette-blueberry-cream-base-light: #34466B; --palette-blueberry-cream-accent-light: #DACAB1; --palette-blueberry-cream-main-light-light: color-mix(in srgb,var(--palette-blueberry-cream-base-light) 12%,var(--palette-blueberry-cream-bg-light)); --palette-blueberry-cream-sub-light-light: color-mix(in srgb,var(--palette-blueberry-cream-accent-light) 22%,var(--palette-blueberry-cream-bg-light)); --palette-blueberry-cream-bg-light: #F7F3E9; --palette-blueberry-cream-text-light: var(--duo-text-light); --palette-blueberry-cream-base-ink-light: var(--duo-ink-light); --palette-blueberry-cream-accent-ink-light: var(--duo-ink-dark);
+  --palette-blueberry-cream-base-dark: #4E5E86; --palette-blueberry-cream-accent-dark: #E7D9C5; --palette-blueberry-cream-main-light-dark: color-mix(in srgb,var(--palette-blueberry-cream-base-dark) 14%,var(--palette-blueberry-cream-bg-dark)); --palette-blueberry-cream-sub-light-dark: color-mix(in srgb,var(--palette-blueberry-cream-accent-dark) 28%,var(--palette-blueberry-cream-bg-dark)); --palette-blueberry-cream-bg-dark: #202438; --palette-blueberry-cream-text-dark: var(--duo-text-dark); --palette-blueberry-cream-base-ink-dark: var(--duo-ink-light); --palette-blueberry-cream-accent-ink-dark: var(--duo-ink-dark);
+  --palette-night-sakura-base-light: #333D4E; --palette-night-sakura-accent-light: #D18FAE; --palette-night-sakura-main-light-light: color-mix(in srgb,var(--palette-night-sakura-base-light) 12%,var(--palette-night-sakura-bg-light)); --palette-night-sakura-sub-light-light: color-mix(in srgb,var(--palette-night-sakura-accent-light) 22%,var(--palette-night-sakura-bg-light)); --palette-night-sakura-bg-light: #F8F1F4; --palette-night-sakura-text-light: var(--duo-text-light); --palette-night-sakura-base-ink-light: var(--duo-ink-light); --palette-night-sakura-accent-ink-light: var(--duo-ink-dark);
+  --palette-night-sakura-base-dark: #505B70; --palette-night-sakura-accent-dark: #E8ACC5; --palette-night-sakura-main-light-dark: color-mix(in srgb,var(--palette-night-sakura-base-dark) 14%,var(--palette-night-sakura-bg-dark)); --palette-night-sakura-sub-light-dark: color-mix(in srgb,var(--palette-night-sakura-accent-dark) 28%,var(--palette-night-sakura-bg-dark)); --palette-night-sakura-bg-dark: #202532; --palette-night-sakura-text-dark: var(--duo-text-dark); --palette-night-sakura-base-ink-dark: var(--duo-ink-light); --palette-night-sakura-accent-ink-dark: var(--duo-ink-dark);
+}
+
 :root {
   /* Viewport bounds remain screen-sized when the root UI is zoomed. */
   --wui-zoom: 1;
@@ -5,15 +63,14 @@
   --wui-viewport-height: calc(100vh / var(--wui-zoom));
   --wui-viewport-dynamic-height: calc(100dvh / var(--wui-zoom));
   color-scheme: light;
-  --brand: #246b4c;
-  --brand-strong: #1b583d;
-  --brand-hover: #347f5f;
-  --brand-soft: #e8f3ed;
+  --base: var(--palette-thorn-base-light);
+  --accent: var(--palette-thorn-accent-light);
+  --brand: var(--base);
   --danger: #b12f3f;
   --warning: #8a5b08;
   --info: #526f91;
   --header-height: 60px;
-  /* Green header controls shared across list/guide/search pages. */
+  /* Header controls shared across list/guide/search pages. */
   --header-control-height: 34px;
   --header-control-font-size: 13px;
   --header-count-font-size: 11px;
@@ -50,14 +107,13 @@
   --font-heading-weight: 600;
   --font-logo-weight: 300;
   --font-support-weight: 400;
-  --bg: #f0f4f1;
+  --bg: var(--palette-thorn-bg-light);
   --panel: #fff;
   --panel-subtle: #f5f8f6;
-  --text: #1d3024;
+  --text: var(--palette-thorn-text-light);
   --muted: #64736a;
   --border: #d7e1da;
   --shadow: 0 12px 30px rgba(22, 48, 33, .09);
-  --focus: #7fd7a7;
   --danger-border: #df9ca4;
   --warning-border: #dfc07b;
   --alert-badge-bg: #fbe6e8;
@@ -67,15 +123,15 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #17201b;
+  --accent: var(--palette-thorn-accent-dark);
+  --bg: var(--palette-thorn-bg-dark);
   --panel: #222e27;
   --panel-subtle: #2b3930;
-  --text: #edf5ef;
+  --text: var(--palette-thorn-text-dark);
   --muted: #b2c4b8;
   --border: #415348;
-  --brand-soft: #294637;
   --shadow: 0 14px 34px rgba(0, 0, 0, .28);
-  --focus: #8ae0b1;
+  --focus: var(--accent);
   --danger: #ffb2ba;
   --warning: #f2ca7f;
   --info: #a9c4e0;
@@ -84,6 +140,70 @@
   --alert-badge-bg: #ffdfe4;
   --alert-badge-text: #81192b;
   --alert-badge-border: #e38892;
+}
+
+/* Keep the shared component tokens; derive surfaces and accents from the six colours. */
+:root {
+  --main-light: var(--palette-thorn-main-light-light);
+  --sub-light: var(--palette-thorn-sub-light-light);
+  --brand-strong: var(--base);
+  --brand-hover: color-mix(in srgb,var(--base) 90%,black);
+  --brand-soft: var(--main-light);
+  --brand-text: var(--base);
+  --link-color: var(--base);
+  --brand-text-dark: var(--accent);
+  --focus: var(--accent);
+  --header-focus: #fff;
+  --brand-ink: var(--text);
+  --header-hover-ink: var(--base);
+  --header-field-ink: var(--base);
+  --header-search-ink: var(--base);
+  --header-search-button: var(--base);
+  --header-search-hover: var(--main-light);
+  --tooltip-bg: #202124;
+  --tooltip-muted: #ddd;
+  --guide-bg: var(--panel-subtle);
+  --guide-text: var(--text);
+  --guide-description: var(--muted);
+  --recorded-state-ink: #1b583d;
+  --log-selected: var(--brand-text);
+  --nav-marker: #fff;
+  --thumbnail-start: #4f715f;
+  --thumbnail-end: #263e31;
+  --thumbnail-solid: #15231b;
+  --thumbnail-text: #b8c8be;
+  --play-hover: color-mix(in srgb,var(--base) 84%,transparent);
+  --timeline-point: var(--base);
+  --timeline-track: color-mix(in srgb,var(--base) 30%,var(--panel));
+  --timeline-label: var(--brand-text);
+}
+:root[data-theme="dark"] {
+  --brand-text: var(--accent);
+  --link-color: var(--accent);
+  --brand-soft: var(--main-light);
+  --timeline-point: var(--accent);
+  --timeline-track: color-mix(in srgb,var(--accent) 40%,var(--panel));
+}
+/* Preserve Standard's familiar surfaces; other themes use neutral white/charcoal panels. */
+:root[data-palette]:not([data-palette="thorn"]) {
+  --panel: #fff;
+  --panel-subtle: #f5f5f5;
+  --muted: color-mix(in srgb,var(--text) 72%,var(--panel));
+  --border: color-mix(in srgb,var(--text) 20%,var(--panel));
+}
+:root[data-palette]:not([data-palette="thorn"])[data-theme="dark"] {
+  --panel: #292b2e;
+  --panel-subtle: #323438;
+}
+
+/* Two-colour themes: panels track the theme-specific light/dark canvas. */
+:root[data-palette-style="duo"][data-palette] {
+  --panel: color-mix(in srgb, var(--bg) 23%, #fff);
+  --panel-subtle: color-mix(in srgb, var(--bg) 40%, #fff);
+}
+:root[data-palette-style="duo"][data-palette][data-theme="dark"] {
+  --panel: color-mix(in srgb, var(--bg) 92.5%, #fff);
+  --panel-subtle: color-mix(in srgb, var(--bg) 88%, #fff);
 }
 
 * { box-sizing: border-box; }
@@ -115,3 +235,71 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
   background: var(--brand-soft);
   color: var(--text);
 }
+
+:root { --base: var(--palette-thorn-base-light); --main-light: var(--palette-thorn-main-light-light); --accent: var(--palette-thorn-accent-light); --sub-light: var(--palette-thorn-sub-light-light); --bg: var(--palette-thorn-bg-light); --text: var(--palette-thorn-text-light); }
+:root[data-theme="dark"] { --base: var(--palette-thorn-base-dark); --main-light: var(--palette-thorn-main-light-dark); --accent: var(--palette-thorn-accent-dark); --sub-light: var(--palette-thorn-sub-light-dark); --bg: var(--palette-thorn-bg-dark); --text: var(--palette-thorn-text-dark); }
+:root[data-palette="gamma"][data-theme="light"] { --base: var(--palette-gamma-base-light); --main-light: var(--palette-gamma-main-light-light); --accent: var(--palette-gamma-accent-light); --sub-light: var(--palette-gamma-sub-light-light); --bg: var(--palette-gamma-bg-light); --text: var(--palette-gamma-text-light); }
+:root[data-palette="gamma"][data-theme="dark"] { --base: var(--palette-gamma-base-dark); --main-light: var(--palette-gamma-main-light-dark); --accent: var(--palette-gamma-accent-dark); --sub-light: var(--palette-gamma-sub-light-dark); --bg: var(--palette-gamma-bg-dark); --text: var(--palette-gamma-text-dark); }
+:root[data-palette="garnet"][data-theme="light"] { --base: var(--palette-garnet-base-light); --main-light: var(--palette-garnet-main-light-light); --accent: var(--palette-garnet-accent-light); --sub-light: var(--palette-garnet-sub-light-light); --bg: var(--palette-garnet-bg-light); --text: var(--palette-garnet-text-light); }
+:root[data-palette="garnet"][data-theme="dark"] { --base: var(--palette-garnet-base-dark); --main-light: var(--palette-garnet-main-light-dark); --accent: var(--palette-garnet-accent-dark); --sub-light: var(--palette-garnet-sub-light-dark); --bg: var(--palette-garnet-bg-dark); --text: var(--palette-garnet-text-dark); }
+:root[data-palette="indigo"][data-theme="light"] { --base: var(--palette-indigo-base-light); --main-light: var(--palette-indigo-main-light-light); --accent: var(--palette-indigo-accent-light); --sub-light: var(--palette-indigo-sub-light-light); --bg: var(--palette-indigo-bg-light); --text: var(--palette-indigo-text-light); }
+:root[data-palette="indigo"][data-theme="dark"] { --base: var(--palette-indigo-base-dark); --main-light: var(--palette-indigo-main-light-dark); --accent: var(--palette-indigo-accent-dark); --sub-light: var(--palette-indigo-sub-light-dark); --bg: var(--palette-indigo-bg-dark); --text: var(--palette-indigo-text-dark); }
+:root[data-palette="teal"][data-theme="light"] { --base: var(--palette-teal-base-light); --main-light: var(--palette-teal-main-light-light); --accent: var(--palette-teal-accent-light); --sub-light: var(--palette-teal-sub-light-light); --bg: var(--palette-teal-bg-light); --text: var(--palette-teal-text-light); }
+:root[data-palette="teal"][data-theme="dark"] { --base: var(--palette-teal-base-dark); --main-light: var(--palette-teal-main-light-dark); --accent: var(--palette-teal-accent-dark); --sub-light: var(--palette-teal-sub-light-dark); --bg: var(--palette-teal-bg-dark); --text: var(--palette-teal-text-dark); }
+:root[data-palette="violet"][data-theme="light"] { --base: var(--palette-violet-base-light); --main-light: var(--palette-violet-main-light-light); --accent: var(--palette-violet-accent-light); --sub-light: var(--palette-violet-sub-light-light); --bg: var(--palette-violet-bg-light); --text: var(--palette-violet-text-light); }
+:root[data-palette="violet"][data-theme="dark"] { --base: var(--palette-violet-base-dark); --main-light: var(--palette-violet-main-light-dark); --accent: var(--palette-violet-accent-dark); --sub-light: var(--palette-violet-sub-light-dark); --bg: var(--palette-violet-bg-dark); --text: var(--palette-violet-text-dark); }
+:root[data-palette="terra"][data-theme="light"] { --base: var(--palette-terra-base-light); --main-light: var(--palette-terra-main-light-light); --accent: var(--palette-terra-accent-light); --sub-light: var(--palette-terra-sub-light-light); --bg: var(--palette-terra-bg-light); --text: var(--palette-terra-text-light); }
+:root[data-palette="terra"][data-theme="dark"] { --base: var(--palette-terra-base-dark); --main-light: var(--palette-terra-main-light-dark); --accent: var(--palette-terra-accent-dark); --sub-light: var(--palette-terra-sub-light-dark); --bg: var(--palette-terra-bg-dark); --text: var(--palette-terra-text-dark); }
+:root[data-palette="saffron"][data-theme="light"] { --base: var(--palette-saffron-base-light); --main-light: var(--palette-saffron-main-light-light); --accent: var(--palette-saffron-accent-light); --sub-light: var(--palette-saffron-sub-light-light); --bg: var(--palette-saffron-bg-light); --text: var(--palette-saffron-text-light); }
+:root[data-palette="saffron"][data-theme="dark"] { --base: var(--palette-saffron-base-dark); --main-light: var(--palette-saffron-main-light-dark); --accent: var(--palette-saffron-accent-dark); --sub-light: var(--palette-saffron-sub-light-dark); --bg: var(--palette-saffron-bg-dark); --text: var(--palette-saffron-text-dark); }
+:root[data-palette="tangerine"][data-theme="light"] { --base: var(--palette-tangerine-base-light); --main-light: var(--palette-tangerine-main-light-light); --accent: var(--palette-tangerine-accent-light); --sub-light: var(--palette-tangerine-sub-light-light); --bg: var(--palette-tangerine-bg-light); --text: var(--palette-tangerine-text-light); }
+:root[data-palette="tangerine"][data-theme="dark"] { --base: var(--palette-tangerine-base-dark); --main-light: var(--palette-tangerine-main-light-dark); --accent: var(--palette-tangerine-accent-dark); --sub-light: var(--palette-tangerine-sub-light-dark); --bg: var(--palette-tangerine-bg-dark); --text: var(--palette-tangerine-text-dark); }
+
+/* These overrides apply only to two-colour themes; the nine single-colour palettes stay intact. */
+:root[data-palette-style="duo"] {
+  --brand-text: color-mix(in srgb,var(--accent) 40%,var(--text));
+  --link-color: var(--brand-text);
+  --brand-ink: var(--duo-ink-dark);
+  --header-hover-ink: var(--duo-ink-dark);
+  --header-field-ink: var(--duo-ink-dark);
+  --header-search-ink: var(--duo-ink-dark);
+  --header-search-button: var(--duo-ink-dark);
+  --header-focus: var(--header-ink);
+  --nav-marker: var(--nav-ink);
+}
+:root[data-palette-style="duo"][data-theme="dark"] {
+  --brand-text: color-mix(in srgb,var(--accent) 65%,var(--text));
+  --brand-text-dark: var(--brand-text);
+}
+:root[data-palette="signal-ember"][data-theme="light"] { --base: var(--palette-signal-ember-base-light); --main-light: var(--palette-signal-ember-main-light-light); --accent: var(--palette-signal-ember-accent-light); --sub-light: var(--palette-signal-ember-sub-light-light); --bg: var(--palette-signal-ember-bg-light); --text: var(--palette-signal-ember-text-light); --header-ink: var(--palette-signal-ember-base-ink-light); --nav-ink: var(--palette-signal-ember-accent-ink-light); }
+:root[data-palette="signal-ember"][data-theme="dark"] { --base: var(--palette-signal-ember-base-dark); --main-light: var(--palette-signal-ember-main-light-dark); --accent: var(--palette-signal-ember-accent-dark); --sub-light: var(--palette-signal-ember-sub-light-dark); --bg: var(--palette-signal-ember-bg-dark); --text: var(--palette-signal-ember-text-dark); --header-ink: var(--palette-signal-ember-base-ink-dark); --nav-ink: var(--palette-signal-ember-accent-ink-dark); }
+:root[data-palette="carbon-citron"][data-theme="light"] { --base: var(--palette-carbon-citron-base-light); --main-light: var(--palette-carbon-citron-main-light-light); --accent: var(--palette-carbon-citron-accent-light); --sub-light: var(--palette-carbon-citron-sub-light-light); --bg: var(--palette-carbon-citron-bg-light); --text: var(--palette-carbon-citron-text-light); --header-ink: var(--palette-carbon-citron-base-ink-light); --nav-ink: var(--palette-carbon-citron-accent-ink-light); }
+:root[data-palette="carbon-citron"][data-theme="dark"] { --base: var(--palette-carbon-citron-base-dark); --main-light: var(--palette-carbon-citron-main-light-dark); --accent: var(--palette-carbon-citron-accent-dark); --sub-light: var(--palette-carbon-citron-sub-light-dark); --bg: var(--palette-carbon-citron-bg-dark); --text: var(--palette-carbon-citron-text-dark); --header-ink: var(--palette-carbon-citron-base-ink-dark); --nav-ink: var(--palette-carbon-citron-accent-ink-dark); }
+:root[data-palette="slate-cyan"][data-theme="light"] { --base: var(--palette-slate-cyan-base-light); --main-light: var(--palette-slate-cyan-main-light-light); --accent: var(--palette-slate-cyan-accent-light); --sub-light: var(--palette-slate-cyan-sub-light-light); --bg: var(--palette-slate-cyan-bg-light); --text: var(--palette-slate-cyan-text-light); --header-ink: var(--palette-slate-cyan-base-ink-light); --nav-ink: var(--palette-slate-cyan-accent-ink-light); }
+:root[data-palette="slate-cyan"][data-theme="dark"] { --base: var(--palette-slate-cyan-base-dark); --main-light: var(--palette-slate-cyan-main-light-dark); --accent: var(--palette-slate-cyan-accent-dark); --sub-light: var(--palette-slate-cyan-sub-light-dark); --bg: var(--palette-slate-cyan-bg-dark); --text: var(--palette-slate-cyan-text-dark); --header-ink: var(--palette-slate-cyan-base-ink-dark); --nav-ink: var(--palette-slate-cyan-accent-ink-dark); }
+:root[data-palette="ink-coral"][data-theme="light"] { --base: var(--palette-ink-coral-base-light); --main-light: var(--palette-ink-coral-main-light-light); --accent: var(--palette-ink-coral-accent-light); --sub-light: var(--palette-ink-coral-sub-light-light); --bg: var(--palette-ink-coral-bg-light); --text: var(--palette-ink-coral-text-light); --header-ink: var(--palette-ink-coral-base-ink-light); --nav-ink: var(--palette-ink-coral-accent-ink-light); }
+:root[data-palette="ink-coral"][data-theme="dark"] { --base: var(--palette-ink-coral-base-dark); --main-light: var(--palette-ink-coral-main-light-dark); --accent: var(--palette-ink-coral-accent-dark); --sub-light: var(--palette-ink-coral-sub-light-dark); --bg: var(--palette-ink-coral-bg-dark); --text: var(--palette-ink-coral-text-dark); --header-ink: var(--palette-ink-coral-base-ink-dark); --nav-ink: var(--palette-ink-coral-accent-ink-dark); }
+:root[data-palette="asphalt-orchid"][data-theme="light"] { --base: var(--palette-asphalt-orchid-base-light); --main-light: var(--palette-asphalt-orchid-main-light-light); --accent: var(--palette-asphalt-orchid-accent-light); --sub-light: var(--palette-asphalt-orchid-sub-light-light); --bg: var(--palette-asphalt-orchid-bg-light); --text: var(--palette-asphalt-orchid-text-light); --header-ink: var(--palette-asphalt-orchid-base-ink-light); --nav-ink: var(--palette-asphalt-orchid-accent-ink-light); }
+:root[data-palette="asphalt-orchid"][data-theme="dark"] { --base: var(--palette-asphalt-orchid-base-dark); --main-light: var(--palette-asphalt-orchid-main-light-dark); --accent: var(--palette-asphalt-orchid-accent-dark); --sub-light: var(--palette-asphalt-orchid-sub-light-dark); --bg: var(--palette-asphalt-orchid-bg-dark); --text: var(--palette-asphalt-orchid-text-dark); --header-ink: var(--palette-asphalt-orchid-base-ink-dark); --nav-ink: var(--palette-asphalt-orchid-accent-ink-dark); }
+:root[data-palette="black-rose"][data-theme="light"] { --base: var(--palette-black-rose-base-light); --main-light: var(--palette-black-rose-main-light-light); --accent: var(--palette-black-rose-accent-light); --sub-light: var(--palette-black-rose-sub-light-light); --bg: var(--palette-black-rose-bg-light); --text: var(--palette-black-rose-text-light); --header-ink: var(--palette-black-rose-base-ink-light); --nav-ink: var(--palette-black-rose-accent-ink-light); }
+:root[data-palette="black-rose"][data-theme="dark"] { --base: var(--palette-black-rose-base-dark); --main-light: var(--palette-black-rose-main-light-dark); --accent: var(--palette-black-rose-accent-dark); --sub-light: var(--palette-black-rose-sub-light-dark); --bg: var(--palette-black-rose-bg-dark); --text: var(--palette-black-rose-text-dark); --header-ink: var(--palette-black-rose-base-ink-dark); --nav-ink: var(--palette-black-rose-accent-ink-dark); }
+:root[data-palette="forest-ice"][data-theme="light"] { --base: var(--palette-forest-ice-base-light); --main-light: var(--palette-forest-ice-main-light-light); --accent: var(--palette-forest-ice-accent-light); --sub-light: var(--palette-forest-ice-sub-light-light); --bg: var(--palette-forest-ice-bg-light); --text: var(--palette-forest-ice-text-light); --header-ink: var(--palette-forest-ice-base-ink-light); --nav-ink: var(--palette-forest-ice-accent-ink-light); }
+:root[data-palette="forest-ice"][data-theme="dark"] { --base: var(--palette-forest-ice-base-dark); --main-light: var(--palette-forest-ice-main-light-dark); --accent: var(--palette-forest-ice-accent-dark); --sub-light: var(--palette-forest-ice-sub-light-dark); --bg: var(--palette-forest-ice-bg-dark); --text: var(--palette-forest-ice-text-dark); --header-ink: var(--palette-forest-ice-base-ink-dark); --nav-ink: var(--palette-forest-ice-accent-ink-dark); }
+:root[data-palette="choco-mint"][data-theme="light"] { --base: var(--palette-choco-mint-base-light); --main-light: var(--palette-choco-mint-main-light-light); --accent: var(--palette-choco-mint-accent-light); --sub-light: var(--palette-choco-mint-sub-light-light); --bg: var(--palette-choco-mint-bg-light); --text: var(--palette-choco-mint-text-light); --header-ink: var(--palette-choco-mint-base-ink-light); --nav-ink: var(--palette-choco-mint-accent-ink-light); }
+:root[data-palette="choco-mint"][data-theme="dark"] { --base: var(--palette-choco-mint-base-dark); --main-light: var(--palette-choco-mint-main-light-dark); --accent: var(--palette-choco-mint-accent-dark); --sub-light: var(--palette-choco-mint-sub-light-dark); --bg: var(--palette-choco-mint-bg-dark); --text: var(--palette-choco-mint-text-dark); --header-ink: var(--palette-choco-mint-base-ink-dark); --nav-ink: var(--palette-choco-mint-accent-ink-dark); }
+:root[data-palette="cocoa-mint"][data-theme="light"] { --base: var(--palette-cocoa-mint-base-light); --main-light: var(--palette-cocoa-mint-main-light-light); --accent: var(--palette-cocoa-mint-accent-light); --sub-light: var(--palette-cocoa-mint-sub-light-light); --bg: var(--palette-cocoa-mint-bg-light); --text: var(--palette-cocoa-mint-text-light); --header-ink: var(--palette-cocoa-mint-base-ink-light); --nav-ink: var(--palette-cocoa-mint-accent-ink-light); }
+:root[data-palette="cocoa-mint"][data-theme="dark"] { --base: var(--palette-cocoa-mint-base-dark); --main-light: var(--palette-cocoa-mint-main-light-dark); --accent: var(--palette-cocoa-mint-accent-dark); --sub-light: var(--palette-cocoa-mint-sub-light-dark); --bg: var(--palette-cocoa-mint-bg-dark); --text: var(--palette-cocoa-mint-text-dark); --header-ink: var(--palette-cocoa-mint-base-ink-dark); --nav-ink: var(--palette-cocoa-mint-accent-ink-dark); }
+:root[data-palette="matcha-olive"][data-theme="light"] { --base: var(--palette-matcha-olive-base-light); --main-light: var(--palette-matcha-olive-main-light-light); --accent: var(--palette-matcha-olive-accent-light); --sub-light: var(--palette-matcha-olive-sub-light-light); --bg: var(--palette-matcha-olive-bg-light); --text: var(--palette-matcha-olive-text-light); --header-ink: var(--palette-matcha-olive-base-ink-light); --nav-ink: var(--palette-matcha-olive-accent-ink-light); }
+:root[data-palette="matcha-olive"][data-theme="dark"] { --base: var(--palette-matcha-olive-base-dark); --main-light: var(--palette-matcha-olive-main-light-dark); --accent: var(--palette-matcha-olive-accent-dark); --sub-light: var(--palette-matcha-olive-sub-light-dark); --bg: var(--palette-matcha-olive-bg-dark); --text: var(--palette-matcha-olive-text-dark); --header-ink: var(--palette-matcha-olive-base-ink-dark); --nav-ink: var(--palette-matcha-olive-accent-ink-dark); }
+:root[data-palette="cocoa-sky"][data-theme="light"] { --base: var(--palette-cocoa-sky-base-light); --main-light: var(--palette-cocoa-sky-main-light-light); --accent: var(--palette-cocoa-sky-accent-light); --sub-light: var(--palette-cocoa-sky-sub-light-light); --bg: var(--palette-cocoa-sky-bg-light); --text: var(--palette-cocoa-sky-text-light); --header-ink: var(--palette-cocoa-sky-base-ink-light); --nav-ink: var(--palette-cocoa-sky-accent-ink-light); }
+:root[data-palette="cocoa-sky"][data-theme="dark"] { --base: var(--palette-cocoa-sky-base-dark); --main-light: var(--palette-cocoa-sky-main-light-dark); --accent: var(--palette-cocoa-sky-accent-dark); --sub-light: var(--palette-cocoa-sky-sub-light-dark); --bg: var(--palette-cocoa-sky-bg-dark); --text: var(--palette-cocoa-sky-text-dark); --header-ink: var(--palette-cocoa-sky-base-ink-dark); --nav-ink: var(--palette-cocoa-sky-accent-ink-dark); }
+:root[data-palette="aubergine-sage"][data-theme="light"] { --base: var(--palette-aubergine-sage-base-light); --main-light: var(--palette-aubergine-sage-main-light-light); --accent: var(--palette-aubergine-sage-accent-light); --sub-light: var(--palette-aubergine-sage-sub-light-light); --bg: var(--palette-aubergine-sage-bg-light); --text: var(--palette-aubergine-sage-text-light); --header-ink: var(--palette-aubergine-sage-base-ink-light); --nav-ink: var(--palette-aubergine-sage-accent-ink-light); }
+:root[data-palette="aubergine-sage"][data-theme="dark"] { --base: var(--palette-aubergine-sage-base-dark); --main-light: var(--palette-aubergine-sage-main-light-dark); --accent: var(--palette-aubergine-sage-accent-dark); --sub-light: var(--palette-aubergine-sage-sub-light-dark); --bg: var(--palette-aubergine-sage-bg-dark); --text: var(--palette-aubergine-sage-text-dark); --header-ink: var(--palette-aubergine-sage-base-ink-dark); --nav-ink: var(--palette-aubergine-sage-accent-ink-dark); }
+:root[data-palette="bordeaux-ice"][data-theme="light"] { --base: var(--palette-bordeaux-ice-base-light); --main-light: var(--palette-bordeaux-ice-main-light-light); --accent: var(--palette-bordeaux-ice-accent-light); --sub-light: var(--palette-bordeaux-ice-sub-light-light); --bg: var(--palette-bordeaux-ice-bg-light); --text: var(--palette-bordeaux-ice-text-light); --header-ink: var(--palette-bordeaux-ice-base-ink-light); --nav-ink: var(--palette-bordeaux-ice-accent-ink-light); }
+:root[data-palette="bordeaux-ice"][data-theme="dark"] { --base: var(--palette-bordeaux-ice-base-dark); --main-light: var(--palette-bordeaux-ice-main-light-dark); --accent: var(--palette-bordeaux-ice-accent-dark); --sub-light: var(--palette-bordeaux-ice-sub-light-dark); --bg: var(--palette-bordeaux-ice-bg-dark); --text: var(--palette-bordeaux-ice-text-dark); --header-ink: var(--palette-bordeaux-ice-base-ink-dark); --nav-ink: var(--palette-bordeaux-ice-accent-ink-dark); }
+:root[data-palette="forest-coral"][data-theme="light"] { --base: var(--palette-forest-coral-base-light); --main-light: var(--palette-forest-coral-main-light-light); --accent: var(--palette-forest-coral-accent-light); --sub-light: var(--palette-forest-coral-sub-light-light); --bg: var(--palette-forest-coral-bg-light); --text: var(--palette-forest-coral-text-light); --header-ink: var(--palette-forest-coral-base-ink-light); --nav-ink: var(--palette-forest-coral-accent-ink-light); }
+:root[data-palette="forest-coral"][data-theme="dark"] { --base: var(--palette-forest-coral-base-dark); --main-light: var(--palette-forest-coral-main-light-dark); --accent: var(--palette-forest-coral-accent-dark); --sub-light: var(--palette-forest-coral-sub-light-dark); --bg: var(--palette-forest-coral-bg-dark); --text: var(--palette-forest-coral-text-dark); --header-ink: var(--palette-forest-coral-base-ink-dark); --nav-ink: var(--palette-forest-coral-accent-ink-dark); }
+:root[data-palette="blueberry-cream"][data-theme="light"] { --base: var(--palette-blueberry-cream-base-light); --main-light: var(--palette-blueberry-cream-main-light-light); --accent: var(--palette-blueberry-cream-accent-light); --sub-light: var(--palette-blueberry-cream-sub-light-light); --bg: var(--palette-blueberry-cream-bg-light); --text: var(--palette-blueberry-cream-text-light); --header-ink: var(--palette-blueberry-cream-base-ink-light); --nav-ink: var(--palette-blueberry-cream-accent-ink-light); }
+:root[data-palette="blueberry-cream"][data-theme="dark"] { --base: var(--palette-blueberry-cream-base-dark); --main-light: var(--palette-blueberry-cream-main-light-dark); --accent: var(--palette-blueberry-cream-accent-dark); --sub-light: var(--palette-blueberry-cream-sub-light-dark); --bg: var(--palette-blueberry-cream-bg-dark); --text: var(--palette-blueberry-cream-text-dark); --header-ink: var(--palette-blueberry-cream-base-ink-dark); --nav-ink: var(--palette-blueberry-cream-accent-ink-dark); }
+:root[data-palette="night-sakura"][data-theme="light"] { --base: var(--palette-night-sakura-base-light); --main-light: var(--palette-night-sakura-main-light-light); --accent: var(--palette-night-sakura-accent-light); --sub-light: var(--palette-night-sakura-sub-light-light); --bg: var(--palette-night-sakura-bg-light); --text: var(--palette-night-sakura-text-light); --header-ink: var(--palette-night-sakura-base-ink-light); --nav-ink: var(--palette-night-sakura-accent-ink-light); }
+:root[data-palette="night-sakura"][data-theme="dark"] { --base: var(--palette-night-sakura-base-dark); --main-light: var(--palette-night-sakura-main-light-dark); --accent: var(--palette-night-sakura-accent-dark); --sub-light: var(--palette-night-sakura-sub-light-dark); --bg: var(--palette-night-sakura-bg-dark); --text: var(--palette-night-sakura-text-dark); --header-ink: var(--palette-night-sakura-base-ink-dark); --nav-ink: var(--palette-night-sakura-accent-ink-dark); }

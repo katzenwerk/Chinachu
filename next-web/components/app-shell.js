@@ -1,5 +1,6 @@
 import { createToastQueue } from './toast-queue.js';
 import { MOBILE_QUERY } from './mobile-layout.js';
+import { viewportCssPixels } from '../services/ui-scale.js';
 
 const icon = (name, small = false) => `<svg class="icon${small ? ' icon-small' : ''}"><use href="#icon-${name}"></use></svg>`;
 
@@ -22,7 +23,7 @@ const sprite = `
     <symbol id="icon-options" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16M8 3v6m8 0v6m-5 0v6"/></symbol>
     <symbol id="icon-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2zM12 9v5m0 4h.01"/></symbol>
     <symbol id="icon-bell" viewBox="0 0 24 24"><path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5zM10 20h4"/></symbol>
-    <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"/></symbol>
+    <symbol id="icon-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1-3.7 1.3 1.3 0 0 1 .6-2.3H17a4 4 0 0 0 4-4c0-4.4-4-8-9-8Z"/><circle cx="7.5" cy="10" r=".8"/><circle cx="10" cy="6.7" r=".8"/><circle cx="14" cy="6.7" r=".8"/><circle cx="17" cy="10" r=".8"/></symbol>
     <symbol id="icon-log-out" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></symbol>
   </svg>`;
 
@@ -113,7 +114,7 @@ export function createAppShell(root) {
           </div>
         </details>
         <button class="icon-button header-logout-button" id="header-logout" type="button" aria-label="ログアウト" title="ログアウト" hidden>${icon('log-out')}</button>
-        <button class="icon-button" id="theme-toggle" type="button" aria-label="ダークテーマへ切替" title="テーマ切替">${icon('sun')}</button>
+        <button class="icon-button" id="palette-toggle" type="button" aria-label="カラーテーマを選択" title="カラーテーマ" aria-controls="palette-menu" aria-expanded="false" aria-haspopup="dialog">${icon('palette')}</button>
         <button class="icon-button notification-button" id="notification-button" type="button" aria-label="通知" title="通知" aria-controls="notification-panel" aria-expanded="false">${icon('bell')}<span class="notification-count" hidden></span></button>
       </div>
     </header>
@@ -134,6 +135,7 @@ export function createAppShell(root) {
         <div id="page-outlet"></div>
       </main>
     </div>
+    <div class="palette-menu" id="palette-menu" role="dialog" aria-labelledby="palette-title" hidden></div>
     <button class="mobile-drawer-backdrop" type="button" aria-label="メニューを閉じる" hidden></button>
     <nav class="mobile-bottom-nav" aria-label="主要ページ">${[['home','home','ホーム'],['guide','guide','番組表'],['reserves','calendar','予約'],['rules','rule','ルール'],['recorded','film','録画結果']].map(([route, name, label]) => `<a href="#${route}" data-route="${route}">${icon(name)}<span>${label}</span></a>`).join('')}</nav>
     <div class="wui-connection-overlay" id="wui-connection-overlay" role="alertdialog" aria-modal="true" aria-labelledby="wui-connection-title" hidden>
@@ -179,7 +181,87 @@ export function createAppShell(root) {
   document.addEventListener('pointerdown', event => {
     if (!headerSearch.contains(event.target)) headerSearch.classList.remove('is-expanded');
   });
-  const themeToggle = root.querySelector('#theme-toggle');
+  const paletteToggle = root.querySelector('#palette-toggle');
+  const paletteMenu = root.querySelector('#palette-menu');
+  const theme = window.chinachuTheme;
+  paletteMenu.innerHTML = '<div class="palette-heading"><h2 id="palette-title">カラーテーマ</h2><div class="palette-modes" role="group" aria-label="明るさ"></div></div><div class="palette-grid" role="group" aria-label="テーマ"></div>';
+  const modeChoices = ['light', 'dark'].map(mode => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = mode === 'light' ? 'ライト' : 'ダーク';
+    button.dataset.themeMode = mode;
+    button.addEventListener('click', () => theme.set({ ...theme.get(), mode }));
+    paletteMenu.querySelector('.palette-modes').append(button);
+    return button;
+  });
+  const swatchKeys = ['bg', 'text', 'base', 'main-light', 'accent', 'sub-light'];
+  const paletteChoices = theme.palettes.map(([id, name]) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'palette-card';
+    button.dataset.paletteChoice = id;
+    button.innerHTML = '<span class="palette-name"></span><span class="palette-swatches" aria-hidden="true">' + '<i></i>'.repeat(6) + '</span>';
+    button.firstElementChild.textContent = name;
+    paletteMenu.querySelector('.palette-grid').append(button);
+    button.addEventListener('click', () => theme.set({ ...theme.get(), palette: id }));
+    return button;
+  });
+  function updateThemeControls() {
+    const { palette, mode } = theme.get();
+    for (const button of modeChoices) button.setAttribute('aria-pressed', String(button.dataset.themeMode === mode));
+    for (const button of paletteChoices) {
+      const id = button.dataset.paletteChoice;
+      button.setAttribute('aria-pressed', String(id === palette));
+      button.querySelectorAll('.palette-swatches i').forEach((swatch, index) => {
+        swatch.style.backgroundColor = `var(--palette-${id}-${swatchKeys[index]}-${mode})`;
+      });
+    }
+  }
+  function closePaletteMenu(restoreFocus = false) {
+    const wasOpen = !paletteMenu.hidden;
+    paletteMenu.hidden = true;
+    paletteToggle.setAttribute('aria-expanded', 'false');
+    if (wasOpen && restoreFocus) paletteToggle.focus({ preventScroll: true });
+  }
+  function positionPaletteMenu() {
+    if (paletteMenu.hidden) return;
+    const anchor = paletteToggle.getBoundingClientRect();
+    const rect = paletteMenu.getBoundingClientRect();
+    const x = Math.max(8, Math.min(anchor.right - rect.width, window.innerWidth - rect.width - 8));
+    const y = Math.max(8, Math.min(anchor.bottom + 6, window.innerHeight - rect.height - 8));
+    paletteMenu.style.left = viewportCssPixels(x);
+    paletteMenu.style.top = viewportCssPixels(y);
+  }
+  paletteToggle.addEventListener('click', () => {
+    if (!paletteMenu.hidden) { closePaletteMenu(true); return; }
+    closeNotifications();
+    updateThemeControls();
+    paletteMenu.hidden = false;
+    paletteToggle.setAttribute('aria-expanded', 'true');
+    positionPaletteMenu();
+    paletteChoices.find(button => button.getAttribute('aria-pressed') === 'true')?.focus({ preventScroll: true });
+  });
+  paletteMenu.addEventListener('keydown', event => {
+    const buttons = [...modeChoices, ...paletteChoices];
+    const index = buttons.indexOf(document.activeElement);
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 :
+        (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next].focus({ preventScroll: true });
+    } else if (event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation(); closePaletteMenu(true);
+    }
+  });
+  document.addEventListener('pointerdown', event => {
+    if (!paletteMenu.contains(event.target) && !paletteToggle.contains(event.target)) closePaletteMenu();
+  });
+  paletteMenu.addEventListener('focusout', event => {
+    if (!paletteMenu.contains(event.relatedTarget) && event.relatedTarget !== paletteToggle) closePaletteMenu();
+  });
+  window.addEventListener('resize', positionPaletteMenu);
+  window.addEventListener('chinachu-theme-change', updateThemeControls);
+  updateThemeControls();
   const notificationButton = root.querySelector('#notification-button');
   const logoutButton = root.querySelector('#header-logout');
   const notificationPanel = root.querySelector('#notification-panel');
@@ -328,6 +410,7 @@ export function createAppShell(root) {
     }
   }
   function closeDrawer(restoreFocus = false) {
+    closePaletteMenu();
     drawerOpen = false;
     shell.classList.remove('is-mobile-menu-open');
     drawerBackdrop.hidden = true;
@@ -342,11 +425,9 @@ export function createAppShell(root) {
     if (mobile.matches) {
       mobileToolbar.append(headerActions);
       header.insertBefore(headerSearch, commonActions);
-      sidebar.querySelector('.sidebar-bottom').append(themeToggle);
     } else {
       header.insertBefore(headerActions, commonActions);
       header.insertBefore(headerSearch, commonActions);
-      commonActions.prepend(themeToggle);
     }
   }
   menuToggle.addEventListener('click', () => {
@@ -794,11 +875,6 @@ export function createAppShell(root) {
   window.addEventListener('blur', suspendTransientSidebarPreview);
   window.addEventListener('focus', resumeTransientSidebarPreview);
   desktopSidebar.addEventListener('change', applySidebarMode);
-  themeToggle.addEventListener('click', () => {
-    const dark = document.documentElement.dataset.theme !== 'dark';
-    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-    themeToggle.setAttribute('aria-label', dark ? 'ライトテーマへ切替' : 'ダークテーマへ切替');
-  });
   notificationButton.addEventListener('click', () => {
     if (drawerOpen) closeDrawer();
     const open = notificationPanel.hidden;
@@ -819,6 +895,7 @@ export function createAppShell(root) {
   });
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
+      closePaletteMenu(true);
       closeMobilePageToolbar(true);
       closeNotifications();
     }

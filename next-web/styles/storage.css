@@ -1,7 +1,7 @@
 .storage-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-3); }
 .storage-card { display: flex; flex-direction: column; min-width: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-subtle); }
 .storage-card-head { display: flex; align-items: flex-start; gap: 11px; }
-.storage-drive-icon { display: grid; flex: 0 0 auto; place-items: center; width: 38px; height: 38px; border-radius: 10px; background: color-mix(in srgb,var(--brand) 12%,transparent); color: var(--brand); }
+.storage-drive-icon { display: grid; flex: 0 0 auto; place-items: center; width: 38px; height: 38px; border-radius: 10px; background: color-mix(in srgb,var(--brand) 12%,transparent); color: var(--link-color); }
 .storage-card.is-warning .storage-drive-icon { background: color-mix(in srgb,var(--warning) 12%,transparent); color: var(--warning); }
 .storage-card.is-low .storage-drive-icon,.storage-card.is-unavailable .storage-drive-icon,.storage-card.is-error .storage-drive-icon,.storage-card.is-safety-error .storage-drive-icon { background: color-mix(in srgb,var(--danger) 12%,transparent); color: var(--danger); }
 .storage-card.is-stale .storage-drive-icon,.storage-card.is-unobserved .storage-drive-icon { background: color-mix(in srgb,var(--info) 12%,transparent); color: var(--info); }
@@ -10,7 +10,7 @@
 .storage-card h2 { margin: 0; font-size: 15px; font-weight: var(--font-title-weight); }
 .storage-card-ident p { overflow: hidden; margin: 4px 0 0; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .storage-status-badge { padding: 2px 8px; border: 1px solid transparent; border-radius: 999px; font-size: 10px; font-weight: var(--font-support-weight); }
-.storage-status-badge.is-normal { border-color: color-mix(in srgb,var(--brand) 35%,transparent); background: color-mix(in srgb,var(--brand) 12%,transparent); color: var(--brand); }
+.storage-status-badge.is-normal { border-color: color-mix(in srgb,var(--brand) 35%,transparent); background: color-mix(in srgb,var(--brand) 12%,transparent); color: var(--link-color); }
 .storage-status-badge.is-warning { border-color: var(--warning-border); background: color-mix(in srgb,var(--warning) 12%,transparent); color: var(--warning); }
 .storage-status-badge.is-low,.storage-status-badge.is-unavailable,.storage-status-badge.is-error,.storage-status-badge.is-safety-error { border-color: var(--danger-border); background: color-mix(in srgb,var(--danger) 12%,transparent); color: var(--danger); }
 .storage-status-badge.is-stale,.storage-status-badge.is-unobserved { border-color: color-mix(in srgb,var(--info) 35%,transparent); background: color-mix(in srgb,var(--info) 12%,transparent); color: var(--info); }
@@ -20,7 +20,7 @@
 .storage-card.is-reference .storage-checked-value,.storage-card.is-reference .storage-checked-ago { color: var(--danger); }
 .storage-refresh { display: grid; flex: 0 0 auto; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 50%; background: var(--panel); color: var(--muted); }
 .storage-refresh:not([disabled]) { cursor: pointer; }
-.storage-refresh:not([disabled]):hover { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
+.storage-refresh:not([disabled]):hover { border-color: var(--brand); background: var(--brand-soft); color: var(--link-color); }
 .storage-refresh.is-loading { animation: storage-refresh-spin .8s linear infinite; }
 .storage-refresh[disabled] { cursor: not-allowed; opacity: .58; }
 .storage-refresh .icon { width: 17px; height: 17px; }
@@ -56,7 +56,7 @@
 .storage-note strong { color: var(--danger); font-weight: var(--font-title-weight); }
 .storage-links { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 9px; border-top: 1px solid var(--border); }
 .storage-links a { min-height: 29px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--muted); font-size: 11px; text-decoration: none; }
-.storage-links a:hover { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
+.storage-links a:hover { border-color: var(--brand); background: var(--brand-soft); color: var(--link-color); }
 .storage-message { text-align: center; }
 .storage-message.is-embedded { grid-column: 1 / -1; padding: var(--space-6); border: 1px dashed var(--border); border-radius: var(--radius); background: transparent; }
 .storage-message h2 { margin: 0 0 6px; font-size: 18px; }

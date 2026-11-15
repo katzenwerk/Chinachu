@@ -59,10 +59,10 @@
 
 .log-source-tabs button[aria-selected="true"] {
   border-bottom-color: var(--brand);
-  color: var(--brand-strong);
+  color: var(--brand-text);
 }
 
-:root[data-theme="dark"] .log-source-tabs button[aria-selected="true"] { color: #9de0bd; }
+:root[data-theme="dark"] .log-source-tabs button[aria-selected="true"] { color: var(--log-selected); }
 
 .log-service-dot {
   width: 7px;

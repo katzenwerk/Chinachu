@@ -27,12 +27,12 @@
 .cleaner-table td strong,.cleaner-table td small,.cleaner-table td code { display: block; }
 .cleaner-table td small { margin-top: 3px; color: var(--muted); }
 .cleaner-table td code { max-width: 440px; color: var(--text); overflow-wrap: anywhere; white-space: normal; }
-.cleaner-table details summary { color: var(--brand); cursor: pointer; white-space: nowrap; }
+.cleaner-table details summary { color: var(--link-color); cursor: pointer; white-space: nowrap; }
 .cleaner-candidates { display: grid; gap: 6px; min-width: 280px; margin: 7px 0 0; padding-left: 18px; }
 .cleaner-candidates code { max-width: 360px !important; }
-.cleaner-path-arrow { display: block; color: var(--brand); }
+.cleaner-path-arrow { display: block; color: var(--link-color); }
 .cleaner-class.is-missing,.cleaner-class.is-ambiguous { color: var(--danger); }
-.cleaner-class.is-relocated { color: var(--brand-strong); }
+.cleaner-class.is-relocated { color: var(--brand-text); }
 .cleaner-class.is-uninspected,.cleaner-class.is-review { color: var(--warning); }
 .cleaner-empty { padding: var(--space-6) !important; color: var(--muted); text-align: center !important; }
 .cleaner-error { color: var(--danger) !important; }
@@ -78,7 +78,7 @@
 .cleaner-dialog-summary span { color: var(--muted); font-size: 11px; }
 .cleaner-dialog-summary strong { font-size: 17px; font-variant-numeric: tabular-nums; }
 .cleaner-dialog-summary-primary .is-total { border-color: color-mix(in srgb,var(--brand) 38%,var(--border)); background: color-mix(in srgb,var(--brand) 9%,var(--panel-subtle)); }
-.cleaner-dialog-summary-primary .is-total strong { color: var(--brand-strong); font-size: 20px; }
+.cleaner-dialog-summary-primary .is-total strong { color: var(--brand-text); font-size: 20px; }
 .cleaner-dialog-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: calc(var(--space-4) * -0.35) 0 var(--space-4); color: var(--muted); font-size: 11px; }
 .cleaner-dialog-meta .is-held { color: var(--warning); }
 .cleaner-dialog-timing { margin: var(--space-4) 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); }

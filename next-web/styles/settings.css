@@ -5,7 +5,7 @@
 .settings-intro h2 { font-size: 23px; }
 .settings-intro p { margin-top: 4px; color: var(--muted); font-size: 13px; }
 .settings-change-count { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
-.settings-page-message { margin: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb,var(--brand) 35%,var(--border)); border-radius: var(--radius-sm); background: var(--brand-soft); color: var(--brand-strong); font-size: 12px; }
+.settings-page-message { margin: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb,var(--brand) 35%,var(--border)); border-radius: var(--radius-sm); background: var(--brand-soft); color: var(--brand-text); font-size: 12px; }
 .settings-tabs { display: flex; gap: 4px; padding: 4px; overflow-x: auto; border: 1px solid var(--border); border-radius: 11px; background: var(--panel-subtle); }
 .settings-tabs button { min-height: 36px; padding: 6px 14px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); white-space: nowrap; cursor: pointer; }
 .settings-tabs button[aria-selected="true"] { background: var(--panel); color: var(--text); font-weight: var(--font-heading-weight); box-shadow: 0 1px 5px rgba(22,48,33,.08); }
@@ -96,14 +96,14 @@ textarea.settings-input { min-height: 86px; resize: vertical; font-family: ui-mo
 .settings-clock-channel-description { display: block; margin-top: 5px; overflow-wrap: anywhere; }
 .settings-clock-channel-description[hidden] { display: none; }
 .settings-clock-guide { grid-column: 1/-1; padding-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.65; }
-.settings-clock-guide summary { cursor: pointer; color: var(--brand-strong); font-weight: var(--font-title-weight); }
+.settings-clock-guide summary { cursor: pointer; color: var(--brand-text); font-weight: var(--font-title-weight); }
 .settings-clock-guide > :first-child { margin-top: 0; }
 .settings-clock-guide h3 { margin: 16px 0 6px; color: var(--text); font-size: 13px; }
 .settings-clock-guide p { margin: 7px 0; }
 .settings-clock-guide pre { min-width: 0; max-width: 100%; margin: 0; padding: 11px 12px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-subtle); color: var(--text); font: 11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .settings-clock-guide .settings-clock-caution { margin-top: 15px; padding: 10px 11px; border: 1px solid color-mix(in srgb,var(--warning) 45%,var(--border)); border-radius: var(--radius-sm); background: color-mix(in srgb,var(--warning) 7%,var(--panel)); color: var(--text); }
 .settings-json-preview { grid-column: 1/-1; margin-top: 12px; }
-.settings-json-preview summary { cursor: pointer; color: var(--brand-strong); font-size: 12px; }
+.settings-json-preview summary { cursor: pointer; color: var(--brand-text); font-size: 12px; }
 .settings-json-preview pre { max-height: 460px; margin: 10px 0 0; padding: 12px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-subtle); color: var(--text); font: 11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .settings-notes { grid-column: 1/-1; margin: 12px 0 0; padding-left: 1.4em; color: var(--muted); font-size: 12px; }
 .settings-notes li + li { margin-top: 7px; }
@@ -161,7 +161,7 @@ textarea.settings-input { min-height: 86px; resize: vertical; font-family: ui-mo
 .settings-totp-qr canvas { display: block; width: min(240px,calc(var(--wui-viewport-width) - 92px)); height: auto; }
 .settings-totp-account { text-align: center; }
 .settings-totp-steps details { margin-top: 12px; }
-.settings-totp-steps summary { cursor: pointer; color: var(--brand-strong); font-size: 12px; }
+.settings-totp-steps summary { cursor: pointer; color: var(--brand-text); font-size: 12px; }
 .settings-totp-steps label { display: grid; gap: 6px; margin-top: 11px; color: var(--muted); font-size: 11px; }
 .settings-totp-steps input { min-height: 43px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); color: var(--text); font-size: 20px; letter-spacing: .18em; }
 @media (max-width:900px) {
