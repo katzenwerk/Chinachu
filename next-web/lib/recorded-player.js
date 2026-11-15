@@ -57,6 +57,17 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 	captionsButton.type = 'button';
 	captionsButton.textContent = '字幕を隠す';
 	captionsButton.setAttribute('aria-pressed', 'true');
+	const speedSelect = chaseStatusUrl ? null : document.createElement('select');
+	if (speedSelect) {
+		speedSelect.setAttribute('aria-label', '再生速度');
+		for (let step = 10; step <= 15; step++) {
+			const option = document.createElement('option');
+			option.value = (step / 10).toFixed(1);
+			option.textContent = option.value + '×';
+			speedSelect.append(option);
+		}
+		speedSelect.value = '1.0';
+	}
 	const fullscreenButton = document.createElement('button');
 	fullscreenButton.type = 'button';
 	fullscreenButton.textContent = '全画面';
@@ -69,7 +80,9 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 	compatButton.hidden = desktopNonSafari || (!compatUrl && !compatHlsUrl);
 	const status = document.createElement('span');
 	status.setAttribute('role', 'status');
-	controls.append(captionsButton, fullscreenButton, compatButton, status);
+	controls.append(captionsButton);
+	if (speedSelect) controls.append(speedSelect);
+	controls.append(fullscreenButton, compatButton, status);
 	stage.append(controls);
 	frame.append(stage);
 
@@ -78,6 +91,14 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		splitFieldSamples: true, chaseStatusUrl
 	});
 	let destroyed = false;
+	const applyPlaybackRate = () => {
+		if (!speedSelect || destroyed) return;
+		const rate = Number(speedSelect.value);
+		video.preservesPitch = true;
+		// load() restores playbackRate from defaultPlaybackRate during source changes.
+		if (video.defaultPlaybackRate !== rate) video.defaultPlaybackRate = rate;
+		if (video.playbackRate !== rate) video.playbackRate = rate;
+	};
 	let playerDestroyed = false;
 	let captionsEnabled = true;
 	let seekFeedbackTimer = null;
@@ -223,6 +244,10 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 			picture.focus();
 		}
 	};
+	const restoreSeekFocus = () => {
+		// Leave the native timeline so arrows use the existing 15-second shortcut.
+		if (!destroyed && document.activeElement === video) focusPicture();
+	};
 	const updatePlayOverlay = () => { playOverlay.hidden = useNativePlayControls || !video.paused; };
 	const playFromOverlay = () => {
 		try {
@@ -296,6 +321,12 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		video.removeEventListener('timeupdate', rememberTime);
 		video.removeEventListener('error', mediaFailed);
 		video.removeEventListener('resize', resize);
+		video.removeEventListener('seeked', restoreSeekFocus);
+		if (speedSelect) {
+			speedSelect.removeEventListener('change', applyPlaybackRate);
+			video.removeEventListener('loadedmetadata', applyPlaybackRate);
+			video.removeEventListener('ratechange', applyPlaybackRate);
+		}
 		picture.removeEventListener('keydown', seekByArrow, { capture: true });
 		video.removeEventListener('pause', updatePlayOverlay);
 		video.removeEventListener('play', updatePlayOverlay);
@@ -337,6 +368,13 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 	video.addEventListener('ended', ended);
 	video.addEventListener('error', mediaFailed);
 	video.addEventListener('resize', resize);
+	video.addEventListener('seeked', restoreSeekFocus);
+	if (speedSelect) {
+		speedSelect.addEventListener('change', applyPlaybackRate);
+		video.addEventListener('loadedmetadata', applyPlaybackRate);
+		video.addEventListener('ratechange', applyPlaybackRate);
+		applyPlaybackRate();
+	}
 	picture.addEventListener('keydown', seekByArrow, { capture: true });
 	video.addEventListener('pause', updatePlayOverlay);
 	video.addEventListener('play', updatePlayOverlay);
