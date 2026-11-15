@@ -1,3 +1,16 @@
+# Chinachu 0.10.7-thorn.40
+
+## Web UI
+
+- Add a compact picker for 25 color themes (9 single-color and 16 two-color), with light/dark modes and browser-local preferences. Give each two-color theme its own background and matching panels.
+- Make TS anomaly lists in programme details compact, with shorter labels, clearer explanations, and broadcast times continuing past 24:00 across midnight.
+
+## Recording Playback
+
+- Add playback speeds from 1.0× to 1.5× with pitch preservation, retain the selected speed when switching sources, and restore 15-second arrow-key seeking after using the timeline.
+- Start playback near the selected episode in confirmed multi-episode recordings, using estimated episode boundaries adjusted for the recording start time.
+- Play from five seconds before a selected TS anomaly using its estimated PCR position; actual playback accuracy is unverified.
+
 # Chinachu 0.10.7-thorn.39
 
 ## Recording Playback
