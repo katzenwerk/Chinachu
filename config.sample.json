@@ -18,7 +18,7 @@
       }
     }
   ],
-  "recordedFormat": "[<date:yymmdd-HHMM>][<type><channel>][<channel-name>]<title>.m2ts",
+  "recordedFormat": "<fulltitle2> <channel-code>[<date:yyyy-mm-dd HHMM>].ts",
   "recordingFilenamePrefixEnabled": false,
   "recordedFolderOrganizeEnabled": false,
   "recordedFolderOrganizeOrder": "filename",

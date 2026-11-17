@@ -58,6 +58,32 @@ describe("formatRecordedName", function() {
 			needToReplaceEnclosingCharacters: true, enclosingCharacterMap: { "🆞": "4K", "⚿": "", "①": "(1)", "🈑": "字幕" }
 		}), "ＡＢＣ ｶﾞ ㍑ Ⅳ 4K(1)[株].m2ts");
 		assert.strictEqual(chinachu.replaceEnclosingCharacters("🈑①🈑①", { "🈑": "字幕", "①": "(1)" }), "字幕(1)字幕(1)");
+		var compact = { ...program, fullTitle: '[新][HV][解]作品（特別編） 第2話「[4K]の世界」[字][5.1]' };
+		assert.strictEqual(chinachu.formatRecordedName(compact, '<fulltitle2>.ts'), '[新]作品（特別編） 第2話「[4K]の世界」[字].ts');
+		assert.strictEqual(chinachu.formatRecordedName(compact, '<fulltitle>.ts'), compact.fullTitle + '.ts');
+		assert.strictEqual(compact.fullTitle, '[新][HV][解]作品（特別編） 第2話「[4K]の世界」[字][5.1]');
+		assert.strictEqual(chinachu.formatRecordedName({ ...program, fullTitle: '🈟🅊🈖作品🈑🆞🆠' }, '<fulltitle2>.ts', {
+			replaceEnclosingCharacters: true, enclosingCharacterMap: { '🈟': '新番組', '🆞': '残してはいけない' }
+		}), '新番組作品[字].ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...program, fullTitle: '🈟[HV]作品[解]🈑' }, '<fulltitle2>.ts', { replaceEnclosingCharacters: true }), '[新]作品[字].ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...program, fullTitle: '🈡作品🈥🈜🈝' }, '<fulltitle2>.ts', { replaceEnclosingCharacters: false }), '🈡作品🈥🈜🈝.ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...program, fullTitle: '[4K]の世界（後編） 第5話[独自]' }, '<fulltitle2>.ts'), '[4K]の世界（後編） 第5話[独自].ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...program, fullTitle: '作品 [SD][8K][5.1]' }, '<fulltitle2>.ts'), '作品.ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...program, fullTitle: '[HV]作品[字]' }, '<fulltitle2>.ts'), '作品[字].ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...program, fullTitle: '[新]作品[解]' }, '<fulltitle2>.ts'), '[新]作品.ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...program, fullTitle: '作品の[HV]研究' }, '<fulltitle2>.ts'), '作品の[HV]研究.ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...program, fullTitle: '[4K]' }, '<fulltitle2>.ts'), '[4K].ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...program, fullTitle: '🈟'.repeat(100) }, '<fulltitle2>.ts', { replaceEnclosingCharacters: true }),
+			chinachu.formatRecordedName({ ...program, fullTitle: '🈟'.repeat(100) }, '<fulltitle>.ts', { replaceEnclosingCharacters: true }));
+		assert.strictEqual(chinachu.formatRecordedName(program, '<fulltitle2>.ts', { replaceEnclosingCharacters: true }), '[字].ts');
+		assert.strictEqual(chinachu.formatRecordedName({ channel: { type: 'GR', channel: '23', sid: 999 } }, '<channel-code>'), 'GR23');
+		assert.strictEqual(chinachu.formatRecordedName({ channel: { type: 'BS', channel: 'BS15_0', sid: 211 } }, '<channel-code>'), 'BS211');
+		assert.strictEqual(chinachu.formatRecordedName({ channel: { type: 'CS', channel: 'CS8', sid: 333 } }, '<channel-code>'), 'CS333');
+		assert.strictEqual(chinachu.formatRecordedName({ channel: { type: 'BS', channel: 'BS15_0' } }, 'x<channel-code>.ts'), 'x.ts');
+		assert.strictEqual(chinachu.formatRecordedName({ channel: { type: 'GR', channel: null, sid: 211 } }, 'x<channel-code>.ts'), 'x.ts');
+		assert.strictEqual(chinachu.formatRecordedName({ channel: { type: 'CS', sid: '' } }, 'x<channel-code>.ts'), 'x.ts');
+		assert.strictEqual(chinachu.formatRecordedName({}, 'x<channel-code>.ts'), 'x.ts');
+
 		assert.strictEqual(JSON.stringify(program), before);
 		var expanded = "[2ndScr]".repeat(80);
 		var limited = chinachu.formatRecordedName({ start: 0, channel: {}, title: "🆜".repeat(80) }, "<title>.m2ts", { replaceEnclosingCharacters: true });

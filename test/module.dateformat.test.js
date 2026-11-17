@@ -62,6 +62,11 @@ describe("dateformat compatibility", function() {
 			"[<date:yymmdd-HHMM>][<type><channel>][<channel-name>]<title>.m2ts"
 		), "[260103-0004][GR27][日本テレビ]日本語「番組」／特番.m2ts");
 
+		assert.strictEqual(chinachu.formatRecordedName(
+			{ ...program, fullTitle: '[新][HV]作品[字]' },
+			JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '../config.sample.json'), 'utf8')).recordedFormat
+		), '[新]作品[字] GR27[2026-01-03 0004].ts');
+
 		assert.strictEqual(
 			chinachu.formatRecordedName(
 				{ start: program.start, channel: {} },

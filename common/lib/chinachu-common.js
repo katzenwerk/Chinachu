@@ -315,6 +315,43 @@ exports.replaceEnclosingCharacters = function (value, map) {
 	return text;
 };
 
+// Only recognized edge attributes are removed from bracketed text. A lone
+// attached label may be part of a work name, so preserve it without evidence
+// from another programme attribute or a whitespace boundary.
+function compactFullTitle(value) {
+	var technical = new Set('解 HV SD P W MV S SS B N 3D 2ndScr 2K 4K 8K 5.1 7.1 22.2 60P 120P d HC HDR Hi-Res Lossless SHV UHD'.split(' '));
+	var programme = new Set('新 終 字 吹 前 後 再 初 生 映 二 多 手 声 無 料 双 デ サ 天 交'.split(' '));
+	var text = String(value || '');
+	Object.keys(DEFAULT_ENCLOSING_CHARACTER_MAP).forEach(function (mark) {
+		var label = DEFAULT_ENCLOSING_CHARACTER_MAP[mark].slice(1, -1);
+		if (technical.has(label)) text = text.split(mark).join('');
+	});
+	var programmeMarks = Object.keys(DEFAULT_ENCLOSING_CHARACTER_MAP).filter(function (mark) {
+		return programme.has(DEFAULT_ENCLOSING_CHARACTER_MAP[mark].slice(1, -1));
+	});
+	var token = '(?:\\[[^\\]]+\\]|' + programmeMarks.join('|') + ')';
+	function labelName(label) { return (DEFAULT_ENCLOSING_CHARACTER_MAP[label] || label).slice(1, -1); }
+	var edgeAttributes = text.match(new RegExp('^(?:' + token + '[ \\t]*)+|(?:[ \\t]*' + token + ')+$', 'gu')) || [];
+	var programmeAtEdge = edgeAttributes.some(function (cluster) {
+		return (cluster.match(new RegExp(token, 'gu')) || []).some(function (label) { return programme.has(labelName(label)); });
+	});
+	function cleanEdge(cluster, body, separated) {
+		var labels = cluster.match(new RegExp(token, 'gu')) || [];
+		if (!body.trim() || !labels.every(function (label) {
+			return technical.has(labelName(label)) || programme.has(labelName(label));
+		})) return cluster;
+		if (!separated && !programmeAtEdge) return cluster;
+		return cluster.replace(/\[([^\]]+)\]/g, function (label, name) { return technical.has(name) ? '' : label; });
+	}
+	text = text.replace(new RegExp('^(\\s*(?:' + token + '[ \\t]*)+)([\\s\\S]*)$', 'u'), function (_, cluster, body) {
+		return cleanEdge(cluster, body, /\s$/.test(cluster)) + body;
+	});
+	text = text.replace(new RegExp('^([\\s\\S]*?)([ \\t]*(?:' + token + '[ \\t]*)+)$', 'u'), function (_, body, cluster) {
+		return body + cleanEdge(cluster, body, /^\s/.test(cluster));
+	});
+	return text.trim();
+}
+
 exports.formatRecordedName = function (program, name, options) {
 	options = options || {};
 
@@ -331,6 +368,15 @@ exports.formatRecordedName = function (program, name, options) {
 
 		// channel
 		if (a.match(/^channel$/) !== null) { return program.channel.channel; }
+
+		// channel-code (physical GR channel; BS/CS service ID)
+		if (a === 'channel-code') {
+			var channel = program.channel || {};
+			var value = channel.type === 'GR' ? channel.channel :
+				(channel.type === 'BS' || channel.type === 'CS') ? channel.sid : null;
+			return (typeof value === 'string' && value.trim() || typeof value === 'number' && Number.isFinite(value)) ?
+				channel.type + exports.stripFilename(String(value).trim()) : '';
+		}
 
 		// channel-id
 		if (a.match(/^channel-id$/) !== null) { return program.channel.id; }
@@ -349,6 +395,8 @@ exports.formatRecordedName = function (program, name, options) {
 
 		// fulltitle
 		if (a.match(/^fulltitle$/) !== null) { return exports.stripFilename(program.fullTitle || ''); }
+
+		if (a === 'fulltitle2') { return exports.stripFilename(compactFullTitle(program.fullTitle)); }
 
 		// subtitle
 		if (a.match(/^subtitle$/) !== null) { return exports.stripFilename(program.subTitle || ''); }
