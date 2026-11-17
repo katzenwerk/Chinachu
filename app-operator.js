@@ -132,7 +132,8 @@ const storageLowSpaceConfiguredAction = config.storageLowSpaceAction;
 const storageLowSpaceAction = storageLow.normalizeAction(storageLowSpaceConfiguredAction);
 const notificationSettings = notification.resolveNotificationCommand(config);
 const sendNotification = notification.createNotificationQueue(
-	notification.createNotificationSender(notificationSettings.command, { log: operatorLog })
+	notification.createNotificationSender(notificationSettings.command, { log: operatorLog,
+		enabled: () => !require('./lib/external-notification').isCommandManaged(__dirname) })
 );
 const recordedStorageWakeupBeforeSec = getRecordedStorageWakeupBeforeSec();// 録画開始前HDD起動秒数。0/null/未指定は無効
 const recordedStorageWakeupBeforeTime = recordedStorageWakeupBeforeSec * 1000;

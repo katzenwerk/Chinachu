@@ -1,17 +1,16 @@
 import { listLogFiles, loadLogChunk, loadRecentLog, openLogStream } from '../services/log-client.js';
 import { renderPostprocessPage } from './postprocess-page.js';
 import { classifyLogLine } from '../services/log-level.js';
-import { loadServiceControl, requestServiceRestart } from '../services/service-control-client.js';
+import { beginServiceRestart, loadServiceControl } from '../services/service-control-client.js';
 import { mirakurunIndicatorModel, restartButtonModel, serviceGeneration, serviceGenerationChanged, serviceIndicatorModel } from '../services/service-restart-model.js';
 import { checkWuiConnectionNow, getWuiConnectionState, subscribeWuiConnection } from '../services/wui-connection-monitor.js';
-import { completePendingRestart, getPendingRestart, setPendingRestart, subscribePendingRestart } from '../services/service-restart-store.js';
+import { completePendingRestart, getPendingRestart, subscribePendingRestart } from '../services/service-restart-store.js';
 
 const MAX_BROWSER_LINES = 5000;
 const SOURCE_LABELS = { operator: 'Operator', scheduler: 'Scheduler', wui: 'WUI', mirakurun: 'Mirakurun', task: 'Task' };
 const LEVEL_LABELS = { all: '全件', error: 'ERROR', warning: 'WARNING', info: 'INFO' };
 const SERVICE_REFRESH_MS = 5000;
 const MIRAKURUN_HEALTH_REFRESH_MS = 5000;
-const SERVICE_RESTART_TIMEOUT_MS = 120000;
 
 async function loadHealthDiagnostics(signal) {
   const response = await fetch('/api/diagnostics.json', {
@@ -297,39 +296,8 @@ export function renderLogPage(container, query = new URLSearchParams()) {
     if (pendingRestart || (target !== 'operator' && target !== 'wui')) return;
     const current = serviceReport?.targets?.[target];
     if (!current || current.restartable !== true) return refreshServiceControl();
-    pendingRestart = {
-      target, id: null, state: 'requesting', message: '再起動要求を送信しています…',
-      before: serviceGeneration(current), beforeInstanceId: getWuiConnectionState().instanceId,
-      requestedAt: Date.now(),
-      deadline: Date.now() + SERVICE_RESTART_TIMEOUT_MS
-    };
-    setPendingRestart(pendingRestart);
-    renderServiceAction();
-    try {
-      const operation = await requestServiceRestart(target);
-      if (!active || pendingRestart?.target !== target) return;
-      pendingRestart = {
-        ...pendingRestart, id: operation.id || null, state: 'reconnecting',
-        message: '接続回復を確認しています…', before: operation.before || pendingRestart.before
-      };
-      setPendingRestart(pendingRestart);
-      scheduleServiceRefresh(0);
-    } catch (error) {
-      if (!active || pendingRestart?.target !== target) return;
-      if (target === 'wui' && error?.name === 'TypeError') {
-        pendingRestart = {
-          ...pendingRestart, state: 'reconnecting', message: '接続回復を確認しています…'
-        };
-        setPendingRestart(pendingRestart);
-        renderServiceAction();
-        scheduleServiceRefresh(SERVICE_REFRESH_MS);
-        return;
-      }
-      const message = error.message || '再起動要求を受け付けられません';
-      const controlUnavailable = /PM2|管理先|操作できません/.test(message);
-      finishRestart(false, message, { notify: !controlUnavailable });
-      scheduleServiceRefresh(0);
-    }
+    await beginServiceRestart(target, serviceReport);
+    if (active) scheduleServiceRefresh(0);
   }
 
   const isActive = token => active && page.isConnected && token === generation;

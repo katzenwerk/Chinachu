@@ -17,6 +17,43 @@ async function storageModel() {
 
 test('settings model preserves unknown and untouched values while validating explicit edits', async function () {
 	const model = await configModel();
+	const effects = (before, after) => model.configApplicationEffects(before, after);
+	const explicitDefaults = {
+		wuiBlockGlobalAccess: true, recordedThumbnailAutoEnabled: true, seriesUseSyobocal: true,
+		vaapiEnabled: false, vaapiDevice: '/dev/dri/renderD128', wuiOpenPort: 20772,
+		recordedFolderOrganizeEnabled: false, recordedFolderOrganizeOrder: 'filename',
+		storageLowSpaceThresholdMB: 3000, storageLowSpaceAction: 'stop',
+		storageLowSpaceWarningThresholdMB: 0, storageLowSpaceWarningIntervalMinutes: 180,
+		storageLowSpaceCriticalNotifyIntervalMinutes: 180, handoffPrepSeconds: 20,
+		matchRetentionDays: 365, reserves2RetentionDays: 365, recordedHistoryRetentionDays: 365,
+		recordedStorage: { protectRootFilesystem: false }, broadcastClockIntervalHours: 3,
+		recordingBoundaryPolicy: 'end', recordingPriority: 2, conflictedPriority: 1,
+		dropDetectionMode: 'mirakurun', autoTsMaxRecordings: 0, recordedStorageWakeupBeforeSec: 0
+	};
+	assert.deepStrictEqual(model.configApplicationMessages(effects({}, explicitDefaults)), []);
+	for (const [key, value, targets] of [
+		['mirakurunPath', 'http://192.0.2.1:40772/', ['operator', 'wui', 'scheduler', 'history']],
+		['recordedDir', '/new', ['operator', 'wui', 'history']],
+		['recordedDirs', [{ id: 'one', name: 'One', path: '/one' }], ['operator', 'wui', 'scheduler', 'history']],
+		['storageLowSpaceThresholdMB', 5000, ['operator', 'wui']],
+		['recordedFolderOrganizeEnabled', true, ['operator', 'wui']],
+		['recordedFolderOrganizeOrder', 'title', ['operator']],
+		['vaapiEnabled', true, ['wui']], ['normalizationForm', 'NFKC', ['wui', 'scheduler', 'history']],
+		['excludeServices', [211], ['scheduler']], ['serviceOrder', [211], ['scheduler']],
+		['matchRetentionDays', 30, ['history']], ['reserves2RetentionDays', 0, ['history']],
+		['recordedHistoryRetentionDays', 90, ['history']], ['recordingResultCsvEnabled', true, ['history']],
+		['externalNotifications', { routes: {}, events: {} }, ['immediate']]
+	]) {
+		const result = effects({}, { [key]: value });
+		assert.deepStrictEqual(['operator', 'wui', 'scheduler', 'history', 'immediate'].filter(target => result[target]), targets, key);
+		assert.deepStrictEqual(result.unknown, []);
+	}
+	assert.deepStrictEqual(model.configApplicationMessages(effects({ vaapiEnabled: false }, { vaapiEnabled: false, vaapiDevice: '/dev/dri/other' })), []);
+	assert.strictEqual(effects({ vaapiEnabled: true }, { vaapiEnabled: true, vaapiDevice: '/dev/dri/renderD128' }).wui, false);
+	assert.ok(model.configApplicationMessages(effects({}, { wuiOpenPort: 20773 })).some(text => text.includes('現在のURL')));
+	assert.ok(model.configApplicationMessages(effects({}, { recordedFolderOrganizeEnabled: true })).some(text => text.includes('WUIだけを再起動しても')));
+	assert.ok(model.configApplicationMessages(effects({}, { serviceOrder: [211] }))[0].startsWith('再起動不要'));
+	assert.deepStrictEqual(model.configApplicationMessages(effects({}, { externalNotifications: {} })), []);
 	const original = {
 		recordedDir: '/recorded',
 		recordedDurationProbeTimeoutMs: '8000',
@@ -61,6 +98,50 @@ test('settings model preserves unknown and untouched values while validating exp
 		assert.deepStrictEqual(model.validateConfig(config), []);
 	}
 	assert.ok(model.validateConfig({ ...original, recordedThumbnailAutoEnabled: 'false' }).some(message => message.includes('サムネイル自動作成')));
+
+	// Hidden controls and an untouched mixed retention policy survive other edits.
+	const individual = {
+		...original, ffprobeCommand: '/custom/ffprobe', recordedDurationProbeTimeoutMs: 12345,
+		recordedNameEnclosingCharacterMap: { '🈟': '新番組' },
+		vaapiEnabled: true, vaapiDevice: '/dev/dri/renderD129',
+		recordedFolderOrganizeEnabled: true, recordedFolderOrganizeOrder: 'history',
+		matchRetentionDays: 120, reserves2RetentionDays: 0
+	};
+	const mixedBefore = JSON.stringify(individual);
+	assert.deepStrictEqual(model.historyRetentionValues(individual).map(item => item.days), [120, 0, 365]);
+	assert.strictEqual(JSON.stringify(individual), mixedBefore);
+	const untouched = model.cloneConfig(individual);
+	model.setConfigValue(untouched, 'vaapiEnabled', false);
+	model.setConfigValue(untouched, 'recordedFolderOrganizeEnabled', false);
+	const savedUntouched = model.configForSave(untouched);
+	assert.strictEqual(savedUntouched.vaapiDevice, individual.vaapiDevice);
+	assert.strictEqual(savedUntouched.recordedFolderOrganizeOrder, 'history');
+	assert.strictEqual(savedUntouched.ffprobeCommand, individual.ffprobeCommand);
+	assert.strictEqual(savedUntouched.recordedDurationProbeTimeoutMs, 12345);
+	assert.deepStrictEqual(savedUntouched.recordedNameEnclosingCharacterMap, individual.recordedNameEnclosingCharacterMap);
+	assert.strictEqual(savedUntouched.matchRetentionDays, 120);
+	assert.strictEqual(savedUntouched.reserves2RetentionDays, 0);
+	assert.ok(!Object.hasOwn(savedUntouched, 'recordedHistoryRetentionDays'));
+	assert.ok(!model.configChanges(individual, savedUntouched).some(change => /RetentionDays$/.test(change.key)));
+	assert.deepStrictEqual(model.historyRetentionValues({}).map(item => item.days), [365, 365, 365]);
+	assert.deepStrictEqual(model.historyRetentionValues({ matchRetentionDays: 365 }).map(item => item.days), [365, 365, 365]);
+	model.setHistoryRetentionDays(untouched, 30);
+	assert.deepStrictEqual(model.historyRetentionValues(model.configForSave(untouched)).map(item => item.days), [30, 30, 30]);
+	assert.strictEqual(model.configChanges(individual, untouched).filter(change => /RetentionDays$/.test(change.key)).length, 3);
+	model.setHistoryRetentionDays(untouched, 0);
+	assert.deepStrictEqual(model.historyRetentionValues(untouched).map(item => item.days), [0, 0, 0]);
+	const beforeInvalid = JSON.stringify(untouched);
+	assert.throws(() => model.setHistoryRetentionDays(untouched, -1));
+	assert.throws(() => model.setHistoryRetentionDays(untouched, 1.5));
+	assert.strictEqual(JSON.stringify(untouched), beforeInvalid);
+	assert.strictEqual(JSON.stringify(individual), mixedBefore);
+	assert.ok(!Object.hasOwn(untouched, 'historyRetentionDays'));
+
+	const commandDraft = model.cloneConfig(individual);
+	commandDraft.externalNotifications = { routes: { command: { configured: true, enabled: false, command: ['/fixture/notifier', 'arg'] } },
+		events: { failure: true }, commandManaged: true };
+	assert.deepStrictEqual(model.configForSave(commandDraft).notificationCommand, individual.notificationCommand);
+	assert.strictEqual(model.configForSave(commandDraft).externalNotifications.routes.command.enabled, false);
 
 	const storage = await storageModel();
 	const blocked = {
@@ -230,6 +311,178 @@ test('settings model preserves unknown and untouched values while validating exp
 		assert.strictEqual(put(original, deleted).status, 400);
 		assert.strictEqual(fs.readFileSync(configFile, 'utf8'), '{invalid');
 	} finally { fs.rmSync(root, { recursive: true, force: true }); }
+
+	// Display and persistence use one stable ordering, including duplicate ranks.
+	const settingsSource = fs.readFileSync(path.join(__dirname, '../next-web/pages/settings-page.js'), 'utf8');
+	const sortingSource = settingsSource.slice(settingsSource.indexOf('export function sortSettingsServices'), settingsSource.indexOf('export function renderSettingsPage'));
+	const sorting = await import('data:text/javascript;base64,' + Buffer.from(sortingSource).toString('base64'));
+	const services = [
+		{ id: 11, stableIndex: 0, order: '', excluded: false },
+		{ id: 22, stableIndex: 1, order: '2', excluded: true },
+		{ id: 33, stableIndex: 2, order: '1', excluded: false },
+		{ id: 44, stableIndex: 3, order: '2', excluded: false },
+		{ id: 55, stableIndex: 4, order: '', excluded: false }
+	];
+	assert.deepStrictEqual(sorting.sortSettingsServices(services).map(item => item.id), [33, 22, 44, 11, 55]);
+	assert.deepStrictEqual(services.map(item => item.id), [11, 22, 33, 44, 55]);
+	const serviceContext = { services, draft: { serviceOrder: [999, 33], excludeServices: [22] },
+		sortSettingsServices: sorting.sortSettingsServices, markChanged() {} };
+	const commitSource = settingsSource.slice(settingsSource.indexOf('  function commitServices('), settingsSource.indexOf('  function createServicesTab('));
+	vm.runInNewContext(commitSource, serviceContext);
+	serviceContext.commitServices('excluded');
+	assert.deepStrictEqual(serviceContext.draft.serviceOrder, [999, 33]);
+	serviceContext.commitServices('order');
+	assert.deepStrictEqual(serviceContext.draft.serviceOrder, [33, 22, 44]);
+	assert.deepStrictEqual(serviceContext.draft.excludeServices, [22]);
+	services[0].order = '1';
+	serviceContext.commitServices('order');
+	assert.deepStrictEqual(serviceContext.draft.serviceOrder, [11, 33, 22, 44]);
+	services[2].order = '';
+	serviceContext.commitServices('order');
+	assert.deepStrictEqual(serviceContext.draft.serviceOrder, [11, 22, 44]);
+	// Typing alone leaves the draft and DOM order intact; Enter/blur commit.
+	const orderHandlers = {};
+	const orderInput = { value: '2', validity: { badInput: false }, addEventListener(name, callback) { orderHandlers[name] = callback; } };
+	let orderCommits = 0, rowMoves = 0, orderError;
+	const orderContext = { order: orderInput, item: { id: 22, order: '1' }, error: {},
+		setError(key, element, message) { orderError = message; }, markChanged() {}, updateServiceStatus() {},
+		commitServices(kind) { assert.strictEqual(kind, 'order'); orderCommits++; }, reorder() { rowMoves++; } };
+	const bindingStart = settingsSource.indexOf('        const commitOrder = () => {');
+	vm.runInNewContext(settingsSource.slice(bindingStart, settingsSource.indexOf('        orderLabel.append(order);', bindingStart)), orderContext);
+	assert.strictEqual(orderHandlers.input, undefined);
+	assert.strictEqual(orderContext.item.order, '1');
+	assert.strictEqual(rowMoves, 0);
+	orderHandlers.keydown({ key: 'Enter', preventDefault() {} });
+	assert.strictEqual(orderContext.item.order, '2');
+	assert.strictEqual(orderCommits, 1); assert.strictEqual(rowMoves, 1);
+	orderInput.value = '';
+	orderHandlers.blur();
+	assert.strictEqual(orderContext.item.order, '');
+	assert.strictEqual(orderCommits, 2); assert.strictEqual(rowMoves, 2);
+	orderInput.value = '1.5';
+	orderHandlers.blur();
+	assert.ok(orderError); assert.strictEqual(orderCommits, 2);
+	assert.strictEqual(orderContext.item.order, '');
+
+	// Card clicks reuse the checkbox, while its label and the whole order control are excluded.
+	let cardClick, checkboxClicks = 0, excluded = false;
+	const cardClickContext = {
+		row: { addEventListener(name, callback) { assert.strictEqual(name, 'click'); cardClick = callback; } },
+		excludeLabel: { contains(target) { return ['checkbox', 'exclude-label'].includes(target); } },
+		orderLabel: { contains(target) { return ['order-input', 'order-label'].includes(target); } },
+		check: { click() { checkboxClicks++; excluded = !excluded; cardClick({ target: 'checkbox' }); } }
+	};
+	const cardClickStart = settingsSource.indexOf("        row.addEventListener('click', event => {");
+	assert.ok(cardClickStart >= 0);
+	vm.runInNewContext(settingsSource.slice(cardClickStart, settingsSource.indexOf('        rows.set(item, row);', cardClickStart)), cardClickContext);
+	for (const target of ['card', 'logo', 'service-name', 'service-details']) cardClick({ target });
+	assert.strictEqual(checkboxClicks, 4);
+	assert.strictEqual(excluded, false);
+	for (const target of ['checkbox', 'exclude-label', 'order-input', 'order-label']) cardClick({ target });
+	assert.strictEqual(checkboxClicks, 4);
+	cardClick({ target: 'card' });
+	assert.strictEqual(excluded, true);
+
+	// Render the success notice without saving production settings or starting services.
+	const notice = { children: [], hidden: true, append(...nodes) { this.children.push(...nodes); }, replaceChildren() { this.children = []; } };
+	const restartSource = fs.readFileSync(path.join(__dirname, '../next-web/services/service-restart-model.js'), 'utf8');
+	const restartModel = await import('data:text/javascript;base64,' + Buffer.from(restartSource).toString('base64'));
+	const noticeContext = {
+		savedEffects: null, disposed: false, restartOutcome: '', restartChecking: false, restartError: '', restartDialog: null,
+		restartReport: { targets: { wui: { restartable: true } } },
+		container: { querySelector() { return notice; } },
+		document: { createElement(tag) { return { tag, addEventListener() {} }; } },
+		getPendingRestart: () => null, configApplicationMessages: model.configApplicationMessages,
+		restartButtonModel: restartModel.restartButtonModel, refreshRestartReport() {}
+	};
+	const renderNoticeStart = settingsSource.indexOf('  function renderSavedApplication()');
+	vm.runInNewContext(settingsSource.slice(renderNoticeStart, settingsSource.indexOf('  const unsubscribeRestart', renderNoticeStart)), noticeContext);
+	noticeContext.renderSavedApplication();
+	assert.strictEqual(notice.hidden, true);
+	for (const config of [{ recordingPriority: 3 }, { vaapiEnabled: true }, { recordedFolderOrganizeEnabled: true }, { externalNotifications: {} }]) {
+		noticeContext.savedEffects = effects({}, config);
+		noticeContext.renderSavedApplication();
+		const restartButtons = notice.children.filter(node => node.tag === 'button');
+		assert.strictEqual(restartButtons.length, noticeContext.savedEffects.wui ? 1 : 0);
+		assert.ok(notice.children[0].textContent.startsWith('設定を保存しました。'));
+	}
+	noticeContext.savedEffects = effects({}, { vaapiEnabled: true });
+	noticeContext.restartReport = { targets: { wui: { restartable: false, restartSummary: 'PM2管理先を特定できません' } } };
+	noticeContext.renderSavedApplication();
+	assert.strictEqual(notice.children.find(node => node.textContent === 'WUIを再起動').disabled, true);
+	assert.ok(notice.children.some(node => node.textContent === 'PM2管理先を特定できません'));
+	noticeContext.restartReport.targets.wui.restartable = true;
+	noticeContext.getPendingRestart = () => ({ target: 'wui', state: 'reconnecting', message: '確認中' });
+	noticeContext.renderSavedApplication();
+	assert.strictEqual(notice.children.find(node => node.textContent === 'WUIを再起動').disabled, true);
+	assert.ok(notice.children.some(node => node.textContent === '確認中'));
+
+	// The real save callback must not expose the notice on a rejected save.
+	let dialog, saveFails = true, savedNotices = 0;
+	function element() {
+		return { children: [], handlers: {}, selectors: new Map(), classList: { add() {} },
+			append(...nodes) { this.children.push(...nodes); }, before() {}, close() {}, showModal() {}, remove() {},
+			addEventListener(name, fn) { this.handlers[name] = fn; },
+			querySelector(selector) { if (!this.selectors.has(selector)) this.selectors.set(selector, element()); return this.selectors.get(selector); },
+			querySelectorAll() { return [element(), element(), element()]; } };
+	}
+	const saveContext = {
+		original: { recordedDir: '/recorded' }, draft: { recordedDir: '/recorded', vaapiEnabled: true },
+		applicationBaseline: { recordedDir: '/recorded' }, wuiApplicationBaseline: { recordedDir: '/recorded' }, savedEffects: null,
+		configChanges: model.configChanges, configForSave: model.configForSave, validateConfig: model.validateConfig,
+		configApplicationEffects: model.configApplicationEffects, configApplicationMessages: model.configApplicationMessages,
+		formatChangeValue: model.formatChangeValue, cloneConfig: model.cloneConfig,
+		fieldErrors: new Map(), controller: { signal: {} }, notificationView: { refresh() {} }, markChanged() {},
+		document: { createElement(tag) { const node = element(); if (tag === 'dialog') dialog = node; return node; }, body: element() },
+		async saveConfig(value) { if (saveFails) throw new Error('save failed'); return value; },
+		renderSavedApplication() { savedNotices++; }, refreshRestartReport() {}
+	};
+	const saveStart = settingsSource.indexOf('  function openSaveDialog()');
+	vm.runInNewContext(settingsSource.slice(saveStart, settingsSource.indexOf('  async function refreshRestartReport()', saveStart)), saveContext);
+	saveContext.openSaveDialog();
+	await dialog.querySelector('[data-save]').handlers.click();
+	assert.strictEqual(savedNotices, 0);
+	assert.strictEqual(saveContext.savedEffects, null);
+	assert.strictEqual(saveContext.original.vaapiEnabled, undefined);
+	saveFails = false;
+	await dialog.querySelector('[data-save]').handlers.click();
+	assert.strictEqual(savedNotices, 1);
+	assert.strictEqual(saveContext.original.vaapiEnabled, true);
+	assert.strictEqual(saveContext.savedEffects.wui, true);
+	saveContext.original.recordingPriority = 3;
+	saveContext.updateSavedEffects();
+	assert.strictEqual(saveContext.savedEffects.operator, true);
+	assert.strictEqual(saveContext.savedEffects.wui, true);
+	saveContext.wuiApplicationBaseline = model.cloneConfig(saveContext.original);
+	saveContext.updateSavedEffects();
+	assert.strictEqual(saveContext.savedEffects.operator, true);
+	assert.strictEqual(saveContext.savedEffects.wui, false);
+
+	const serverDisabled = model.configForSave({ recordedDir: '/recorded', wuiOpenServer: false });
+	assert.strictEqual(serverDisabled.wuiOpenServer, false);
+	assert.ok(!Object.hasOwn(model.configForSave({ recordedDir: '/recorded' }), 'wuiOpenServer'));
+
+	// An excluded service has no schedule row but still resolves through Mirakurun.
+	const logoSource = fs.readFileSync(path.join(__dirname, '../api/script-channel-logo.vm.js'), 'utf8');
+	const logoResult = await new Promise(resolve => vm.runInNewContext(logoSource, {
+		request: { param: { chid: (12345).toString(36) }, type: 'png' }, data: { schedule: [] },
+		mirakurun: { getLogoImage(id) { assert.strictEqual(id, 12345); return Promise.resolve(Buffer.from('logo')); } },
+		response: { head(status) { assert.strictEqual(status, 200); }, end(body) { resolve(body.toString()); }, error(status) { resolve(status); } }
+	}));
+	assert.strictEqual(logoResult, 'logo');
+	const unavailableLogo = await new Promise(resolve => vm.runInNewContext(logoSource, {
+		request: { param: { chid: (12345).toString(36) }, type: 'png' },
+		mirakurun: { getLogoImage() { return Promise.reject({ req: {}, statusCode: 404 }); } },
+		response: { error(status) { resolve(status); } }
+	}));
+	assert.strictEqual(unavailableLogo, 404);
+	let invalidLogo;
+	vm.runInNewContext(logoSource, {
+		request: { param: { chid: '../bad' }, type: 'png' },
+		mirakurun: { getLogoImage() { assert.fail('Invalid service ID reached Mirakurun'); } },
+		response: { error(status) { invalidLogo = status; } }
+	});
+	assert.strictEqual(invalidLogo, 404);
 
 
 });

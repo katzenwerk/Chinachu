@@ -95,7 +95,9 @@ describe('notification behavior contracts', function() {
 		const routes = prepareSettings(temporaryDir);
 		let view = external.publicSettings(external.read(temporaryDir));
 		assert.deepStrictEqual(view.events, { conflict: true, failure: true, abort: true, storage: true, analysis: true, start: false, complete: false });
-		assert.ok(Object.values(view.routes).every(route => route.configured && !route.enabled));
+		assert.ok(['mail', 'slack', 'pushover'].every(name => view.routes[name].configured && !view.routes[name].enabled));
+		assert.strictEqual(view.routes.command.configured, false);
+		assert.strictEqual(external.isCommandManaged(temporaryDir), false);
 		assert.strictEqual(fs.statSync(path.join(temporaryDir, 'data/external-notification.json')).mode & 0o777, 0o600);
 		for (const [route, values] of Object.entries(routes)) {
 			external.update(temporaryDir, { route, enabled: true });
@@ -123,6 +125,7 @@ describe('notification behavior contracts', function() {
 		assert.throws(() => external.update(temporaryDir, { settings: staged }, () => { throw new Error('config write failed'); }));
 		assert.strictEqual(external.read(temporaryDir).routes.mail.host, routes.mail.host);
 		const batch = external.update(temporaryDir, { settings: staged });
+		assert.strictEqual(external.isCommandManaged(temporaryDir), false);
 		assert.strictEqual(batch.routes.slack.enabled, true);
 		assert.strictEqual(external.read(temporaryDir).routes.mail.password, routes.mail.password);
 		assert.ok(!JSON.stringify(batch).includes(routes.mail.password));
@@ -130,6 +133,41 @@ describe('notification behavior contracts', function() {
 			external.update(temporaryDir, { route, remove: true });
 			assert.strictEqual(external.publicSettings(external.read(temporaryDir)).routes[route].configured, false);
 		}
+		// Taking ownership is persistent, including OFF and removal; legacy keys stay untouched.
+		const legacyConfig = { notificationCommand: ['tee', outputPath] };
+		const legacyBefore = JSON.stringify(legacyConfig);
+		const legacySender = notification.createNotificationSender(legacyConfig.notificationCommand, {
+			enabled: () => !external.isCommandManaged(temporaryDir)
+		});
+		const commandSettings = external.publicSettings(external.read(temporaryDir));
+		commandSettings.routes.command = { configured: true, enabled: false, command: ['tee', outputPath] };
+		external.saveSettings(temporaryDir, commandSettings);
+		assert.strictEqual(external.isCommandManaged(temporaryDir), true);
+		assert.strictEqual((await legacySender({ duplicate: true })).skipped, true);
+		external.update(temporaryDir, { route: 'command', enabled: true });
+		const commandCalls = [];
+		const commandOptions = { commandSender: async payload => { commandCalls.push(payload); return { ok: true }; } };
+		for (const event of Object.keys(external.EVENTS)) {
+			external.update(temporaryDir, { events: { [event]: true } });
+			assert.deepStrictEqual(await external.send(temporaryDir, event, { title: 'Fixture' }, 'detail', commandOptions), [{ route: 'command', ok: true }]);
+		}
+		assert.deepStrictEqual(commandCalls.map(payload => payload.event), Object.keys(external.EVENTS));
+		assert.strictEqual(commandCalls[0].program.title, 'Fixture');
+		external.update(temporaryDir, { route: 'command', enabled: false });
+		assert.deepStrictEqual(await external.send(temporaryDir, 'failure', null, '', commandOptions), []);
+		assert.strictEqual((await legacySender({ duplicate: true })).skipped, true);
+		external.update(temporaryDir, { route: 'command', remove: true });
+		assert.strictEqual(external.publicSettings(external.read(temporaryDir)).routes.command.configured, false);
+		assert.strictEqual(external.isCommandManaged(temporaryDir), true);
+		assert.strictEqual((await legacySender({ duplicate: true })).skipped, true);
+		assert.strictEqual(JSON.stringify(legacyConfig), legacyBefore);
+		// Existing shell-free stdin transport is also used for unsaved command tests.
+		const stagedCommand = await external.testConnection(temporaryDir, 'command', { command: ['tee', outputPath] });
+		assert.deepStrictEqual(stagedCommand, [{ route: 'command', ok: true }]);
+		assert.strictEqual(JSON.parse(fs.readFileSync(outputPath, 'utf8')).event, 'test');
+		assert.strictEqual(external.publicSettings(external.read(temporaryDir)).routes.command.configured, false);
+		await assert.rejects(external.testConnection(temporaryDir, 'command', { command: [] }), error => error.statusCode === 400);
+
 		const settingsFile = path.join(temporaryDir, 'data/external-notification.json');
 		fs.writeFileSync(settingsFile, '{invalid');
 		assert.throws(() => external.update(temporaryDir, { events: { start: false } }));
@@ -186,9 +224,10 @@ describe('notification behavior contracts', function() {
 		const drafts = { slack: { webhook: 'https://hooks.slack.com/services/fixture/draft/secret' },
 			pushover: { token: 'draft-token', user: 'draft-user' },
 			mail: { host: 'draft.example.invalid', port: '587', encryption: 'starttls', username: 'draft',
-				password: 'draft-password', from: 'from@example.invalid', to: 'to@example.invalid' } };
+				password: 'draft-password', from: 'from@example.invalid', to: 'to@example.invalid' },
+			command: { command: ['/fixture/notifier', '--json'] } };
 		const transports = [];
-		const mocks = { fetch: async (url, init) => {
+		const mocks = { commandSender: async payload => { assert.strictEqual(payload.event, 'test'); return { ok: true }; }, fetch: async (url, init) => {
 			transports.push({ url, body: init.body }); return { ok: true, json: async () => ({ status: 1 }) };
 		}, mailer: { createTransport: config => {
 			transports.push(config); return { sendMail: async () => {}, close() {} };
@@ -200,6 +239,7 @@ describe('notification behavior contracts', function() {
 		assert.strictEqual(transports[0].url, drafts.slack.webhook);
 		assert.strictEqual(transports[1].body.get('token'), drafts.pushover.token);
 		assert.strictEqual(transports[2].auth.pass, drafts.mail.password);
+		assert.strictEqual(external.isCommandManaged(draftRoot), false);
 		assert.strictEqual(fs.existsSync(path.join(draftRoot, 'data/external-notification.json')), false);
 		const settingsPath = path.join(temporaryDir, 'data/external-notification.json');
 		const before = fs.readFileSync(settingsPath, 'utf8');

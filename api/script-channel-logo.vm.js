@@ -1,19 +1,14 @@
 (function() {
 
-	var channel = null;
-
-	data.schedule.forEach(function(ch) {
-		if (ch.id === request.param.chid) {
-			channel = ch;
-		}
-	});
-
-	if (channel === null) return response.error(404);
+	// Logos are service resources, including services excluded from the schedule.
+	var chid = request.param.chid;
+	var serviceId = parseInt(chid, 36);
+	if (!/^[0-9a-z]+$/i.test(chid) || !Number.isSafeInteger(serviceId) || serviceId <= 0) return response.error(404);
 
 	switch (request.type) {
 		case 'png':
 			// get logo
-			mirakurun.getLogoImage(parseInt(channel.id, 36))
+			mirakurun.getLogoImage(serviceId)
 				.then(buffer => {
 					response.head(200);
 					response.end(buffer, 'binary');

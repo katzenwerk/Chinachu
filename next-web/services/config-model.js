@@ -25,6 +25,21 @@ export function cloneConfig(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+const HISTORY_RETENTION_KEYS = ['matchRetentionDays', 'reserves2RetentionDays', 'recordedHistoryRetentionDays'];
+
+// Match the existing backend effective values without materializing defaults.
+export function historyRetentionValues(config) {
+  return HISTORY_RETENTION_KEYS.map(key => {
+    const value = Math.floor(Number(config[key]));
+    return { key, days: Number.isFinite(value) && value >= 0 ? value : 365 };
+  });
+}
+
+export function setHistoryRetentionDays(config, days) {
+  if (!Number.isInteger(days) || days < 0) throw new Error('履歴の保持期間は0以上の整数で指定してください。');
+  HISTORY_RETENTION_KEYS.forEach(key => { config[key] = days; });
+}
+
 export function configForSave(config) {
   const result = cloneConfig(config);
   if (!Object.prototype.hasOwnProperty.call(result, 'wuiBlockGlobalAccess')) result.wuiBlockGlobalAccess = true;
@@ -45,6 +60,92 @@ export function configChanges(original, draft) {
     after: draft?.[key],
     removed: !Object.prototype.hasOwnProperty.call(draft || {}, key)
   }));
+}
+
+const enabled = value => value === true;
+const defaultOn = value => value !== false;
+const positive = fallback => value => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+const storageSettings = value => ({ ...(value || {}), protectRootFilesystem: value?.protectRootFilesystem === true });
+const application = (targets, effective = value => value) => ({ targets, effective });
+// Operator/WUI hold config.json at startup (including the WUI API sandbox).
+// Scheduler, reservation-store and app-matching read it for each execution;
+// external-notification reads its separate settings for each notification.
+const CONFIG_APPLICATION = {
+  uid: application(['operator', 'wui']), gid: application(['operator', 'wui']),
+  mirakurunPath: application(['operator', 'wui', 'scheduler', 'history'], (value, config) => value || config.schedulerMirakurunPath || 'http+unix://%2Fvar%2Frun%2Fmirakurun.sock/'),
+  recordedDir: application(['operator', 'wui', 'history']),
+  recordedStorage: application(['operator', 'wui', 'history'], storageSettings),
+  recordedDirs: application(['operator', 'wui', 'scheduler', 'history'], value => (value || []).map(item => ({ ...item, storage: storageSettings(item.storage) }))),
+  recordedFormat: application(['operator', 'history']),
+  recordedCommand: application(['operator'], value => value || ''),
+  ffprobeCommand: application(['operator'], value => typeof value === 'string' && value.trim() || 'ffprobe'),
+  recordedDurationProbeTimeoutMs: application(['operator'], value => Number.isFinite(Number(value)) && Number(value) > 0 ? Math.min(Math.floor(Number(value)), 0x7fffffff) : 8000),
+  recordedThumbnailAutoEnabled: application(['operator'], defaultOn),
+  recordingFilenamePrefixEnabled: application(['operator'], enabled),
+  recordedFolderOrganizeEnabled: application(['operator', 'wui'], enabled),
+  recordedFolderOrganizeOrder: application(['operator'], value => value || 'filename'),
+  recordedNameReplaceEnclosingCharacters: application(['operator'], (value, config) => value === true || config.needToReplaceEnclosingCharacters === true),
+  recordedNameEnclosingCharacterMap: application(['operator'], value => value || null),
+  normalizationForm: application(['wui', 'scheduler', 'history'], value => value || null),
+  vaapiEnabled: application(['wui'], enabled),
+  vaapiDevice: application(['wui'], (value, config) => config.vaapiEnabled === true ? value || '/dev/dri/renderD128' : null),
+  recordingBoundaryPolicy: application(['operator'], value => value === 'start' ? 'start' : 'end'),
+  recordingPriority: application(['operator'], value => value || 2),
+  conflictedPriority: application(['operator'], value => value || 1),
+  handoffPrepSeconds: application(['operator'], value => Number.isFinite(Number(value)) && Number(value) >= 0 ? Math.min(Number(value), 60) : 20),
+  dropDetectionMode: application(['operator'], value => {
+    const mode = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return ['mirakurun', 'ts', 'both', 'file', 'mirakurun-file', 'off'].includes(mode) ? mode : 'mirakurun';
+  }),
+  autoTsMaxRecordings: application(['operator'], value => Number.isInteger(value) && value >= 0 ? value : 0),
+  recordedStorageWakeupBeforeSec: application(['operator'], value => Number.isFinite(Number(value)) && Number(value) > 0 ? Math.floor(Number(value)) : 0),
+  storageLowSpaceThresholdMB: application(['operator', 'wui'], positive(3000)),
+  storageLowSpaceWarningThresholdMB: application(['operator', 'wui'], positive(null)),
+  storageLowSpaceWarningIntervalMinutes: application(['operator', 'wui'], positive(180)),
+  storageLowSpaceCriticalNotifyIntervalMinutes: application(['operator', 'wui'], positive(180)),
+  storageLowSpaceAction: application(['operator', 'wui'], value => ['remove', 'stop-new'].includes(value) ? value : 'stop'),
+  notificationCommand: application(['operator'], value => value || null),
+  ...Object.fromEntries(HISTORY_RETENTION_KEYS.map(key => [key, application(['history'], value => {
+    const days = Math.floor(Number(value));
+    return Number.isFinite(days) && days >= 0 ? days : 365;
+  })])),
+  recordingResultCsvEnabled: application(['history'], enabled),
+  excludeServices: application(['scheduler'], value => value || []),
+  serviceOrder: application(['scheduler'], value => value || []),
+  wuiOpenServer: application(['wui'], enabled),
+  wuiOpenHost: application(['wui'], value => value || null),
+  wuiOpenPort: application(['wui'], value => value || 20772),
+  wuiBlockGlobalAccess: application(['wui'], defaultOn),
+  broadcastClockEnabled: application(['operator'], enabled),
+  broadcastClockIntervalHours: application(['operator'], value => [3, 6, 12, 24].includes(Number(value)) ? Number(value) : 3),
+  broadcastClockGrChannel: application(['operator'], value => typeof value === 'string' && value.trim() || null),
+  seriesUseSyobocal: application(['wui'], defaultOn),
+  externalNotifications: application(['immediate'])
+};
+
+export function configApplicationEffects(before, after) {
+  const effects = { operator: false, wui: false, scheduler: false, history: false, immediate: false, connectionChanged: false, unknown: [] };
+  for (const change of configChanges(before, after)) {
+    const entry = CONFIG_APPLICATION[change.key];
+    if (!entry) { effects.unknown.push(change.key); continue; }
+    if (sameValue(entry.effective(change.before, before), entry.effective(change.after, after))) continue;
+    entry.targets.forEach(target => { effects[target] = true; });
+    if (['wuiOpenServer', 'wuiOpenHost', 'wuiOpenPort', 'wuiBlockGlobalAccess'].includes(change.key)) effects.connectionChanged = true;
+  }
+  return effects;
+}
+
+export function configApplicationMessages(effects) {
+  const messages = [];
+  if (effects.operator && effects.wui) messages.push('Operator・WUIの再起動が必要です。WUIだけを再起動しても、Operator側の変更は反映されません。');
+  else if (effects.operator) messages.push('Operatorの再起動が必要です。');
+  else if (effects.wui) messages.push('WUIの再起動が必要です。');
+  const prefix = effects.operator || effects.wui ? '' : '再起動不要：';
+  if (effects.scheduler) messages.push(`${prefix}次回Scheduler実行時に反映されます。`);
+  if (effects.history) messages.push(`${prefix}次回履歴・照合処理時に反映されます。`);
+  if (effects.connectionChanged) messages.push('待受IP・ポート・アクセス制限の変更により、WUI再起動後は現在のURLで接続できなくなる可能性があります。');
+  if (effects.unknown.length) messages.push(`反映条件を確認できない設定：${effects.unknown.join(', ')}`);
+  return messages;
 }
 
 export function unknownConfigKeys(config) {

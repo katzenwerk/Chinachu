@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const { describe, it } = require('node:test');
 
 async function loadModel() {
@@ -51,6 +52,44 @@ describe('next WUI service restart model', function() {
 			{ pid: 10, restartCount: 1, startedAt: 100 },
 			{ pid: 10, restartCount: 1, startedAt: 100 }
 		), false);
+
+		// Both screens use the same guarded request and the existing restart store.
+		const source = fs.readFileSync(path.resolve(__dirname, '../next-web/services/service-control-client.js'), 'utf8');
+		let current = null, requests = 0, resolveRequest, failure = null, completion;
+		const context = {
+			Date, serviceGeneration: value => ({ pid: value.pid }),
+			getWuiConnectionState: () => ({ instanceId: 'old-wui' }),
+			getPendingRestart: () => current, setPendingRestart: value => { current = value; },
+			completePendingRestart(ok, message) { completion = { ok, message }; current = null; },
+			requestServiceRestart(target) {
+				assert.strictEqual(target, 'wui'); requests++;
+				if (failure) return Promise.reject(failure);
+				return new Promise(resolve => { resolveRequest = resolve; });
+			}
+		};
+		vm.runInNewContext(source.slice(source.indexOf('export async function beginServiceRestart')).replace('export ', ''), context);
+		await context.beginServiceRestart('wui', { targets: { wui: { restartable: false } } });
+		assert.strictEqual(requests, 0);
+		const request = context.beginServiceRestart('wui', report);
+		assert.strictEqual(current.state, 'requesting');
+		assert.strictEqual(current.beforeInstanceId, 'old-wui');
+		await context.beginServiceRestart('wui', report);
+		assert.strictEqual(requests, 1);
+		resolveRequest({ id: 'operation', before: { pid: 123 } });
+		await request;
+		assert.strictEqual(current.state, 'reconnecting');
+		assert.strictEqual(current.id, 'operation');
+		assert.strictEqual(current.before.pid, 123);
+		current = null;
+		failure = { name: 'TypeError', message: 'disconnected' };
+		await context.beginServiceRestart('wui', report);
+		assert.strictEqual(current.state, 'reconnecting');
+		current = null;
+		failure = new Error('PM2操作不可');
+		await context.beginServiceRestart('wui', report);
+		assert.strictEqual(current, null);
+		assert.strictEqual(completion.ok, false);
+		assert.strictEqual(completion.message, 'PM2操作不可');
 	});
 
 });

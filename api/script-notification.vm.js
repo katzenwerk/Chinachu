@@ -10,7 +10,7 @@
     if (request.method === 'PUT') return reply(externalNotification.update(root, request.query));
     if (request.method === 'POST') {
       var name = request.query.route;
-      if (!['slack', 'pushover', 'mail'].includes(name)) return response.error(400);
+      if (!['slack', 'pushover', 'mail', 'command'].includes(name)) return response.error(400);
       if (typeof externalNotification.testConnection !== 'function') return response.error(503);
       externalNotification.testConnection(root, name, request.query.values).then(function (results) {
         reply({ ok: results.length === 1 && results[0].ok });

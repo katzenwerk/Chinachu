@@ -1,3 +1,4 @@
+import { createChannelLogo } from '../components/channel-logo.js';
 import { createNotificationSettings } from '../components/notification-settings.js';
 import { loadClockRuntime, loadConfig, loadMirakurunServices, loadRuntimeMode, saveConfig } from '../services/config-client.js';
 import {
@@ -9,13 +10,20 @@ import {
   updateAuthEnabled
 } from '../services/auth-client.js';
 import { getAutoTsStatus, subscribeAutoTsStatus, requestAutoTsAction } from '../services/auto-ts-analysis-client.js';
+import { beginServiceRestart, loadServiceControl } from '../services/service-control-client.js';
+import { restartButtonModel } from '../services/service-restart-model.js';
+import { getPendingRestart, subscribePendingRestart } from '../services/service-restart-store.js';
 import {
   DROP_DETECTION_MODES,
   cloneConfig,
   configForSave,
   configPreview,
   configChanges,
+  configApplicationEffects,
+  configApplicationMessages,
   formatChangeValue,
+  historyRetentionValues,
+  setHistoryRetentionDays,
   normalizeRecordedDirs,
   parseFieldValue,
   setConfigValue,
@@ -33,7 +41,7 @@ const TABS = [
 
 const FIELD = {
   mirakurunPath: { label: 'Mirakurun接続先', type: 'text', required: true },
-  vaapiDevice: { label: 'VA-APIデバイス', type: 'text', empty: 'string' },
+  vaapiDevice: { label: 'VA-APIデバイス', type: 'text', empty: 'string', inputSize: 'medium' },
   recordedDir: { label: 'デフォルト録画先', type: 'text', required: true },
   recordedFormat: { label: '録画ファイル名フォーマット', type: 'text', required: true },
   recordedFolderOrganizeOrder: { label: '振り分け判定の優先順位', type: 'text', select: [
@@ -41,10 +49,7 @@ const FIELD = {
     { value: 'title', label: '作品名 → ファイル名 → 過去実績' },
     { value: 'history', label: '過去実績 → ファイル名 → 作品名' }
   ] },
-  recordedNameEnclosingCharacterMap: { label: '囲み文字の置換ルール', type: 'json', jsonType: 'object' },
   recordedCommand: { label: '録画後コマンド', type: 'text', empty: 'string' },
-  ffprobeCommand: { label: 'ffprobeコマンド', type: 'text', empty: 'string' },
-  recordedDurationProbeTimeoutMs: { label: 'ffprobeタイムアウト', type: 'number', min: 1 },
   normalizationForm: { label: '予約ルールの文字正規化', type: 'text' },
   recordingBoundaryPolicy: { label: '録画境界の優先方針', type: 'text', select: [
     { value: 'end', label: '終了優先（末尾を守る）' }, { value: 'start', label: '開始優先（先頭を守る）' }
@@ -55,11 +60,15 @@ const FIELD = {
   dropDetectionMode: { label: 'DROP検出方式', type: 'text', select: DROP_DETECTION_MODES },
   autoTsMaxRecordings: { label: '解析を許可する同時録画数', type: 'number', integer: true, min: 0 },
   recordedStorageWakeupBeforeSec: { label: '録画先HDDの事前起動', type: 'number', integer: true, min: 0 },
-  storageLowSpaceWarningThresholdMB: { label: '容量警告の空き容量', type: 'number', min: 0 },
-  storageLowSpaceWarningIntervalMinutes: { label: '容量警告の通知間隔', type: 'number', exclusiveMin: 0 },
-  storageLowSpaceThresholdMB: { label: '容量不足の空き容量', type: 'number', exclusiveMin: 0 },
-  storageLowSpaceCriticalNotifyIntervalMinutes: { label: '容量不足の通知間隔', type: 'number', exclusiveMin: 0 },
-  notificationCommand: { label: '通知コマンド', type: 'command', empty: 'null' },
+  storageLowSpaceWarningThresholdMB: { label: '警告する空き容量', type: 'number', min: 0 },
+  storageLowSpaceWarningIntervalMinutes: { label: '再通知間隔', type: 'number', exclusiveMin: 0 },
+  storageLowSpaceThresholdMB: { label: '容量不足と判定する空き容量', type: 'number', exclusiveMin: 0 },
+  storageLowSpaceCriticalNotifyIntervalMinutes: { label: '再通知間隔', type: 'number', exclusiveMin: 0 },
+  storageLowSpaceAction: { label: '容量不足時の動作', type: 'text', select: [
+    { value: 'stop-new', label: '新規録画のみ停止' },
+    { value: 'stop', label: '録画中を含めて停止' },
+    { value: 'remove', label: '古い録画ファイルを削除' }
+  ] },
   matchRetentionDays: { label: '予約・録画照合履歴の保持期間', type: 'number', integer: true, min: 0 },
   reserves2RetentionDays: { label: '予約履歴の保持期間', type: 'number', integer: true, min: 0 },
   recordedHistoryRetentionDays: { label: '録画済み履歴の保持期間', type: 'number', integer: true, min: 0 },
@@ -67,7 +76,7 @@ const FIELD = {
     label: '確認間隔', type: 'number', integer: true,
     select: [3, 6, 12, 24].map(value => ({ value: String(value), label: `${value}時間ごと` }))
   },
-  wuiOpenHost: { label: '接続を受け付けるIPアドレス', type: 'text', empty: 'null' },
+  wuiOpenHost: { label: '接続を受け付けるIPアドレス', type: 'text', empty: 'null', inputSize: 'medium' },
   wuiOpenPort: { label: 'ポート番号', type: 'number', integer: true, min: 1 }
 };
 
@@ -134,7 +143,8 @@ function fieldShell(label, key, description, options = {}) {
   const error = document.createElement('span');
   error.className = 'settings-field-error';
   error.hidden = true;
-  wrap.append(title, help, control, error);
+  control.append(error);
+  wrap.append(title, help, control);
   return { wrap, control, error };
 }
 
@@ -162,11 +172,47 @@ function summarizeService(service) {
   return `${channel.type || '-'} / ${channel.channel || '-'} / SID ${service?.serviceId ?? '-'}`;
 }
 
+// Use the original service-list position for equal ranks and unranked services.
+export function sortSettingsServices(services) {
+  const rank = item => item.order !== '' && Number.isInteger(Number(item.order)) && Number(item.order) > 0 ? Number(item.order) : Infinity;
+  return services.slice().sort((a, b) => (rank(a) - rank(b) || a.stableIndex - b.stableIndex));
+}
+
+// Keep each pair in one layout row so its item separators share a baseline.
+function arrangeSettingRows(root) {
+  for (const parent of root.querySelectorAll('.settings-card-body, .settings-fields, .settings-field-group, .settings-wui-column')) {
+    let row = null;
+    let count = 0;
+    for (const field of [...parent.children]) {
+      if (!field.classList.contains('settings-field')) { row = null; count = 0; continue; }
+      const single = field.classList.contains('is-wide') || parent.classList.contains('settings-wui-column');
+      if (!row || single || count === 2) {
+        row = document.createElement('div');
+        row.className = 'settings-field-row';
+        parent.insertBefore(row, field);
+        count = 0;
+      }
+      row.append(field);
+      count++;
+      if (single) row = null;
+    }
+  }
+}
+
 export function renderSettingsPage(container) {
   let disposed = false;
   const controller = new AbortController();
   let original = null;
   let draft = null;
+  let applicationBaseline = null;
+  let wuiApplicationBaseline = null;
+  let savedEffects = null;
+  let restartReport = null;
+  let restartError = '';
+  let restartChecking = false;
+  let restartDialog = null;
+  let restartOutcome = '';
+  let restartingConfig = null;
   let runtimeMode = null;
   let clockRuntime = {};
   let authSettings = null;
@@ -200,6 +246,8 @@ export function renderSettingsPage(container) {
   Promise.all([loadConfig(controller.signal), loadRuntimeMode(controller.signal), clockRuntimeRequest, authenticationRequest]).then(([config, mode, clock, authentication]) => {
     if (disposed) return;
     original = cloneConfig(config);
+    applicationBaseline = cloneConfig(config);
+    wuiApplicationBaseline = cloneConfig(config);
     draft = cloneConfig(config);
     runtimeMode = mode;
     clockRuntime = clock;
@@ -232,7 +280,7 @@ export function renderSettingsPage(container) {
     const definition = { ...FIELD[key], ...options };
     const shell = fieldShell(definition.label, key, description, options);
     const input = document.createElement(options.multiline ? 'textarea' : definition.select ? 'select' : 'input');
-    input.className = 'settings-input';
+    input.className = `settings-input${definition.inputSize ? ` is-${definition.inputSize}` : ''}`;
     if (!options.multiline && !definition.select) input.type = definition.type === 'number' ? 'number' : 'text';
     if (definition.type === 'number') {
       if (definition.min !== undefined) input.min = String(definition.min);
@@ -281,14 +329,14 @@ export function renderSettingsPage(container) {
   function createBasicTab() {
     const tab = sectionFor('basic');
     const connection = card('接続と実行環境', '番組情報の取得や録画に使用するMirakurunと、Chinachuの実行環境を設定します。');
-    const path = bindValueField('mirakurunPath', '番組情報の取得やチューナーの制御に使用するMirakurunサーバーの接続先です。HTTP URLまたはUnix socketのURLを指定できます。', { wide: true, placeholder: '例: http://127.0.0.1:40772/ または http+unix://%2Fvar%2Frun%2Fmirakurun.sock/' });
+    connection.section.classList.add('settings-connection');
+    const path = bindValueField('mirakurunPath', '番組情報の取得やチューナーの制御に使用するMirakurunサーバーの接続先です。HTTP URLまたはUnix socketのURLを指定できます。', { placeholder: '例: http://127.0.0.1:40772/' });
     connection.body.append(path.wrap);
     const privilege = document.createElement('div');
-    privilege.className = 'settings-runtime-status';
-    privilege.innerHTML = '<strong></strong><p></p>';
-    privilege.querySelector('strong').textContent = runtimeMode.label;
+    privilege.className = 'settings-runtime-status settings-access-warning';
+    privilege.innerHTML = '<strong><span aria-hidden="true">⚠</span> </strong><p></p>';
+    privilege.querySelector('strong').append(runtimeMode.label);
     privilege.querySelector('p').textContent = runtimeMode.detail;
-    connection.body.append(privilege);
     const identityGrid = document.createElement('div');
     identityGrid.className = 'settings-fields';
     ['uid', 'gid'].forEach(key => {
@@ -301,11 +349,11 @@ export function renderSettingsPage(container) {
       shell.control.append(input);
       identityGrid.append(shell.wrap);
     });
-    connection.body.append(identityGrid);
+    connection.body.append(identityGrid, privilege);
 
     const video = card('動画処理', '対応する視聴・動画変換処理でGPUを利用し、CPU負荷を軽減します。新しいHLS配信には適用されません。');
     const vaapi = bindBoolean('vaapiEnabled', 'VA-API', '対応する従来の視聴・動画変換処理でVA-APIを使用します。利用するには対応GPUとドライバーが必要です。');
-    const device = bindValueField('vaapiDevice', '動画変換に使用するGPUデバイスを指定します。通常は変更する必要はありません。', { wide: true, placeholder: '例: /dev/dri/renderD128' });
+    const device = bindValueField('vaapiDevice', '動画変換に使用するGPUデバイスを指定します。通常は変更する必要はありません。', { placeholder: '例: /dev/dri/renderD128' });
     dependentUpdates.push(() => { device.input.disabled = draft.vaapiEnabled !== true; device.wrap.classList.toggle('is-disabled', device.input.disabled); });
     video.body.append(vaapi.wrap, device.wrap);
     tab.append(connection.section, video.section);
@@ -365,7 +413,7 @@ export function renderSettingsPage(container) {
         grid.className = 'settings-recorded-dir-fields';
         [['id', 'ID（録画先の識別名）'], ['name', '表示名（画面上の名前）'], ['path', 'パス（保存フォルダ）']].forEach(([key, label]) => {
           const field = document.createElement('label');
-          field.innerHTML = `<span>${label}</span>`;
+          field.innerHTML = `<span class="settings-field-title">${label}</span>`;
           const input = document.createElement('input');
           input.className = 'settings-input';
           input.value = row[key];
@@ -376,6 +424,7 @@ export function renderSettingsPage(container) {
         const protection = document.createElement('div');
         protection.className = 'settings-recorded-dir-protection';
         const protectionLabel = document.createElement('span');
+        protectionLabel.className = 'settings-field-title';
         protectionLabel.textContent = 'システム領域への誤録画を防止';
         const protectionSwitch = switchControl('システム領域への誤録画を防止', row.protectRootFilesystem);
         protectionSwitch.input.addEventListener('change', () => {
@@ -383,15 +432,16 @@ export function renderSettingsPage(container) {
           commit();
         });
         protection.append(protectionLabel, protectionSwitch.wrap);
-        const protectionHelp = document.createElement('small');
+        const protectionHelp = document.createElement('div');
+        protectionHelp.className = 'settings-recorded-dir-help settings-muted';
         protectionHelp.textContent = 'ONにすると、OSと同じ保存領域では録画を開始しません。';
-        protection.append(protectionHelp);
         if (typeof row.original?.storage?.expectedMount === 'string' && row.original.storage.expectedMount.trim() !== '') {
           const legacy = document.createElement('small');
           legacy.textContent = 'マウント先の確認による保護も設定されています。この保護はスイッチとは別に動作します。';
-          protection.append(legacy);
+          legacy.className = 'settings-legacy-protection';
+          protectionHelp.append(legacy);
         }
-        grid.append(protection);
+        grid.append(protection, protectionHelp);
         item.append(head, grid);
         list.append(item);
       });
@@ -421,28 +471,24 @@ export function renderSettingsPage(container) {
       rootProtection.control.append(legacy);
     }
     destination.body.append(defaultDir.wrap, rootProtection.wrap);
-    const dirsTitle = document.createElement('div');
-    dirsTitle.className = 'settings-subsection-title';
-    dirsTitle.innerHTML = '<strong>追加録画先</strong><p>録画ルールごとに選択できる保存先を追加します。保存先を指定しないルールでは、デフォルト録画先を使用します。</p>';
-    destination.body.append(dirsTitle, createRecordedDirsEditor());
+    const dirs = fieldShell('追加録画先', null, '録画ルールごとに選択できる保存先を追加します。保存先を指定しないルールでは、デフォルト録画先を使用します。', { wide: true });
+    dirs.control.append(createRecordedDirsEditor());
+    destination.body.append(dirs.wrap);
 
     const naming = card('録画ファイル名', '録画ファイルの名前と、放送属性を表す囲み文字の扱いを設定します。');
     const format = bindValueField('recordedFormat', '録画ファイルの名前を決める設定です。番組名、放送日時、チャンネル名などを組み合わせて指定できます。', { wide: true });
     const prefix = bindBoolean('recordingFilenamePrefixEnabled', '録画中ファイル名に【録画中】を付与', '録画中だけファイル名の先頭に付け、終了後に除去します。録画後コマンドで同様の処理をしている場合は併用しないでください。');
     const replace = bindBoolean('recordedNameReplaceEnclosingCharacters', '囲み文字の置換', '録画ファイル名に含まれる「🈟」「🈞」「🈑」などを「[新]」「[再]」「[字]」へ置き換えます。番組表の表示は変更されません。');
-    const map = bindValueField('recordedNameEnclosingCharacterMap', '囲み文字をどの文字列へ置き換えるかをJSON形式で指定します。通常は標準の置換ルールを使用します。', { multiline: true, placeholder: '例: {"🈟":"[新]","🈞":"[再]"}' });
-    dependentUpdates.push(() => { map.input.disabled = draft.recordedNameReplaceEnclosingCharacters !== true; map.wrap.classList.toggle('is-disabled', map.input.disabled); });
-    naming.body.append(format.wrap, prefix.wrap, replace.wrap, map.wrap);
+    naming.body.append(format.wrap, prefix.wrap, replace.wrap);
 
-    const organizing = card('録画フォルダ振り分け', '録画終了後に既存サブフォルダへ振り分けます。OperatorとWUIの再起動後に反映されます。');
+    const organizing = card('録画フォルダ振り分け', '録画終了後に既存サブフォルダへ振り分けます。変更内容の反映条件は保存確認画面に表示されます。');
     const organizeEnabled = bindBoolean('recordedFolderOrganizeEnabled', '録画終了後に自動振り分け', '録画先直下の既存フォルダだけを使用します。別の録画先への移動やフォルダ作成はしません。');
-    const organizeOrder = bindValueField('recordedFolderOrganizeOrder', '自動振り分けOFF時も手動の振り分けで使用する順序です。', { wide: true });
+    const organizeOrder = bindValueField('recordedFolderOrganizeOrder', '自動振り分けOFF時も手動の振り分けで使用する順序です。');
     if (draft.recordedFolderOrganizeOrder === undefined) organizeOrder.input.value = 'filename';
     organizing.body.append(organizeEnabled.wrap, organizeOrder.wrap);
 
     const drop = card('DROP検出・保存TS解析', '検出方式と許可録画本数はOperator再起動後に反映されます。一時停止・再開は即時反映されます。');
-    drop.section.classList.add('settings-drop');
-    const dropMode = bindValueField('dropDetectionMode', 'MirakurunのDROP監視、保存TSファイルの録画後解析、または両方を選択します。', { wide: true });
+    const dropMode = bindValueField('dropDetectionMode', 'MirakurunのDROP監視、保存TSファイルの録画後解析、または両方を選択します。');
     if (draft.dropDetectionMode === undefined || draft.dropDetectionMode === null) {
       dropMode.input.value = 'mirakurun';
     } else if (['ts', 'both'].includes(draft.dropDetectionMode)) {
@@ -459,14 +505,14 @@ export function renderSettingsPage(container) {
       dropMode.input.prepend(current);
       dropMode.input.value = '';
     }
-    const dropDescription = document.createElement('p');
+    const dropDescription = document.createElement('span');
     dropDescription.className = 'settings-muted';
     dependentUpdates.push(() => {
       dropDescription.textContent = DROP_DETECTION_MODES.find(option => option.value === dropMode.input.value)?.description ||
         (['ts', 'both'].includes(dropMode.input.value) ? '既存のストリーム解析設定を維持しています。新方式への変更は明示的に選択してください。' :
           '保存するにはDROP検出方式を選び直してください。現在の設定値は自動では変更しません。');
     });
-    dropMode.wrap.append(dropDescription);
+    dropMode.wrap.querySelector('.settings-field-help').append(dropDescription);
     const autoControls = document.createElement('div');
     autoControls.className = 'settings-auto-ts-controls';
     const maxRecordings = bindValueField('autoTsMaxRecordings', '現在と今後5分の同時録画数がこの値以下のとき、自動解析を開始します。既定は0本です。', { compact: true });
@@ -497,25 +543,26 @@ export function renderSettingsPage(container) {
       catch (error) { runtimeNotice.textContent = error.message; }
       finally { runtimeNotice.dataset.busy = 'false'; updateAutoTsDisplay(); }
     });
-    autoControls.append(maxRecordings.wrap, runtimeLine, pauseButton, runtimeNotice);
+    const runtimeRow = document.createElement('div');
+    runtimeRow.className = 'settings-auto-ts-runtime';
+    runtimeRow.append(runtimeLine, pauseButton);
+    autoControls.append(runtimeRow, runtimeNotice);
     const updateAutoControls = () => {
       autoControls.hidden = !['file', 'mirakurun-file'].includes(dropMode.input.value);
+      maxRecordings.wrap.hidden = autoControls.hidden;
       updateAutoTsDisplay();
     };
     dependentUpdates.push(updateAutoControls);
-    drop.body.append(dropMode.wrap, autoControls);
+    drop.body.append(dropMode.wrap, maxRecordings.wrap, autoControls);
 
-    const commands = card('録画後処理と予約照合', '録画終了後の処理と、予約ルールの照合方法を設定します。変更した内容はOperatorの再起動後に反映されます。');
-    const fields = document.createElement('div');
-    fields.className = 'settings-fields';
+    const commands = card('録画後処理と予約照合', '録画終了後の処理と、予約ルールの照合方法を設定します。変更内容の反映条件は保存確認画面に表示されます。');
+    const fields = commands.body;
     const recordedCommand = bindValueField('recordedCommand', '録画が正常に終了した後に実行する外部コマンドです。空欄では何も実行しません。', { multiline: true, wide: true });
     const autoThumbnail = bindBoolean('recordedThumbnailAutoEnabled', 'サムネイル自動作成', '録画終了後のサムネイル作成と、未作成サムネイルの自動補完を行います。初期値はONです。OFFでも手動作成は利用でき、作成済み画像は削除しません。', { defaultTrue: true });
-    const ffprobe = bindValueField('ffprobeCommand', '録画ファイルの再生時間を調べるために使用するコマンドです。通常は変更不要です。', { placeholder: '通常: ffprobe' });
-    const timeout = bindValueField('recordedDurationProbeTimeoutMs', '再生時間の取得を待つ最大時間です。単位はミリ秒で、8000なら8秒です。', { compact: true });
     const normalization = bindValueField('normalizationForm', '番組名や番組説明と予約ルールを照合する際に、文字の表現の違いを調整します。変更すると、ルールに一致する番組が変わる場合があります。通常はNFKCを使用します。', {
       select: [{ value: '', label: '未指定（正規化なし）' }, { value: 'NFC', label: 'NFC' }, { value: 'NFD', label: 'NFD' }, { value: 'NFKC', label: 'NFKC' }, { value: 'NFKD', label: 'NFKD' }]
     });
-    fields.append(autoThumbnail.wrap, ffprobe.wrap, timeout.wrap, normalization.wrap);
+    fields.append(autoThumbnail.wrap, normalization.wrap);
     const boundary = bindValueField('recordingBoundaryPolicy', 'チューナー不足で録画を切り替えるとき、先行録画の末尾と後続録画の先頭のどちらを優先するかを選びます。未指定時は終了優先です。ルールで優先保護された番組と通常の番組が切り替わる場合は、保護された番組を優先します。変更はOperator再起動後に反映されます。', { compact: true });
     if (draft.recordingBoundaryPolicy === undefined) boundary.input.value = 'end';
     fields.append(boundary.wrap);
@@ -523,11 +570,11 @@ export function renderSettingsPage(container) {
       const descriptions = {
         recordingPriority: 'Mirakurunに通常録画を要求する際の優先度です。値が大きい要求が優先され、0を指定すると既定値の2が使われます。',
         conflictedPriority: '予約競合がある番組を録画する際の優先度です。通常録画より低くすると通常録画を優先でき、0を指定すると既定値の1が使われます。',
-        handoffPrepSeconds: '連続する番組の録画で、次の番組へチューナーを切り替える準備を始める時間です。0〜60秒として扱われ、大きくするとチューナー不足時に前の番組を早く終了する可能性があります。'
+        handoffPrepSeconds: '次の録画を開始するための準備時間です。チューナーに空きがあれば早めに録画を開始し、空きがない場合は前の録画の末尾が短くなることがあります。'
       };
       fields.append(bindValueField(key, descriptions[key], { compact: true }).wrap);
     });
-    commands.body.append(fields, recordedCommand.wrap);
+    commands.body.append(recordedCommand.wrap);
     tab.append(destination.section, naming.section, organizing.section, drop.section, commands.section);
     return tab;
   }
@@ -537,54 +584,86 @@ export function renderSettingsPage(container) {
     const wake = card('録画先HDDの事前起動', '録画開始前に休止中の録画先HDDを起動し、起動待ちによる録画冒頭の欠けを防ぎます。0または未指定で無効です。');
     wake.body.append(bindValueField('recordedStorageWakeupBeforeSec', '録画開始の何秒前に起動するかを指定します。300なら5分前です。', { compact: true }).wrap);
 
-    const warning = card('容量警告', '空き容量が警告閾値を下回ったときの表示・通知設定です。警告閾値が容量不足閾値以下なら警告は無効です。');
-    const warningGrid = document.createElement('div');
-    warningGrid.className = 'settings-fields';
-    warningGrid.append(
+    const capacity = card('ストレージ容量の監視', '空き容量の警告と容量不足時の動作を設定します。変更内容の反映条件は保存確認画面に表示されます。');
+    const warningGroup = document.createElement('section');
+    warningGroup.className = 'settings-field-group';
+    const warningHeading = document.createElement('h3');
+    warningHeading.className = 'settings-subsection-title';
+    warningHeading.textContent = '容量警告';
+    const warningNote = document.createElement('p');
+    warningNote.className = 'settings-muted is-wide';
+    warningNote.textContent = '警告する空き容量が容量不足の閾値以下の場合、警告は無効です。';
+    warningGroup.append(warningHeading, warningNote,
       bindValueField('storageLowSpaceWarningThresholdMB', '空き容量がこの値を下回ると警告します。単位はMBで、60000なら約60GBです。0または空欄で無効です。', { compact: true }).wrap,
       bindValueField('storageLowSpaceWarningIntervalMinutes', '容量警告が解消しない場合の再通知間隔です。単位は分で、1440なら24時間です。', { compact: true }).wrap
     );
-    warning.body.append(warningGrid);
+    capacity.body.append(warningGroup);
 
-    const low = card('容量不足時の処置', '録画先の空き容量が不足した際の動作を設定します。変更はOperatorの再起動後に反映されます。');
-    const lowGrid = document.createElement('div');
-    lowGrid.className = 'settings-fields';
-    lowGrid.append(
+    const lowGroup = document.createElement('section');
+    lowGroup.className = 'settings-field-group';
+    const lowHeading = document.createElement('h3');
+    lowHeading.className = 'settings-subsection-title';
+    lowHeading.textContent = '容量不足';
+    lowGroup.append(lowHeading,
       bindValueField('storageLowSpaceThresholdMB', '空き容量がこの値を下回ると、選択した容量不足対策を実行します。単位はMBです。', { compact: true }).wrap,
       bindValueField('storageLowSpaceCriticalNotifyIntervalMinutes', '容量不足が解消しない場合の再通知間隔です。単位は分です。', { compact: true }).wrap
     );
-    const action = fieldShell('容量不足時の動作', 'storageLowSpaceAction', '「新規録画のみ停止」は録画中の番組を継続しますが、容量枯渇によって完走できない場合があります。「録画中を含めて停止」は対象filesystemの新規録画と録画中番組を停止します。「古い録画ファイルを削除」は対象filesystemの録画先サブフォルダも含めてTS/M2TSを古い順に削除し、削除不能時は録画中も停止します。symlinkや別mountは対象外です。');
-    const radios = document.createElement('div');
-    radios.className = 'settings-radio-row';
-    [['stop-new', '新規録画のみ停止'], ['stop', '録画中を含めて停止'], ['remove', '古い録画ファイルを削除']].forEach(([value, label]) => {
-      const item = document.createElement('label');
-      const input = document.createElement('input');
-      input.type = 'radio';
-      input.name = 'storageLowSpaceAction';
-      input.value = value;
-      input.checked = (['stop-new', 'stop', 'remove'].includes(draft.storageLowSpaceAction) ? draft.storageLowSpaceAction : 'stop') === value;
-      input.addEventListener('change', () => { if (input.checked) { draft.storageLowSpaceAction = value; markChanged(); } });
-      item.append(input, document.createTextNode(label));
-      radios.append(item);
-    });
-    action.control.append(radios);
-    const notification = bindValueField('notificationCommand', '録画先の容量警告・容量不足を外部プログラムへ通知する場合に使用するコマンドです。空欄では外部通知を行いません。', { multiline: true, wide: true });
-    low.body.append(lowGrid, action.wrap, notification.wrap);
-    tab.append(wake.section, warning.section, low.section);
+    const action = bindValueField('storageLowSpaceAction', '「新規録画のみ停止」は録画中の番組を継続しますが、容量枯渇によって完走できない場合があります。「録画中を含めて停止」は対象filesystemの新規録画と録画中番組を停止します。「古い録画ファイルを削除」は対象filesystemの録画先サブフォルダも含めてTS/M2TSを古い順に削除し、削除不能時は録画中も停止します。symlinkや別mountは対象外です。');
+    if (!FIELD.storageLowSpaceAction.select.some(option => option.value === draft.storageLowSpaceAction)) action.input.value = 'stop';
+    lowGroup.append(action.wrap);
+    capacity.body.append(lowGroup);
+    tab.append(wake.section, capacity.section);
     return tab;
   }
 
   function createHistoryTab() {
     const tab = sectionFor('history');
     const retention = card('履歴保持期間', '履歴を自動整理するまでの日数を指定します。0で自動整理を無効にし、未指定時は365日です。録画ファイル自体は削除しません。');
-    const grid = document.createElement('div');
-    grid.className = 'settings-fields';
-    grid.append(
-      bindValueField('matchRetentionDays', '予約と録画結果を結び付ける履歴を保持する日数です。', { compact: true }).wrap,
-      bindValueField('reserves2RetentionDays', '終了した予約の履歴を保持する日数です。', { compact: true }).wrap,
-      bindValueField('recordedHistoryRetentionDays', '録画済み一覧に使用する履歴情報を保持する日数です。整理しても録画ファイルは削除しません。', { compact: true }).wrap
-    );
-    retention.body.append(grid);
+    const shell = fieldShell('履歴の保持期間', null, '共通の日数を変更したときだけ、予約・録画照合履歴、予約履歴、録画済み履歴すべてに適用します。', { compact: true });
+    const input = document.createElement('input');
+    input.className = 'settings-input';
+    input.type = 'number';
+    input.min = '0';
+    input.step = '1';
+    input.setAttribute('aria-label', '履歴の保持期間（日）');
+    const values = historyRetentionValues(draft);
+    const same = values.every(item => item.days === values[0].days);
+    input.value = same ? String(values[0].days) : '';
+    input.placeholder = same ? '' : '個別設定中';
+    const unit = document.createElement('span');
+    unit.textContent = '日';
+    const control = document.createElement('div');
+    control.className = 'settings-retention-input';
+    control.append(input, unit);
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = '個別設定中：各履歴の保持期間を確認';
+    const list = document.createElement('ul');
+    details.append(summary, list);
+    const updateDetails = () => {
+      const current = historyRetentionValues(draft);
+      details.hidden = current.every(item => item.days === current[0].days);
+      list.replaceChildren(...current.map(item => {
+        const row = document.createElement('li');
+        const raw = draft[item.key];
+        row.textContent = `${FIELD[item.key].label}：${item.days}日` +
+          (raw === undefined ? '（未指定）' : `（設定値：${valueText(raw)}）`);
+        return row;
+      }));
+    };
+    dependentUpdates.push(updateDetails);
+    input.addEventListener('input', () => {
+      const parsed = parseFieldValue(input.value, { label: '履歴の保持期間', type: 'number', integer: true, min: 0, required: true });
+      setError('historyRetention', shell.error, parsed.error);
+      if (!parsed.error) {
+        setHistoryRetentionDays(draft, parsed.value);
+        input.placeholder = '';
+      }
+      markChanged();
+    });
+    shell.control.append(control);
+    shell.control.append(details);
+    retention.body.append(shell.wrap);
     const behavior = card('録画結果の記録', '録画結果をCSVファイルにも保存するか設定します。');
     behavior.body.append(
       bindBoolean('recordingResultCsvEnabled', '録画結果CSVの自動保存', '録画結果を月ごとのCSVファイルへ自動で追記します。未指定時は無効です。').wrap
@@ -602,31 +681,28 @@ export function renderSettingsPage(container) {
       name: String(service.name || ''),
       excluded: excluded.has(String(service.id)),
       order: order.get(String(service.id)) || ''
-    })).sort((a, b) => summarizeService(a.raw).localeCompare(summarizeService(b.raw), 'ja'));
+    })).sort((a, b) => summarizeService(a.raw).localeCompare(summarizeService(b.raw), 'ja'))
+      .map((item, stableIndex) => ({ ...item, stableIndex }));
   }
 
-  function commitServices() {
+  function commitServices(kind) {
     if (!services) return;
-    draft.excludeServices = services.filter(item => item.excluded).map(item => item.id);
-    draft.serviceOrder = services.filter(item => item.order !== '').sort((a, b) => Number(a.order) - Number(b.order)).map(item => item.id);
+    if (kind === 'excluded') draft.excludeServices = services.filter(item => item.excluded).map(item => item.id);
+    else draft.serviceOrder = sortSettingsServices(services).filter(item => item.order !== '').map(item => item.id);
     markChanged();
   }
 
   function createServicesTab() {
     const tab = sectionFor('services');
     const wui = card('WUIサーバー・アクセス制限', 'ChinachuのWeb画面と、接続元IPアドレスによるアクセス制限を設定します。変更はWUIの再起動後に反映されます。');
-    const open = bindBoolean('wuiOpenServer', 'WUIサーバーを有効にする', 'ChinachuのWeb画面を利用できるようにします。OFFにすると、WUI再起動後に接続できなくなる場合があります。');
     const blockGlobal = bindBoolean('wuiBlockGlobalAccess', 'グローバルIPからの接続を拒否', 'ONにすると、接続元IPアドレスがローカル・プライベートネットワークに属する接続だけを受け付けます。', { defaultTrue: true });
     const host = bindValueField('wuiOpenHost', 'WUIが接続を受け付ける、このサーバー側のIPアドレスです。未指定時は、内部インターフェース以外のプライベート・リンクローカルIPv4アドレスから最初の1つを自動選択します。該当するアドレスがなければ起動しません。', { placeholder: '自動選択（未指定）' });
     const port = bindValueField('wuiOpenPort', 'Web画面への接続に使用するポート番号です。変更するとブラウザでアクセスするURLも変わります。', { compact: true, placeholder: '例: 20772' });
-    dependentUpdates.push(() => {
-      [host, port].forEach(field => { field.input.disabled = draft.wuiOpenServer !== true; field.wrap.classList.toggle('is-disabled', field.input.disabled); });
-    });
     const serverColumn = document.createElement('div');
     serverColumn.className = 'settings-wui-column';
     const serverHeading = document.createElement('h3');
     serverHeading.textContent = 'WUIサーバー';
-    serverColumn.append(serverHeading, open.wrap, host.wrap, port.wrap);
+    serverColumn.append(serverHeading, host.wrap, port.wrap);
     const accessColumn = document.createElement('div');
     accessColumn.className = 'settings-wui-column';
     const accessHeading = document.createElement('h3');
@@ -649,8 +725,21 @@ export function renderSettingsPage(container) {
     status.textContent = `現在の設定: 除外 ${(draft.excludeServices || []).length}件 / 順序 ${(draft.serviceOrder || []).length}件`;
     const list = document.createElement('div');
     list.className = 'settings-service-list';
+    const updateServiceStatus = () => {
+      status.textContent = `サービス ${services.length}件 / 除外 ${services.filter(item => item.excluded).length}件 / 順序指定 ${services.filter(item => item.order !== '').length}件`;
+    };
+    const rows = new Map();
+    const reorder = () => {
+      sortSettingsServices(services).forEach((item, index) => {
+        const row = rows.get(item);
+        if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
+      });
+    };
     const draw = () => {
       list.replaceChildren();
+      rows.clear();
+      for (const key of fieldErrors.keys()) if (key.startsWith('serviceOrder:')) fieldErrors.delete(key);
+      updateStatus();
       services.forEach(item => {
         const row = document.createElement('article');
         row.className = 'settings-service-row';
@@ -658,11 +747,14 @@ export function renderSettingsPage(container) {
         check.type = 'checkbox';
         check.checked = item.excluded;
         check.setAttribute('aria-label', `${item.name}を除外`);
-        check.addEventListener('change', () => { item.excluded = check.checked; commitServices(); row.classList.toggle('is-excluded', item.excluded); });
+        check.addEventListener('change', () => { item.excluded = check.checked; commitServices('excluded'); updateServiceStatus(); row.classList.toggle('is-excluded', item.excluded); });
         const info = document.createElement('div');
         info.innerHTML = '<strong></strong><small></small>';
         info.querySelector('strong').textContent = item.name || `サービス ${item.id}`;
-        info.querySelector('small').textContent = `${summarizeService(item.raw)} / ID ${item.id}`;
+        info.title = `${item.name} / ${summarizeService(item.raw)}`;
+        info.querySelector('small').textContent = summarizeService(item.raw);
+        const logo = createChannelLogo({ name: item.name, url: item.raw.hasLogoData === true
+          ? `/api/channel/${item.id.toString(36)}/logo.png` : null });
         const orderLabel = document.createElement('label');
         orderLabel.innerHTML = '<span>順序</span>';
         const order = document.createElement('input');
@@ -670,13 +762,42 @@ export function renderSettingsPage(container) {
         order.min = '1';
         order.className = 'settings-input';
         order.value = item.order;
-        order.addEventListener('input', () => { item.order = order.value; commitServices(); });
+        order.step = '1';
+        order.setAttribute('aria-label', `${item.name}の表示順序`);
+        const error = document.createElement('span');
+        error.className = 'settings-field-error';
+        error.hidden = true;
+        const commitOrder = () => {
+          const value = order.value;
+          const invalid = order.validity.badInput || value !== '' && (!Number.isInteger(Number(value)) || Number(value) < 1);
+          setError(`serviceOrder:${item.id}`, error, invalid ? '順序は1以上の整数で指定してください。' : '');
+          if (invalid) { markChanged(); return; }
+          if (item.order === value) { markChanged(); return; }
+          item.order = value;
+          commitServices('order');
+          updateServiceStatus();
+          reorder();
+        };
+        order.addEventListener('blur', commitOrder);
+        order.addEventListener('keydown', event => {
+          if (event.key === 'Enter') { event.preventDefault(); commitOrder(); }
+        });
         orderLabel.append(order);
         row.classList.toggle('is-excluded', item.excluded);
-        row.append(check, info, orderLabel);
+        const excludeLabel = document.createElement('label');
+        excludeLabel.className = 'settings-service-exclude';
+        excludeLabel.append(document.createTextNode('除外'), check);
+        orderLabel.className = 'settings-service-order';
+        row.append(excludeLabel, logo.element, info, orderLabel, error);
+        row.addEventListener('click', event => {
+          if (excludeLabel.contains(event.target) || orderLabel.contains(event.target)) return;
+          check.click();
+        });
+        rows.set(item, row);
         list.append(row);
       });
-      status.textContent = `サービス ${services.length}件 / 除外 ${services.filter(item => item.excluded).length}件 / 順序指定 ${services.filter(item => item.order !== '').length}件`;
+      reorder();
+      updateServiceStatus();
     };
     load.addEventListener('click', async () => {
       load.disabled = true;
@@ -792,7 +913,7 @@ export function renderSettingsPage(container) {
   function createClockTab() {
     const tab = sectionFor('clock');
     tab.classList.add('settings-clock');
-    const monitor = card('放送波との時刻差を確認', '放送波の時刻とサーバー時刻の差を確認する機能です。ONにしてもOSの時刻は自動補正しません。NTPを利用できる環境では通常OFFのままで構いません。');
+    const monitor = card('放送波との時刻差を確認（オフライン向け）', '放送波の時刻とサーバー時刻の差を確認する機能です。ONにしてもOSの時刻は自動補正しません。NTPを利用できる環境では通常OFFのままで構いません。');
     const enabled = bindBoolean('broadcastClockEnabled', '定期的に時刻差を確認', '録画や直近予約、チューナーの空き状況を確認し、安全条件を満たす場合だけ観測します。初期状態はOFFです。');
     const interval = bindValueField('broadcastClockIntervalHours', '日本時間の02:40を基準に、この間隔で確認します。録画などで実行できない場合は見送ります。', { compact: true });
     if (draft.broadcastClockIntervalHours === undefined) interval.input.value = '3';
@@ -830,7 +951,7 @@ export function renderSettingsPage(container) {
     });
     monitor.body.append(enabled.wrap, interval.wrap, channel.wrap);
 
-    const adjustment = card('手動操作', '確認コマンドは時刻差の確認だけを行い、補正コマンドはOSの時刻を変更します。必要な場合だけLinux端末から実行してください。');
+    const adjustment = card('時刻補正について', 'インターネットに接続できる環境では、NICTなどのNTPサーバーを利用した時刻同期を推奨します。放送波による時刻確認・補正は、主にオフライン環境向けです。確認コマンドは時刻差の確認のみを行い、補正コマンドはOSの時刻を変更します。');
     const notes = document.createElement('details');
     notes.className = 'settings-clock-guide';
     const summary = document.createElement('summary');
@@ -903,7 +1024,7 @@ export function renderSettingsPage(container) {
     dependentUpdates.push(update);
     preview.body.append(unknown, details);
     const notice = card('設定の反映', '設定を保存しても、WUIやOperatorは自動的に再起動しません。');
-    notice.body.innerHTML = '<ul class="settings-notes"><li>待受アドレスやポートなどのWUI設定は、WUIの再起動後に反映されます。</li><li>録画先、容量判定、録画処理などの設定は、Operatorの再起動後に反映されます。</li><li>録画中のOperatorをこの画面から停止・再起動することはありません。</li></ul>';
+    notice.body.innerHTML = '<ul class="settings-notes"><li>変更した項目ごとの反映条件を、保存確認画面と保存成功後の案内に表示します。</li><li>WUI再起動が必要な場合は、保存成功後に再起動ボタンを表示します。</li><li>Operatorをこの画面から停止・再起動することはありません。</li></ul>';
     tab.append(preview.section, notice.section);
     return tab;
   }
@@ -980,7 +1101,11 @@ export function renderSettingsPage(container) {
     };
     render();
     const notice = container.querySelector('.settings-page-message');
-    notice.textContent = message;
+    if (savedEffects) {
+      const authMessage = document.createElement('p');
+      authMessage.textContent = message;
+      notice.prepend(authMessage);
+    } else notice.textContent = message;
     notice.hidden = false;
   }
 
@@ -1186,13 +1311,19 @@ export function renderSettingsPage(container) {
       return;
     }
     const changes = configChanges(original, saveDraft);
+    const effects = configApplicationEffects(original, saveDraft);
     const dialog = document.createElement('dialog');
     dialog.className = 'settings-save-dialog settings-config-dialog';
-    const warning = draft.wuiOpenServer === false && original.wuiOpenServer !== false
-      ? '<p class="settings-danger-note">WUIサーバーをOFFにすると、再起動後に接続不能になる可能性があります。</p>' : '';
     dialog.innerHTML = `<form method="dialog"><header><h2>設定変更の確認</h2><button value="cancel" aria-label="閉じる">×</button></header><p>次の設定変更を保存します。サービスは再起動しません。</p><div class="settings-change-list"></div><footer><button class="button" value="cancel">キャンセル</button><button class="button primary" value="default" type="button" data-save>保存</button></footer><p role="status"></p></form>`;
     const list = dialog.querySelector('.settings-change-list');
-    list.innerHTML = warning;
+    const applicationNotice = document.createElement('div');
+    applicationNotice.className = 'settings-application-notice';
+    configApplicationMessages(effects).forEach(text => {
+      const paragraph = document.createElement('p');
+      paragraph.textContent = text;
+      applicationNotice.append(paragraph);
+    });
+    list.before(applicationNotice);
     if (changes.some(change => change.key === 'wuiBlockGlobalAccess' && change.after === false)) {
       list.append(globalAccessWarning());
     }
@@ -1218,9 +1349,10 @@ export function renderSettingsPage(container) {
         dialog.close();
         notificationView.refresh();
         markChanged();
-        const message = container.querySelector('.settings-page-message');
-        message.textContent = '設定を保存しました。通知設定は反映済みです。他の設定に必要なサービス再起動は自動では行いません。';
-        message.hidden = false;
+        updateSavedEffects();
+        restartOutcome = '';
+        renderSavedApplication();
+        if (savedEffects.wui) refreshRestartReport();
       } catch (error) {
         status.textContent = error.message;
         status.classList.add('is-error');
@@ -1231,6 +1363,85 @@ export function renderSettingsPage(container) {
     document.body.append(dialog);
     dialog.showModal();
   }
+
+  function updateSavedEffects() {
+    savedEffects = configApplicationEffects(applicationBaseline, original);
+    const wuiEffects = configApplicationEffects(wuiApplicationBaseline, original);
+    savedEffects.wui = wuiEffects.wui;
+    savedEffects.connectionChanged = wuiEffects.connectionChanged;
+  }
+
+  async function refreshRestartReport() {
+    if (restartChecking || disposed) return;
+    restartChecking = true;
+    restartError = '';
+    renderSavedApplication();
+    try { restartReport = await loadServiceControl(controller.signal); }
+    catch (error) { if (error.name !== 'AbortError') { restartReport = null; restartError = error.message; } }
+    finally { restartChecking = false; if (!disposed) renderSavedApplication(); }
+  }
+
+  function renderSavedApplication() {
+    if (!savedEffects || disposed) return;
+    const message = container.querySelector('.settings-page-message');
+    if (!message) return;
+    message.replaceChildren();
+    const text = document.createElement('p');
+    text.textContent = ['設定を保存しました。', ...configApplicationMessages(savedEffects), restartOutcome].filter(Boolean).join(' ');
+    message.append(text);
+    message.hidden = false;
+    if (!savedEffects.wui) return;
+    const pending = getPendingRestart();
+    const model = restartButtonModel('wui', restartReport, pending);
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'button'; button.textContent = 'WUIを再起動';
+    button.disabled = restartChecking || Boolean(pending) || !model.enabled;
+    button.addEventListener('click', async () => {
+      if (restartDialog || getPendingRestart()) return;
+      await refreshRestartReport();
+      if (disposed || getPendingRestart() || !restartButtonModel('wui', restartReport, null).enabled) return;
+      restartDialog = document.createElement('dialog');
+      restartDialog.className = 'settings-save-dialog';
+      restartDialog.innerHTML = '<form method="dialog"><header><h2>WUIの再起動</h2></header><p></p><footer><button class="button" value="cancel">キャンセル</button><button class="button primary" value="restart">WUIを再起動</button></footer></form>';
+      restartDialog.querySelector('p').textContent = 'WUIを再起動します。画面との接続が一時的に切断されますが、復旧後に自動接続します。Operatorは停止・再起動しません。 ' + configApplicationMessages(savedEffects).join(' ');
+      const dialog = restartDialog;
+      dialog.addEventListener('close', async () => {
+        restartDialog = null;
+        dialog.remove();
+        if (dialog.returnValue !== 'restart' || disposed || getPendingRestart()) return;
+        await refreshRestartReport();
+        if (!disposed && !getPendingRestart() && restartReport?.targets?.wui?.restartable === true) {
+          restartingConfig = cloneConfig(original);
+          await beginServiceRestart('wui', restartReport);
+        }
+      }, { once: true });
+      document.body.append(dialog); dialog.showModal();
+    });
+    message.append(button);
+    const reason = document.createElement('span');
+    reason.className = 'settings-restart-reason';
+    reason.textContent = restartChecking ? '再起動可否を確認しています…' : restartError || (pending ? pending.message : restartReport?.targets?.wui?.restartSummary || model.reason);
+    message.append(reason);
+    if (!restartChecking && !pending && !model.enabled) {
+      const retry = document.createElement('button');
+      retry.type = 'button'; retry.className = 'button'; retry.textContent = '再起動可否を再確認';
+      retry.addEventListener('click', refreshRestartReport);
+      message.append(retry);
+    }
+  }
+
+  const unsubscribeRestart = subscribePendingRestart(state => {
+    if (!savedEffects || disposed) return;
+    if (state.completion?.target === 'wui') {
+      restartOutcome = state.completion.message;
+      if (state.completion.succeeded) {
+        wuiApplicationBaseline = cloneConfig(restartingConfig || original);
+        updateSavedEffects();
+      }
+      restartingConfig = null;
+    }
+    renderSavedApplication();
+  });
 
   function openDiscardDialog() {
     if (!configChanges(original, draft).length) return;
@@ -1254,7 +1465,7 @@ export function renderSettingsPage(container) {
 
   function render() {
     dependentUpdates.length = 0;
-    container.innerHTML = `<div class="settings-page"><div class="settings-intro"><div><h2>Chinachu設定</h2><p>Chinachuの接続先、録画、Storage、履歴、Web画面の動作を設定します。</p></div><span class="settings-change-count"></span></div><p class="settings-page-message" role="status" hidden></p><div class="settings-tabs" role="tablist" aria-label="設定カテゴリ"></div><div class="settings-content"></div><div class="settings-actions"><span>通知設定は保存後すぐに反映されます。他の設定は必要なサービスの再起動後に反映されます。</span><button class="button settings-discard" type="button">変更を破棄</button><button class="button primary settings-save" type="button">変更を確認して保存</button></div></div>`;
+    container.innerHTML = `<div class="settings-page"><div class="settings-intro"><div><h2>Chinachu設定</h2><p>Chinachuの接続先、録画、Storage、履歴、Web画面の動作を設定します。</p></div><span class="settings-change-count"></span></div><div class="settings-page-message" role="status" hidden></div><div class="settings-tabs" role="tablist" aria-label="設定カテゴリ"></div><div class="settings-content"></div><div class="settings-actions"><span>変更内容に応じた反映条件を保存確認画面に表示します。サービスは自動では再起動しません。</span><button class="button settings-discard" type="button">変更を破棄</button><button class="button primary settings-save" type="button">変更を確認して保存</button></div></div>`;
     const tabs = container.querySelector('.settings-tabs');
     const content = container.querySelector('.settings-content');
     TABS.forEach(([key, label]) => {
@@ -1278,9 +1489,11 @@ export function renderSettingsPage(container) {
       tabs.append(button);
     });
     notificationView = createNotificationSettings({ signal: controller.signal,
-      getSettings: () => draft.externalNotifications, getSaved: () => original.externalNotifications, onChange: markChanged });
+      getSettings: () => draft.externalNotifications, getSaved: () => original.externalNotifications,
+      getLegacyCommand: () => draft.notificationCommand || draft.storageLowSpaceCommand || null, onChange: markChanged });
     notificationView.hidden = activeTab !== 'notification';
     content.append(createBasicTab(), createRecordingTab(), createStorageTab(), createHistoryTab(), createServicesTab(), createSeriesTab(), createAuthTab(), createClockTab(), notificationView, createAdvancedTab());
+    arrangeSettingRows(content);
     if (activeTab === 'clock' && draft.broadcastClockEnabled === true) {
       const select = content.querySelector('[data-broadcast-clock-channel]');
       const button = select?.parentElement?.querySelector('button');
@@ -1291,11 +1504,13 @@ export function renderSettingsPage(container) {
     container.querySelector('.settings-discard').addEventListener('click', openDiscardDialog);
     dependentUpdates.forEach(update => update());
     updateStatus();
+    renderSavedApplication();
   }
 
   return () => {
     disposed = true;
     unsubscribeAutoTs();
+    unsubscribeRestart();
     controller.abort();
     document.querySelectorAll('.settings-save-dialog').forEach(dialog => dialog.close());
   };

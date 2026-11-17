@@ -213,7 +213,7 @@
   .settings-field-title code { overflow-wrap: anywhere; font-size: 12px; }
   .settings-page :is(.settings-field-help,.settings-field-error,.settings-muted,.settings-notes,.settings-runtime-status p,.settings-recorded-dir-fields label,.settings-switch-state,.settings-actions span) { font-size: 13px; }
   .settings-actions { position: static; }
-  .settings-switch,.settings-radio-row label { min-height: 44px; }
+  .settings-switch { min-height: 44px; }
   .settings-change-list > div { grid-template-columns: minmax(0,1fr); font-size: 13px; }
   .log-page { height: auto; min-height: 0; }
   .log-page-panel { height: auto; overflow: visible; }
