@@ -178,10 +178,13 @@
 .home-storage-capacity-card { --capacity-color: #b86a08; border: 2px solid var(--capacity-color); background: var(--panel); }
 .home-page .home-storage-capacity-card { padding: 10px 12px; }
 .home-storage-capacity-card.is-low { --capacity-color: var(--danger); }
+:root[data-theme="dark"] .home-storage-capacity-card { --text: #f3ebdd; --muted: #d0c1a6; --brand-text: #f2be55; --border: #65573e; background: #3b3020; color: var(--text); }
+:root[data-theme="dark"] .home-storage-capacity-card:not(.is-low) { --capacity-color: #f2be55; }
 .home-storage-capacity-heading { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: start; gap: 7px; color: var(--capacity-color); }
 .home-storage-capacity-heading h2 { min-width: 0; overflow-wrap: anywhere; margin: 0; font-size: 15px; line-height: 1.4; }
 .home-storage-capacity-row { --capacity-row-color: #b86a08; margin-top: 8px; }
 .home-storage-capacity-row.is-low { --capacity-row-color: var(--danger); }
+:root[data-theme="dark"] .home-storage-capacity-row:not(.is-low) { --capacity-row-color: #f2be55; }
 .home-storage-capacity-info { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12px; }
 .home-storage-capacity-info strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-storage-capacity-info span { flex-shrink: 0; font-variant-numeric: tabular-nums; }
