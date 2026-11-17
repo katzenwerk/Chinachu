@@ -72,7 +72,7 @@ button.guide-channel:hover { background: var(--brand-soft); }
 .guide-grid-line.is-hour { height: 1px; background: var(--border); }
 .guide-now-line { position: absolute; z-index: 9; height: 2px; background: #db3c48; box-shadow: 0 0 0 1px rgba(255,255,255,.45); pointer-events: none; }
 .guide-program { position: absolute; z-index: 2; display: flex; min-height: 2px; flex-direction: column; gap: 2px; padding: 4px 5px; overflow: hidden; border: 1px solid color-mix(in srgb,var(--border) 72%,#718778); border-radius: 4px; background: var(--guide-bg); color: var(--guide-text); text-align: left; cursor: pointer; }
-:root[data-theme="dark"] .guide-program { color: var(--guide-text); background: var(--guide-bg); }
+:root[data-theme="dark"] .guide-program { --guide-bg: #35363c; color: var(--guide-text); background: var(--guide-bg); }
 .guide-program:hover,.guide-program:focus-visible { z-index: 5; filter: brightness(1.04); box-shadow: 0 3px 10px rgba(20,42,28,.22); }
 .guide-program-title { display: -webkit-box; flex: 0 0 auto; overflow: hidden; font-size: 12px; font-weight: 600; line-height: 1.35; overflow-wrap: break-word; word-break: normal; -webkit-box-orient: vertical; -webkit-line-clamp: var(--guide-title-lines,2); }
 .guide-program-title time { font-size: 10px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -95,7 +95,12 @@ button.guide-channel:hover { background: var(--brand-soft); }
 .guide-program.category-variety { background: #f2e9f5; }
 .guide-program.category-drama,.guide-program.category-cinema,.guide-program.category-theater { background: #f5e8e7; }
 .guide-program.category-music { background: #e8eff7; }
-:root[data-theme="dark"] .guide-program[class*="category-"] { background: color-mix(in srgb,var(--panel-subtle) 84%,var(--brand-soft)); }
+/* Trial dark genre backgrounds, independent of the surrounding palette. */
+:root[data-theme="dark"] .guide-program:is(.category-anime,.category-music) { --guide-bg: #34404a; }
+:root[data-theme="dark"] .guide-program:is(.category-news,.category-information) { --guide-bg: #403d34; }
+:root[data-theme="dark"] .guide-program.category-sports { --guide-bg: #344039; }
+:root[data-theme="dark"] .guide-program.category-variety { --guide-bg: #403a47; }
+:root[data-theme="dark"] .guide-program:is(.category-drama,.category-cinema,.category-theater) { --guide-bg: #43373b; }
 .guide-program.is-manual,.guide-program.is-rule,.guide-program.is-recording { border: 2px solid var(--brand); }
 .guide-program.is-conflict { border: 2px solid var(--danger); }
 .guide-program.is-skip { border: 1px solid color-mix(in srgb,var(--border) 72%,#718778); background: #707871; color: #fff; }
