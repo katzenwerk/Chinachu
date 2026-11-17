@@ -39,6 +39,15 @@ function v2(overrides = {}) {
 	};
 }
 
+// Historical input, deliberately independent of the current writer.
+function legacyEntry() {
+	return {
+		key, status: 'RECORDED', program: { ...base, recorded: '/fixture/a.m2ts' },
+		reservationMeta: { ruleUid: base.ruleUid },
+		recordingResult: { id: base.id, start, seconds: base.seconds, snapshot: { ...base } }
+	};
+}
+
 function writeJson(file, value) {
 	fs.writeFileSync(file, JSON.stringify(value));
 }
@@ -68,7 +77,6 @@ describe('Match v2 writer and migration', function () {
 		const results = matching.buildMatchLedger({
 			nowMs,
 			keepDays: 0,
-			schemaVersion: 2,
 			recordedReadOk: true,
 			recordedList: [recorded, untracked],
 			reserves2List: [base, future, missed, skipped]
@@ -171,9 +179,7 @@ describe('Match v2 writer and migration', function () {
 			keepDays: 0,
 			keepMonths: 3,
 			readDays: 14,
-			keepRecordedSnapshot: false,
 			config: {},
-			schemaVersion: 2,
 			initialBuild: false,
 			reservationStore: store
 		});
@@ -185,7 +191,6 @@ describe('Match v2 writer and migration', function () {
 		assert.deepStrictEqual(saved[0].deletion, latest[0].deletion);
 		assert.throws(() => matching.writeMatchLedgerLocked({
 			output: '/fixture/match.json',
-			schemaVersion: 2,
 			reservationStore: { withLock() { throw new Error('fixture lock failed'); } }
 		}), /fixture lock failed/);
 	});
@@ -215,10 +220,7 @@ describe('Match v2 writer and migration', function () {
 		withFixture(directory => {
 			const matchFile = path.join(directory, 'match.json');
 			const backupFile = path.join(directory, 'match.before-v2.json');
-			const legacy = matching.buildMatchItem(
-				'RECORDED', key, { ...base, recorded: '/fixture/a.m2ts' }, base, base.channel,
-				true, true, false, true, false, nowMs, true, {}
-			);
+			const legacy = legacyEntry();
 			legacy.recordingResult.cleanupState = 'deleted';
 			legacy.recordingResult.deletedAt = nowMs - 1000;
 			legacy.recordingResult.cleanupReason = 'manual';
@@ -251,10 +253,14 @@ describe('Match v2 writer and migration', function () {
 			assert.throws(() => matchV2.runV2Fix({ matchFile, nowMs, reservationStore }), /invalid canonical match key/);
 			assert.equal(fs.readFileSync(matchFile, 'utf8'), before);
 
-			const legacy = matching.buildMatchItem(
-				'RECORDED', key, { ...base, recorded: '/fixture/a.m2ts' }, base, base.channel,
-				true, true, false, true, false, nowMs, true, {}
-			);
+			const update = { output: matchFile, recordedList: [base], reserves2List: [base], nowMs, keepDays: 0 };
+			assert.throws(() => matching.writeMatchLedgerLocked(update), /invalid canonical match key/);
+			assert.equal(fs.readFileSync(matchFile, 'utf8'), before);
+			fs.writeFileSync(matchFile, '{invalid');
+			assert.throws(() => matching.writeMatchLedgerLocked(update), SyntaxError);
+			assert.equal(fs.readFileSync(matchFile, 'utf8'), '{invalid');
+
+			const legacy = legacyEntry();
 			writeJson(matchFile, [legacy]);
 			const validBefore = fs.readFileSync(matchFile, 'utf8');
 			const failingStore = {
@@ -269,22 +275,61 @@ describe('Match v2 writer and migration', function () {
 				reservationStore: failingStore
 			}), /fixture save failed/);
 			assert.equal(fs.readFileSync(matchFile, 'utf8'), validBefore);
+			assert.throws(() => matching.writeMatchLedgerLocked({ ...update, reservationStore: failingStore }), /fixture save failed/);
+			assert.equal(fs.readFileSync(matchFile, 'utf8'), validBefore);
+			assert.equal(fs.readFileSync(matchFile + '.v1-backup', 'utf8'), validBefore);
+			writeJson(matchFile, [legacy, v2()]);
+			const changedBefore = fs.readFileSync(matchFile, 'utf8');
+			assert.throws(() => matching.writeMatchLedgerLocked(update), /backup differs/);
+			assert.equal(fs.readFileSync(matchFile, 'utf8'), changedBefore);
+			assert.equal(fs.readFileSync(matchFile + '.v1-backup', 'utf8'), validBefore);
+
 		});
 	});
 
-	it('keeps the legacy writer by default and fails closed before v2fix', function () {
-		const legacy = matching.buildMatchLedger({
-			nowMs,
-			keepDays: 0,
-			recordedList: [{ ...base, recorded: '/fixture/a.m2ts' }],
-			reserves2List: [base]
-		}).results;
-
-		assert.equal(matching.getMatchSchemaVersion({}), 1);
-		assert.equal(matching.getMatchSchemaVersion({ matchSchemaVersion: 2 }), 2);
-		assert.equal(legacy[0].schemaVersion, undefined);
-		assert.throws(() => matchV2.assertWriterReady(legacy, 2), /completed v2fix/);
-		assert.equal(matchV2.assertWriterReady([v2()], 2), true);
+	it('migrates at the common writer and CLI without changing a separate merge source', function () {
+		withFixture(directory => {
+			const matchFile = path.join(directory, 'match.json');
+			const sourceFile = path.join(directory, 'source.json');
+			const recordedFile = path.join(directory, 'recorded.json');
+			const reserveFile = path.join(directory, 'reserves2.json');
+			const activeFile = path.join(directory, 'recording.json');
+			const configFile = path.join(directory, 'config.json');
+			const legacy = legacyEntry();
+			legacy.recordingResult.cleanupState = 'deleted';
+			legacy.recordingResult.cleanupReason = 'manual';
+			legacy.recordingResult.deletedAt = nowMs - 1000;
+			legacy.fileMissing = { recordedId: base.id, checkedAt: nowMs };
+			writeJson(matchFile, [legacy]);
+			const original = fs.readFileSync(matchFile, 'utf8');
+			const options = {
+				output: matchFile, recordedList: [base], reserves2List: [base], recordingList: [], nowMs, keepDays: 0,
+				config: { matchSchemaVersion: 1, matchKeepRecordedSnapshot: true }
+			};
+			const result = matching.writeMatchLedgerLocked(options);
+			assert.equal(fs.readFileSync(matchFile + '.v1-backup', 'utf8'), original);
+			assert.equal(result.results[0].schemaVersion, 2);
+			assert.equal(result.results[0].ruleUid, base.ruleUid);
+			assert.equal(result.results[0].recording.recordedId, base.id);
+			assert.equal(result.results[0].deletion.reason, 'manual');
+			assert.equal(result.results[0].program, undefined);
+			assert.throws(() => matching.writeMatchLedgerLocked({ ...options, initialBuild: true }), /cannot replace existing history/);
+			assert.equal(matching.writeMatchLedgerLocked(options).results[0].schemaVersion, 2);
+			// Separate CLI output must leave the legacy source bytes intact.
+			writeJson(sourceFile, [legacy]);
+			writeJson(recordedFile, [base]); writeJson(reserveFile, [base]); writeJson(activeFile, []);
+			writeJson(configFile, { matchSchemaVersion: 1, recordedHistoryRetentionDays: 0 });
+			const sourceBefore = fs.readFileSync(sourceFile, 'utf8');
+			const cli = require('child_process').spawnSync(process.execPath, [
+				path.join(__dirname, '../app-matching.js'), '--old-match', sourceFile, '--output', matchFile,
+				'--recorded', recordedFile, '--reserves2', reserveFile, '--recording', activeFile,
+				'--config', configFile, '--now', String(nowMs), '--keep-days', '0'
+			], { encoding: 'utf8' });
+			assert.equal(cli.status, 0, cli.stdout + cli.stderr);
+			assert.equal(fs.readFileSync(sourceFile, 'utf8'), sourceBefore);
+			assert.equal(fs.readFileSync(sourceFile + '.v1-backup', 'utf8'), sourceBefore);
+			assert.equal(JSON.parse(fs.readFileSync(matchFile, 'utf8'))[0].schemaVersion, 2);
+		});
 	});
 
 });
