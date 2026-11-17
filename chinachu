@@ -1796,23 +1796,6 @@ load_bootstrap_config () {
   ' config.json) || installer_error "config.json must contain an object with a non-empty recordedDir."
 }
 
-create_copy_if_missing () {
-  local source="$1"
-  local target="$2"
-
-  if path_exists "$target"; then
-    return 0
-  fi
-
-  [ -f "$source" ] || installer_error "$source is missing."
-  "$BOOTSTRAP_NODE_COMMAND" -e '
-    const fs = require("fs");
-    fs.copyFileSync(process.argv[1], process.argv[2], fs.constants.COPYFILE_EXCL);
-  ' "$source" "$target" || installer_error "Could not create $target."
-  set_new_path_owner "$target" || installer_error "Could not set $target owner."
-  printf 'created: %s\n' "$target"
-}
-
 ensure_runtime_dir () {
   local target="$1"
   local created=false
@@ -1867,7 +1850,7 @@ chinachu_runtime_bootstrap () {
   create_config_if_missing || return 1
   load_bootstrap_config || return 1
   resolve_runtime_user || return 1
-  create_copy_if_missing rules.sample.json rules.json || return 1
+  create_json_array_if_missing rules.json || return 1
   ensure_runtime_dir data || return 1
   ensure_runtime_dir log || return 1
 

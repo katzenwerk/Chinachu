@@ -20,7 +20,6 @@ function createLauncherFixture() {
 		fs.copyFileSync(path.join(repositoryRoot, 'lib', name), path.join(temporaryDir, 'lib', name));
 	}
 	fs.copyFileSync(path.join(repositoryRoot, 'config.sample.json'), path.join(temporaryDir, 'config.sample.json'));
-	fs.copyFileSync(path.join(repositoryRoot, 'rules.sample.json'), path.join(temporaryDir, 'rules.sample.json'));
 
 	return temporaryDir;
 }
@@ -326,8 +325,10 @@ if chinachu_installer_dependencies_ready; then exit 72; fi
 		const existingFixture = createLauncherFixture();
 
 		try {
+			assert.strictEqual(fs.existsSync(path.join(newFixture, 'rules.sample.json')), false);
 			const newResult = runServiceBootstrap(newFixture);
 			assert.strictEqual(newResult.status, 0, newResult.stdout + newResult.stderr);
+			assert.strictEqual(fs.readFileSync(path.join(newFixture, 'rules.json'), 'utf8'), '[]\n');
 
 			// Standalone verify must initialize its own runtime context, without bootstrap.
 			const standaloneSource = writeSourceableLauncher(newFixture);
