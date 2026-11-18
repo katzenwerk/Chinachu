@@ -430,6 +430,9 @@ const activeRecordingOutputs = new Set();
 const activeDurationProbes = new Set();
 const activeDurationProbeJobs = new Map();
 const durationProbeQueue = [];
+const recordedCommandQueue = [];
+let recordedCommandRunning = false;
+let recordedCommandTimer = null;
 let recordedLedgerWrites = Promise.resolve();
 let pendingRecordedLedgerWrites = 0;
 const failedRecordingSaves = new Set();
@@ -974,6 +977,11 @@ function shutdownOperator(signal) {
 	}
 	shutdownStarted = true;
 	operatorLog('SHUTDOWN: ' + signal);
+	if (recordedCommandTimer !== null) {
+		clearTimeout(recordedCommandTimer);
+		recordedCommandTimer = null;
+	}
+	recordedCommandQueue.length = 0;
 	if (matchLedgerUpdateTimer !== null) {
 		clearTimeout(matchLedgerUpdateTimer);
 		matchLedgerUpdateTimer = null;
@@ -1190,7 +1198,66 @@ function reportRecordingSaveFailure(program, error) {
 		'; recording.json retained. Resolve the storage/lock error and restart Operator to recover.');
 }
 
-function saveCompletedRecording(program, recovering, originalRecordedPath = program.recorded) {
+// Independent from ledger writes and other post-processing queues. Only new
+// launches wait for the existing recording-transition window; running hooks stay.
+// Serial execution is the default; parallel mode shares all launch conditions.
+function wakeRecordedCommandQueue() {
+	if (shutdownStarted || (config.recordedCommandSerial !== false && recordedCommandRunning) ||
+		recordedCommandTimer !== null || !recordedCommandQueue.length) return;
+	recordedCommandTimer = setTimeout(() => {
+		recordedCommandTimer = null;
+		runRecordedCommandQueue();
+	}, 0);
+}
+
+function runRecordedCommandQueue() {
+	const serial = config.recordedCommandSerial !== false;
+	if (shutdownStarted || (serial && recordedCommandRunning) || !recordedCommandQueue.length) return;
+	const delay = postProcessingDelay();
+	if (delay > 0) {
+		recordedCommandTimer = setTimeout(() => {
+			recordedCommandTimer = null;
+			runRecordedCommandQueue();
+		}, Math.min(delay, 0x7fffffff));
+		return;
+	}
+	const job = recordedCommandQueue.shift();
+	recordedCommandRunning = serial;
+	let finished = false;
+	const finish = () => {
+		if (finished) return;
+		finished = true;
+		if (serial) recordedCommandRunning = false;
+		wakeRecordedCommandQueue();
+	};
+	try {
+		const child = child_process.spawn(job.command, job.args, { stdio: 'ignore' });
+		child.once('spawn', () => operatorLog('RECORDED COMMAND: started #' + job.id + ' pid=' + child.pid));
+		child.on('error', error => {
+			operatorLog('ERROR: recorded command #' + job.id + ' pid=' + child.pid + ' error=' + (error.code || error.name));
+			// Node emits close after a spawn error too; serial mode waits for it.
+		});
+		child.once('close', (code, signal) => {
+			operatorLog((code === 0 ? '' : 'WARNING: ') + 'RECORDED COMMAND: closed #' + job.id +
+				' pid=' + child.pid + ' code=' + code + ' signal=' + signal);
+			finish();
+		});
+	} catch (error) {
+		operatorLog('ERROR: recorded command #' + job.id + ' start failed: ' + (error.code || error.name));
+		finish();
+	}
+	if (!serial) wakeRecordedCommandQueue();
+}
+
+function enqueueRecordedCommand(recordedPath, completedProgram) {
+	if (!config.recordedCommand || shutdownStarted) return;
+	recordedCommandQueue.push({ command: config.recordedCommand, id: completedProgram.id,
+		args: [recordedPath, JSON.stringify(completedProgram)] });
+	operatorLog('RECORDED COMMAND: queued #' + completedProgram.id);
+	wakeRecordedCommandQueue();
+}
+
+function saveCompletedRecording(program, recovering, originalRecordedPath = program.recorded, outputClosed = Promise.resolve(true)) {
 	const replayingPendingSave = recovering && program._operatorHistoryPending === true;
 	program._operatorHistoryPending = true;
 	try {
@@ -1236,14 +1303,6 @@ function saveCompletedRecording(program, recovering, originalRecordedPath = prog
 		finishPendingRecording(program);
 		if (!isResumePending) {
 			scheduleMatchLedgerUpdate('recorded finalize', completedProgram.operatorRecordingEnd);
-			if (config.recordedCommand) {
-				try {
-					const postProcess = child_process.spawn(config.recordedCommand, [program.recorded, JSON.stringify(completedProgram)]);
-					operatorLog('SPAWN: ' + config.recordedCommand + ' (pid=' + postProcess.pid + ')');
-				} catch (error) {
-					operatorLog('ERROR: recorded hook could not start: ' + error.message);
-				}
-			}
 		}
 		if (!recovering && !isResumePending) {
 			externalNotifier.recordingResult(completedProgram);
@@ -1256,7 +1315,19 @@ function saveCompletedRecording(program, recovering, originalRecordedPath = prog
 		else if (program._operatorEndLack) operatorLog('FIN END LACK: ' + printProgram(program));
 		else if (program._operatorAbort) operatorLog('FIN ABORT SHORT: ' + printProgram(program));
 		else operatorLog('FIN: ' + printProgram(program));
-	}, true, program._operatorTunerInfoPromise).catch(error => {
+	}, true, program._operatorTunerInfoPromise).then(saved => {
+		const isResumePending = completedProgram.operatorResumePending === true &&
+			completedProgram.operatorAbort !== true && completedProgram.operatorEndLack !== true;
+		if (saved && !isResumePending && config.recordedCommand) {
+			const recordedPath = program.recorded;
+			// Do not hold the history transaction (or shutdown) for file closure
+			// or the external process. Recovery rows have no live output stream.
+			outputClosed.then(closed => {
+				if (closed) enqueueRecordedCommand(recordedPath, completedProgram);
+			});
+		}
+		return saved;
+	}).catch(error => {
 		reportRecordingSaveFailure(program, error);
 		return false;
 	});
@@ -3307,6 +3378,9 @@ function doRecord(program, stream) {
 	let generateThumbnailAfterClose = false;
 	let finalizeFilenameAfterClose = false;
 	let historySave = Promise.resolve(false);
+	let outputFailed = false;
+	let resolveOutputClosed;
+	const outputClosed = new Promise(resolve => { resolveOutputClosed = resolve; });
 	const tsDropAnalyzer = tsDropDetectionEnabled ? new TsDropAnalyzer() : null;
 	let tsDropLogTimer = null;
 	let tsDropLoggedSampleCount = 0;
@@ -3429,6 +3503,7 @@ function doRecord(program, stream) {
 	}
 
 	function onOutputError(error) {
+		outputFailed = true;
 		finalizeNg('NG RECORDING: OUTPUT STREAM ERROR', error);
 	}
 
@@ -3442,6 +3517,7 @@ function doRecord(program, stream) {
 	recFile.once('close', () => {
 		recFile.removeListener('error', onOutputError);
 		activeRecordingOutputs.delete(recFile);
+		resolveOutputClosed(!outputFailed && recFile.writableFinished);
 		if (!shutdownStarted) {
 			checkStorageAfterRecordingClose(program);
 		}
@@ -3458,7 +3534,7 @@ function doRecord(program, stream) {
 				}
 			}
 			recorded.push(program);
-			historySave = saveCompletedRecording(program, false, recPath);
+			historySave = saveCompletedRecording(program, false, recPath, outputClosed);
 		}
 		const finalPath = program.recorded;
 		historySave.then(saved => {
@@ -3581,7 +3657,7 @@ function doRecord(program, stream) {
 					}
 				}
 				recorded.push(program);
-				historySave = saveCompletedRecording(program, false);
+				historySave = saveCompletedRecording(program, false, program.recorded, outputClosed);
 			} else {
 				operatorLog(program._operatorNg + ': ' + printProgram(program));
 				if (!isResumedRecording && program.isManualReserved) discardRecordingAfterManualRemoval(program);

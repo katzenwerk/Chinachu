@@ -106,6 +106,141 @@ async function assertHandoffBehavior(source) {
 	assert.strictEqual(timers[0].delay, 5000);
 }
 
+// Extend the existing Operator safety case without a server or new test cases.
+async function assertRecordedCommandBehavior(source, serialSetting) {
+	const serial = serialSetting !== false;
+	const { EventEmitter } = require('events');
+	const timers = [], children = [], launches = [], logs = [], queued = [];
+	let now = 100000, syncFailure = false, failSave = false;
+	let written = [];
+	const context = vm.createContext({
+		Promise, Date: { now: () => now },
+		config: { recordedCommand: '/fixture/hook', ...(serialSetting === undefined ? {} : { recordedCommandSerial: serialSetting }) }, shutdownStarted: false,
+		recordedCommandQueue: queued, recordedCommandRunning: false, recordedCommandTimer: null,
+		lastRecordingTransitionAt: now, reserves: [], recording: [], isRecordedForReserve: () => false,
+		setTimeout(callback, delay) { const timer = { callback, delay }; timers.push(timer); return timer; },
+		operatorLog: line => logs.push(line), printProgram: row => row.id,
+		child_process: { spawn(command, args, options) {
+			if (syncFailure) { syncFailure = false; throw Object.assign(new Error('private'), { code: 'EINVAL' }); }
+			assert.strictEqual(options.stdio, 'ignore');
+			const child = new EventEmitter(); child.pid = children.length + 1;
+			children.push(child); launches.push({ command, args: Array.from(args) }); return child;
+		} },
+		recordedLedgerWrites: Promise.resolve(), pendingRecordedLedgerWrites: 0,
+		RECORDED_DATA_FILE: '/fixture/recorded.json',
+		reservationStore: {
+			withLockAsync: async (file, callback) => { if (failSave) throw new Error('write failed'); return callback(); },
+			readArray: () => written,
+			writeArrayAtomic: (file, rows) => { written = JSON.parse(JSON.stringify(rows)); }
+		},
+		writeRecordingData() {}, removeManualReserve: async () => {}, finishPendingRecording() {},
+		scheduleMatchLedgerUpdate() {}, wakePostProcessing() {}, completeOperatorShutdown() {},
+		externalNotifier: { notify() {}, finish() {}, recordingResult() {} }, reportRecordingSaveFailure() {}
+	});
+	vm.runInContext(source.slice(source.indexOf('function postProcessingDelay()'), source.indexOf('// The automatic queue')) +
+		source.slice(source.indexOf('function wakeRecordedCommandQueue()'), source.indexOf('function discardRecordingAfterManualRemoval(')) +
+		source.slice(source.indexOf('function queueRecordedLedgerUpdate('), source.indexOf('function finishPendingRecording(')), context);
+	const tick = () => { assert.ok(timers.length); timers.shift().callback(); };
+	const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
+	const row = id => ({ id, recorded: '/fixture/' + id + '.ts', title: 'private title', operatorRecordingEnd: now });
+	let closeOutput;
+	const closed = new Promise(resolve => { closeOutput = resolve; });
+	const first = row('normal');
+	assert.strictEqual(await context.saveCompletedRecording(first, false, first.recorded, closed), true);
+	assert.strictEqual(written.length, 1); // History committed while the file is still open.
+	assert.strictEqual(queued.length, 0);
+	// Use the actual close handler: closing the output releases the hook gate.
+	const output = new EventEmitter(); output.writableFinished = true;
+	Object.assign(context, { recFile: output, activeRecordingOutputs: new Set([output]),
+		resolveOutputClosed: closeOutput, outputFailed: false, onOutputError() {},
+		checkStorageAfterRecordingClose() {}, finalizeFilenameAfterClose: false,
+		program: first, historySave: Promise.resolve(false), probeDurationAfterClose: false });
+	vm.runInContext(source.slice(source.indexOf("\trecFile.once('close', () => {"), source.indexOf('\n\t// 内部用', source.indexOf("\trecFile.once('close', () => {"))), context);
+	output.emit('close'); await flush();
+	assert.strictEqual(context.activeRecordingOutputs.size, 0);
+	assert.strictEqual(queued.length, 1);
+	// Ten simultaneous completions include both forms of successful short recording.
+	for (let index = 1; index < 10; index++) {
+		const program = row(String(index));
+		if (index === 1) program.operatorAbort = true;
+		if (index === 2) program.operatorEndLack = true;
+		assert.strictEqual(await context.saveCompletedRecording(program, false), true);
+	}
+	await flush();
+	assert.strictEqual(queued.length, 10);
+	tick(); assert.strictEqual(launches.length, 0); assert.strictEqual(timers[0].delay, 15000);
+	// Recheck the real guard on wake: a newly added reservation extends it.
+	now += 15000; context.reserves = [{ start: now + 5000, end: now + 60000 }];
+	tick(); assert.strictEqual(launches.length, 0); assert.strictEqual(timers[0].delay, 20000);
+	now += 20000;
+	context.recording = [{ start: now - 60000, end: now + 600000 }];
+	tick(); // An ongoing recording alone does not block the queue.
+	assert.strictEqual(launches.length, 1);
+	assert.strictEqual(timers.length, serial ? 0 : 1);
+	if (!serial) {
+		// All ten children can start before any child closes.
+		while (timers.length) tick();
+		assert.strictEqual(launches.length, 10);
+	}
+	assert.strictEqual(launches[0].command, '/fixture/hook');
+	assert.deepStrictEqual(launches[0].args, [first.recorded, JSON.stringify(written[0])]);
+	for (let index = 0; index < 10; index++) {
+		assert.strictEqual(launches.length, serial ? index + 1 : 10);
+		const child = children[index];
+		if (index === 0) {
+			child.pid = undefined;
+			child.emit('error', Object.assign(new Error('private'), { code: 'ENOENT' }));
+			assert.strictEqual(timers.length, 0); // Wait for close even after error.
+		} else child.emit('spawn');
+		child.emit('close', index === 0 || index === 1 ? 1 : index === 2 ? null : 0, index === 2 ? 'SIGTERM' : null);
+		child.emit('close', 0, null); // Cannot advance twice.
+		if (serial && index < 9) { assert.strictEqual(timers.length, 1); tick(); }
+	}
+	assert.deepStrictEqual(launches.map(item => JSON.parse(item.args[1]).id), ['normal', '1', '2', '3', '4', '5', '6', '7', '8', '9']);
+	assert.strictEqual(timers.length, 0);
+	assert.ok(logs.some(line => line.includes('ENOENT')));
+	assert.ok(logs.some(line => line.includes('code=1')));
+	assert.ok(logs.some(line => line.includes('signal=SIGTERM')));
+	assert.ok(logs.every(line => !line.includes('private')));
+	context.enqueueRecordedCommand('/fixture/bad.ts', row('sync-failure'));
+	context.enqueueRecordedCommand('/fixture/next.ts', row('after-failure'));
+	syncFailure = true; tick(); assert.strictEqual(launches.length, 10);
+	tick(); assert.strictEqual(launches.length, 11); children[10].emit('close', 0, null);
+	// Failure, resume pending and failed output closure must never enqueue.
+	const before = launches.length;
+	assert.strictEqual(await context.saveCompletedRecording({ ...row('resume'), operatorResumePending: true }, false), true);
+	assert.strictEqual(await context.saveCompletedRecording(row('output-error'), false, '/fixture/output-error.ts', Promise.resolve(false)), true);
+	failSave = true;
+	assert.strictEqual(await context.saveCompletedRecording(row('save-error'), false), false);
+	failSave = false; await flush();
+	assert.strictEqual(queued.length, 0); assert.strictEqual(launches.length, before);
+	// Conversely, an already closed file must still wait for the ledger commit.
+	let allowSave;
+	const metadataReady = new Promise(resolve => { allowSave = resolve; });
+	const waitingSave = context.saveCompletedRecording({ ...row('closed-first'), _operatorTunerInfoPromise: metadataReady }, false);
+	await flush(); assert.strictEqual(queued.length, 0);
+	allowSave(); assert.strictEqual(await waitingSave, true); await flush();
+	assert.strictEqual(queued.length, 1); tick(); children[11].emit('close', 0, null);
+	// Recovery keeps the prior eligibility and uses the existing saved JSON.
+	assert.strictEqual(await context.saveCompletedRecording(row('recovered'), true), true);
+	await flush(); tick(); assert.strictEqual(launches.length, before + 2);
+	context.enqueueRecordedCommand('/fixture/waiting.ts', row('waiting'));
+	context.shutdownStarted = true;
+	children[12].emit('close', 0, null);
+	if (timers.length) tick();
+	context.runRecordedCommandQueue(); assert.strictEqual(launches.length, before + 2);
+	context.shutdownStarted = false; context.config.recordedCommand = '';
+	const waiting = queued.length;
+	context.enqueueRecordedCommand('/fixture/unset.ts', row('unset')); assert.strictEqual(queued.length, waiting);
+	// The live finalizer still excludes NG, and both filename branches pass the
+	// same close promise. Output errors after finalize also invalidate the hook.
+	assert.ok(source.includes('if (!isNgRecording) {'));
+	assert.ok(source.includes('historySave = saveCompletedRecording(program, false, recPath, outputClosed);'));
+	assert.ok(source.includes('historySave = saveCompletedRecording(program, false, program.recorded, outputClosed);'));
+	assert.ok(source.includes('resolveOutputClosed(!outputFailed && recFile.writableFinished);'));
+	assert.ok(source.includes('function onOutputError(error) {\n\t\toutputFailed = true;'));
+}
+
 function linuxDev(major, minor) {
 	major = BigInt(major);
 	minor = BigInt(minor);
@@ -249,6 +384,7 @@ describe('Operator low-storage handling', function() {
 	it('keeps recording-start safety, tuner identification, and capacity transition handling', async function() {
 		const source = fs.readFileSync(path.join(__dirname, '..', 'app-operator.js'), 'utf8');
 		await assertHandoffBehavior(source);
+		for (const serial of [undefined, true, false]) await assertRecordedCommandBehavior(source, serial);
 		// Disabled automatic thumbnails must not even inspect the backfill candidates.
 		let candidateChecks = 0, queuedThumbnails = 0;
 		const candidate = { id: 'old-recording' };

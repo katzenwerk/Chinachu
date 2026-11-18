@@ -401,7 +401,7 @@ describe('Operator recording preparation attempts', function() {
 						fs.existsSync(fixture.recordedCommandLog) &&
 						fs.existsSync(fixture.matchingLog),
 					'final ' + scenario.name + ' recording completion work did not finish',
-					20000 // Recording completion is immediate; optional match waits out the 15s handoff window.
+					20000 // History completes immediately; hooks and match wait out the 15s handoff window.
 				);
 				await waitForCondition(
 					() => fixture.read('recorded')[0].recordedDurationSeconds === 10.500001,
@@ -463,7 +463,7 @@ describe('Operator recording preparation attempts', function() {
 		}
 	});
 
-	it('retains eight concurrent completions through recorded lock timeout and rereads before retry', { timeout: 25000 }, async function() {
+	it('retains eight concurrent completions through recorded lock timeout and rereads before retry', { timeout: 40000 }, async function() {
 		const programs = Array.from({ length: 8 }, (_, index) => createProgram(String(index + 2), { isManualReserved: true }));
 		const responses = [];
 		const fixture = await createOperatorFixture(programs, request => {
@@ -505,10 +505,13 @@ describe('Operator recording preparation attempts', function() {
 			latest.push({ id: 'concurrent', recorded: path.join(fixture.recordedDir, 'concurrent.m2ts') });
 			reservationStore.writeArrayAtomic(path.join(fixture.dataDir, 'recorded.json'), latest);
 			fixture.releaseRecordedLock();
-			await waitForCondition(() => fixture.read('recording').length === 0 &&
-				fs.existsSync(fixture.recordedCommandLog) &&
+			await waitForCondition(() => fixture.read('recording').length === 0 && fixture.read('recorded').length === 10,
+			'all eight saves did not complete independently of the hook queue', 7000);
+			// Hooks now wait out the 15s transition window and run serially;
+			// ledger writes must still meet the original deadline above.
+			await waitForCondition(() => fs.existsSync(fixture.recordedCommandLog) &&
 				fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length === 8,
-			'all eight saves and post-save hooks did not complete', 7000);
+			'all eight queued post-save hooks did not complete', 20000);
 			const recorded = fixture.read('recorded');
 			assert.strictEqual(recorded.length, 10);
 			assert.strictEqual(new Set(recorded.map(program => program.id)).size, 10);
