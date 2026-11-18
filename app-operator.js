@@ -1341,7 +1341,7 @@ function discardRecordingAfterManualRemoval(program) {
 		operatorLog('ERROR: manual removal recovery snapshot failed: ' + error.message);
 	}
 	pendingRecordedLedgerWrites++;
-	removeManualReserve(program).then(() => finishPendingRecording(program)).catch(error => {
+	return removeManualReserve(program).then(() => finishPendingRecording(program)).catch(error => {
 		reportRecordingSaveFailure(program, error);
 	}).finally(() => {
 		pendingRecordedLedgerWrites--;
@@ -1374,10 +1374,11 @@ function recoverRecordingHistory() {
 		console.error('[fatal] recording recovery cannot start: ' + error.message);
 		process.exit(1);
 	}
+	const recoveries = [];
 	for (const program of recording.slice()) {
 		delete program.pid;
 		if (program._operatorManualRemovalPending) {
-			discardRecordingAfterManualRemoval(program);
+			recoveries.push(discardRecordingAfterManualRemoval(program));
 			continue;
 		}
 		const originalRecordedPath = program.recorded;
@@ -1387,8 +1388,9 @@ function recoverRecordingHistory() {
 			// Actual crash/end time is unknown: do not invent a measured duration.
 			markRecordingInterruptedForResume(program);
 		}
-		saveCompletedRecording(program, true, originalRecordedPath);
+		recoveries.push(saveCompletedRecording(program, true, originalRecordedPath));
 	}
+	return Promise.all(recoveries);
 }
 
 function persistRecordedDuration(programId, recordedPath, duration, requestedAt) {
@@ -4419,6 +4421,8 @@ function startRecordedThumbnailServer() {
 
 startRecordedThumbnailServer();
 
+// Startup snapshots come from recoverRecordingHistory's synchronous reads.
+// An asynchronous initial read could overwrite the recovered ledgers later.
 // ファイル更新監視: ./data/reserves.json
 chinachu.jsonWatcher(
 	RESERVES_DATA_FILE,
@@ -4440,7 +4444,7 @@ chinachu.jsonWatcher(
 			writeRecordingData();
 		}
 	},
-	{ create: [], now: true }
+	{ create: [], now: false }
 );
 
 // ファイル更新監視: ./data/recorded.json
@@ -4456,7 +4460,7 @@ chinachu.jsonWatcher(
 		operatorLog(mes);
 		wakePostProcessing();
 	},
-	{ create: [], now: true }
+	{ create: [], now: false }
 );
 
 // ファイル更新監視: ./data/recording.json
@@ -4479,7 +4483,7 @@ chinachu.jsonWatcher(
 );
 
 externalNotifier.refreshOutcomes();
-recoverRecordingHistory();
+recoverRecordingHistory().then(() => externalNotifier.conflicts(reserves));
 reserveCheckLoop();
 startBroadcastClockMonitor();
 scheduleAutoPostProcessingReview();

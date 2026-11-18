@@ -213,7 +213,32 @@ async function createOperatorFixture(programs, onStream, options) {
 			'  try {',
 			'    return await original(file, callback, Object.assign({}, options, {timeoutMs: ' + options.recordedLockTimeoutMs + '}));',
 			'  } catch (error) { log(error.code); throw error; }',
-			'};'
+			'};',
+			// If initial ledger reads are reintroduced, force their stale snapshots
+			// to arrive after recovery, rather than relying on the host's I/O order.
+			...(options.deferStartupLedgerReads ? [
+				'const ledgerPaths = new Set([target, path.resolve("data/reserves.json")]);',
+				'const recordingPath = path.resolve("data/recording.json");',
+				'const readFile = fs.readFile, writeArrayAtomic = store.writeArrayAtomic;',
+				'let startup = true, recovered = false;',
+				'const deferred = [];',
+				'setImmediate(() => { startup = false; });',
+				'fs.readFile = function(file, options, callback) {',
+				'  if (!startup || !ledgerPaths.has(path.resolve(file))) return readFile.apply(this, arguments);',
+				'  const snapshot = fs.readFileSync(file, options);',
+				'  log("startup-ledger-read");',
+				'  const deliver = () => callback(null, snapshot);',
+				'  if (recovered) setImmediate(deliver); else deferred.push(deliver);',
+				'};',
+				'store.writeArrayAtomic = function(file, rows) {',
+				'  const result = writeArrayAtomic.apply(this, arguments);',
+				'  if (path.resolve(file) === recordingPath && rows.length === 0) {',
+				'    recovered = true;',
+				'    deferred.splice(0).forEach(deliver => setImmediate(deliver));',
+				'  }',
+				'  return result;',
+				'};'
+			] : [])
 		].join('\n') + '\n');
 		operatorArgs.unshift('--require', preloadPath);
 		recordedLock = reservationStore.acquire(path.join(dataDir, 'recorded.json'), { timeoutMs: 0 });
@@ -437,11 +462,12 @@ describe('Operator recording preparation attempts', function() {
 				'initial released manual recording did not start',
 				7000, releasedFixture
 			);
+			const readsBeforeRelease = (releasedFixture.output().match(/READ: .*reserves\.json.*updated/g) || []).length;
 			fs.writeFileSync(path.join(releasedFixture.dataDir, 'reserves.json'), '[]');
 			await waitForCondition(
-				() => (releasedFixture.output().match(/READ: .*reserves\.json.*updated/g) || []).length >= 2,
+				() => (releasedFixture.output().match(/READ: .*reserves\.json.*updated/g) || []).length > readsBeforeRelease,
 				'operator did not reload the released manual reserve',
-				3000
+				3000, releasedFixture
 			);
 
 			const exit = await releasedFixture.gracefulStop('SIGINT');
@@ -449,14 +475,21 @@ describe('Operator recording preparation attempts', function() {
 			assert.strictEqual(releasedFixture.read('recorded')[0].operatorResumePending, undefined);
 			assert.deepStrictEqual(releasedFixture.read('reserves'), []);
 
-			const readCount = (releasedFixture.output().match(/READ: .*reserves\.json/g) || []).length;
+			const restartOutputOffset = releasedFixture.output().length;
 			releasedFixture.start();
+			// This startup marker follows synchronous ledger loading and the first
+			// reserve check; restrict it to output from the restarted process.
 			await waitForCondition(
-				() => (releasedFixture.output().match(/READ: .*reserves\.json/g) || []).length > readCount,
-				'restarted operator did not reload released reserves',
-				3000
+				() => releasedFixture.output().slice(restartOutputOffset).includes('[BroadcastClock] DISABLED: periodic TDT/TOT observation is off'),
+				'restarted operator did not complete initialization',
+				3000, releasedFixture
 			);
+			assert.deepStrictEqual(releasedFixture.read('reserves'), []);
+			// Observe at least one further reserve check (the fixture uses 1s).
 			await new Promise(resolve => setTimeout(resolve, 1200));
+			assert.strictEqual(releasedFixture.childError, null);
+			assert.strictEqual(releasedFixture.child.exitCode, null);
+			assert.strictEqual(releasedFixture.child.signalCode, null);
 			assert.strictEqual(releasedFixture.requests.length, 1);
 		} finally {
 			await releasedFixture.close();
@@ -540,6 +573,7 @@ describe('Operator recording preparation attempts', function() {
 			response.write('PART1');
 		}, {
 			recordedLockTimeoutMs: 0,
+			deferStartupLedgerReads: true,
 			trackRecordedCommand: true,
 			initialRecorded: recordedDir => [ { id: 'old', recorded: path.join(recordedDir, 'old.m2ts'), recordedDurationSeconds: 321 } ]
 		});
@@ -565,15 +599,22 @@ describe('Operator recording preparation attempts', function() {
 			const oldHistory = fixture.read('recorded')[0];
 			fixture.releaseRecordedLock();
 			fixture.start();
-			await waitForCondition(() => fixture.read('recording').length === 0 &&
-				/RECOVERED HISTORY: #2\b/.test(fixture.output()),
+			const noRerecord = () => {
+				assert.strictEqual(fixture.requests.length, 1, 'recovery must not record the completed program again');
+			};
+			await waitForCondition(() => {
+				noRerecord();
+				return fixture.read('recording').length === 0 && /RECOVERED HISTORY: #2\b/.test(fixture.output());
+			},
 			'unsaved history did not recover after restarting Operator', 5000, fixture);
-			// Startup JSON watchers can initially expose the old reserve to the
-			// hook guard. A scheduled wake still honors its start + 15s window.
-			// Keep the history deadline above separate from optional hook latency.
-			const hookTimeoutMs = Math.max(5000, program.start + 15000 - Date.now() + 5000);
-			await waitForCondition(() => fs.existsSync(fixture.recordedCommandLog),
-			'recovered history hook did not run after the recording guard', hookTimeoutMs, fixture);
+			assert.strictEqual(fixture.lockEvents().filter(event => event.event === 'startup-ledger-read').length, 0,
+				'initial asynchronous ledger reads must not overwrite recovery');
+			// Recovery itself starts no recording transition in this process and
+			// removes the only reserve; it must not invent a new protection window.
+			await waitForCondition(() => {
+				noRerecord();
+				return fs.existsSync(fixture.recordedCommandLog);
+			}, 'recovered history hook did not run', 5000, fixture);
 			const saved = fixture.read('recorded');
 			assert.strictEqual(saved.length, 2);
 			assert.deepStrictEqual(saved[0], oldHistory);
@@ -593,10 +634,14 @@ describe('Operator recording preparation attempts', function() {
 			reservationStore.writeArrayAtomic(path.join(fixture.dataDir, 'recording.json'), recovery);
 			const recoveredCount = (fixture.output().match(/RECOVERED HISTORY: #2\b/g) || []).length;
 			fixture.start();
-			await waitForCondition(() => fixture.read('recording').length === 0 &&
-				(fixture.output().match(/RECOVERED HISTORY: #2\b/g) || []).length > recoveredCount &&
-				fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length === 2,
+			await waitForCondition(() => {
+				noRerecord();
+				return fixture.read('recording').length === 0 &&
+					(fixture.output().match(/RECOVERED HISTORY: #2\b/g) || []).length > recoveredCount &&
+					fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length === 2;
+			},
 			'recovery replay did not finish', 5000, fixture);
+			assert.strictEqual(fixture.lockEvents().filter(event => event.event === 'startup-ledger-read').length, 0);
 			assert.deepStrictEqual(fixture.read('recorded'), saved);
 			assert.strictEqual(fixture.requests.length, 1);
 			assert.deepStrictEqual(fixture.read('reserves'), []);
