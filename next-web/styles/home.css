@@ -59,6 +59,7 @@
 .recording-card.is-home-overlay .recording-title-overlay { min-width: 0; flex: 1; overflow: hidden; font-size: 12px; font-weight: var(--font-title-weight); line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .recording-card.is-home-overlay .recording-state-badge { position: absolute; right: 5px; bottom: 11px; z-index: 3; padding: 2px 5px; border-radius: 6px; background: rgba(0,0,0,.62); color: #fff; font-size: 11px; font-variant-numeric: tabular-nums; line-height: 1.2; pointer-events: none; }
 .recording-home-footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; min-width: 0; padding: 6px 8px 7px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.recording-home-meta { display: flex; align-items: baseline; gap: 6px; width: 100%; min-width: 0; }
 .recording-broadcast { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recording-home-actions { display: inline-flex; flex: 0 0 auto; align-items: baseline; gap: 7px; margin-left: auto; }
 .recording-card.is-home-overlay .recording-storage-warning { display: inline-flex; flex: 0 1 auto; margin: 0; white-space: nowrap; }
@@ -67,7 +68,6 @@
 .recording-playback-actions .button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 44px; height: 100%; padding: 6px; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
 .recording-playback-actions .button > span { min-width: 0; }
 .recording-playback-actions .button:disabled { opacity: .5; cursor: default; }
-.recording-home-footer > .recording-detail { width: 100%; }
 .recording-detail { flex: 0 0 auto; color: var(--link-color); font-weight: var(--font-title-weight); text-decoration: none; white-space: nowrap; }
 .recording-detail:hover { text-decoration: underline; }
 .recording-detail:focus-visible { border-radius: 2px; outline: 2px solid var(--focus); outline-offset: 2px; }

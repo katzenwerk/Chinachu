@@ -38,12 +38,14 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
     <div class="recording-home-footer">
       <strong class="mobile-card-title"></strong>
       <span class="mobile-recording-state mobile-only"></span>
-      <span class="recording-broadcast"></span>
-      <span class="recording-home-actions">
-        <span class="recording-storage-warning storage-warning is-align-right" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></span>
-      </span>
       ${playbackActions}
-      <a class="recording-detail" href=""><span aria-hidden="true">ⓘ</span> 詳細</a>
+      <div class="recording-home-meta">
+        <span class="recording-broadcast"></span>
+        <span class="recording-home-actions">
+          <span class="recording-storage-warning storage-warning is-align-right" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></span>
+          <a class="recording-detail" href=""><span aria-hidden="true">ⓘ</span> 詳細</a>
+        </span>
+      </div>
     </div>
     <p class="recording-watch-error" role="status" hidden></p>` : `
     <div class="recording-thumbnail">
