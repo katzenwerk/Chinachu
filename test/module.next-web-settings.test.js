@@ -19,7 +19,7 @@ test('settings model preserves unknown and untouched values while validating exp
 	const model = await configModel();
 	const effects = (before, after) => model.configApplicationEffects(before, after);
 	const explicitDefaults = {
-		wuiBlockGlobalAccess: true, recordedThumbnailAutoEnabled: true, seriesUseSyobocal: true,
+		wuiBlockGlobalAccess: true, recordedCommandSerial: true, recordedThumbnailAutoEnabled: true, seriesUseSyobocal: true,
 		vaapiEnabled: false, vaapiDevice: '/dev/dri/renderD128', wuiOpenPort: 20772,
 		recordedFolderOrganizeEnabled: false, recordedFolderOrganizeOrder: 'filename',
 		storageLowSpaceThresholdMB: 3000, storageLowSpaceAction: 'stop',
@@ -38,6 +38,7 @@ test('settings model preserves unknown and untouched values while validating exp
 		['storageLowSpaceThresholdMB', 5000, ['operator', 'wui']],
 		['recordedFolderOrganizeEnabled', true, ['operator', 'wui']],
 		['recordedFolderOrganizeOrder', 'title', ['operator']],
+		['recordedCommandSerial', false, ['operator']],
 		['vaapiEnabled', true, ['wui']], ['normalizationForm', 'NFKC', ['wui', 'scheduler', 'history']],
 		['excludeServices', [211], ['scheduler']], ['serviceOrder', [211], ['scheduler']],
 		['matchRetentionDays', 30, ['history']], ['reserves2RetentionDays', 0, ['history']],
@@ -90,6 +91,14 @@ test('settings model preserves unknown and untouched values while validating exp
 	assert.deepStrictEqual(model.validateConfig({ recordedDir: '/recorded', storageLowSpaceAction: 'stop-new', recordedDirs: dirs.value }), []);
 	assert.ok(model.configChanges(original, draft).some(change => change.key === 'recordedDurationProbeTimeoutMs'));
 
+	assert.strictEqual(model.configForSave(original).recordedCommandSerial, true);
+	for (const serial of [true, false]) {
+		const config = { ...original, recordedCommandSerial: serial };
+		assert.strictEqual(model.configForSave(config).recordedCommandSerial, serial);
+		assert.ok(!model.unknownConfigKeys(config).includes('recordedCommandSerial'));
+		assert.deepStrictEqual(model.validateConfig(config), []);
+	}
+	assert.ok(model.validateConfig({ ...original, recordedCommandSerial: 'false' }).some(message => message.includes('直列実行')));
 	assert.strictEqual(model.configForSave(original).recordedThumbnailAutoEnabled, true);
 	for (const enabled of [true, false]) {
 		const config = { ...original, recordedThumbnailAutoEnabled: enabled };

@@ -7,7 +7,7 @@ export const DROP_DETECTION_MODES = [
 
 const KNOWN_KEYS = new Set([
   'externalNotifications', 'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs',
-  'recordedFormat', 'recordedCommand', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
+  'recordedFormat', 'recordedCommand', 'recordedCommandSerial', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
   'recordedThumbnailAutoEnabled', 'recordingFilenamePrefixEnabled', 'recordedFolderOrganizeEnabled', 'recordedFolderOrganizeOrder',
   'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm',
   'vaapiEnabled', 'vaapiDevice', 'recordingBoundaryPolicy', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode', 'autoTsMaxRecordings',
@@ -43,6 +43,7 @@ export function setHistoryRetentionDays(config, days) {
 export function configForSave(config) {
   const result = cloneConfig(config);
   if (!Object.prototype.hasOwnProperty.call(result, 'wuiBlockGlobalAccess')) result.wuiBlockGlobalAccess = true;
+  if (!Object.prototype.hasOwnProperty.call(result, 'recordedCommandSerial')) result.recordedCommandSerial = true;
   if (!Object.prototype.hasOwnProperty.call(result, 'recordedThumbnailAutoEnabled')) result.recordedThumbnailAutoEnabled = true;
   if (!Object.prototype.hasOwnProperty.call(result, 'seriesUseSyobocal')) result.seriesUseSyobocal = true;
   return result;
@@ -78,6 +79,7 @@ const CONFIG_APPLICATION = {
   recordedDirs: application(['operator', 'wui', 'scheduler', 'history'], value => (value || []).map(item => ({ ...item, storage: storageSettings(item.storage) }))),
   recordedFormat: application(['operator', 'history']),
   recordedCommand: application(['operator'], value => value || ''),
+  recordedCommandSerial: application(['operator'], defaultOn),
   ffprobeCommand: application(['operator'], value => typeof value === 'string' && value.trim() || 'ffprobe'),
   recordedDurationProbeTimeoutMs: application(['operator'], value => Number.isFinite(Number(value)) && Number(value) > 0 ? Math.min(Math.floor(Number(value)), 0x7fffffff) : 8000),
   recordedThumbnailAutoEnabled: application(['operator'], defaultOn),
@@ -264,6 +266,9 @@ export function validateConfig(config) {
   }
   if (config.seriesUseSyobocal !== undefined && typeof config.seriesUseSyobocal !== 'boolean') {
     errors.push('seriesUseSyobocalは真偽値で指定してください。');
+  }
+  if (config.recordedCommandSerial !== undefined && typeof config.recordedCommandSerial !== 'boolean') {
+    errors.push('録画後コマンドの直列実行は真偽値で指定してください。');
   }
   if (config.recordedThumbnailAutoEnabled !== undefined && typeof config.recordedThumbnailAutoEnabled !== 'boolean') {
     errors.push('サムネイル自動作成は真偽値で指定してください。');

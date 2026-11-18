@@ -23,6 +23,7 @@
   "recordedFolderOrganizeEnabled": false,
   "recordedFolderOrganizeOrder": "filename",
   "recordedCommand": "",
+  "recordedCommandSerial": true,
   "ffprobeCommand": "ffprobe",
   "recordedDurationProbeTimeoutMs": 8000,
   "recordedNameReplaceEnclosingCharacters": true,

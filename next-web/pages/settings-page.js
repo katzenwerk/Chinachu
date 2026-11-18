@@ -557,7 +557,7 @@ export function renderSettingsPage(container) {
 
     const commands = card('録画後処理と予約照合', '録画終了後の処理と、予約ルールの照合方法を設定します。変更内容の反映条件は保存確認画面に表示されます。');
     const fields = commands.body;
-    const recordedCommand = bindValueField('recordedCommand', '録画が正常に終了した後に実行する外部コマンドです。空欄では何も実行しません。', { multiline: true, wide: true });
+    const recordedCommand = bindValueField('recordedCommand', '録画終了後、ファイルの書き込み・クローズと履歴保存が成功してから実行する外部コマンドです。録画開始後の手動中止・尻切れも対象です。空欄では何も実行しません。', { multiline: true, wide: true });
     const autoThumbnail = bindBoolean('recordedThumbnailAutoEnabled', 'サムネイル自動作成', '録画終了後のサムネイル作成と、未作成サムネイルの自動補完を行います。初期値はONです。OFFでも手動作成は利用でき、作成済み画像は削除しません。', { defaultTrue: true });
     const normalization = bindValueField('normalizationForm', '番組名や番組説明と予約ルールを照合する際に、文字の表現の違いを調整します。変更すると、ルールに一致する番組が変わる場合があります。通常はNFKCを使用します。', {
       select: [{ value: '', label: '未指定（正規化なし）' }, { value: 'NFC', label: 'NFC' }, { value: 'NFD', label: 'NFD' }, { value: 'NFKC', label: 'NFKC' }, { value: 'NFKD', label: 'NFKD' }]
@@ -574,7 +574,8 @@ export function renderSettingsPage(container) {
       };
       fields.append(bindValueField(key, descriptions[key], { compact: true }).wrap);
     });
-    commands.body.append(recordedCommand.wrap);
+    const recordedCommandSerial = bindBoolean('recordedCommandSerial', '録画後コマンドを直列実行', '初期値はONです。ONでは受付順に1件ずつ実行し、OFFでは先行コマンドの終了を待たず並列実行します。両モードとも録画開始・終了前後15秒は新規起動を待ちます。実行中コマンドの負荷は抑制しません。変更はOperator再起動後に反映されます。', { defaultTrue: true });
+    commands.body.append(recordedCommand.wrap, recordedCommandSerial.wrap);
     tab.append(destination.section, naming.section, organizing.section, drop.section, commands.section);
     return tab;
   }
