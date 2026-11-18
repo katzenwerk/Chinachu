@@ -566,8 +566,14 @@ describe('Operator recording preparation attempts', function() {
 			fixture.releaseRecordedLock();
 			fixture.start();
 			await waitForCondition(() => fixture.read('recording').length === 0 &&
-				fs.existsSync(fixture.recordedCommandLog) && /RECOVERED HISTORY: #2\b/.test(fixture.output()),
-			'unsaved history did not recover after restarting Operator', 5000);
+				/RECOVERED HISTORY: #2\b/.test(fixture.output()),
+			'unsaved history did not recover after restarting Operator', 5000, fixture);
+			// Startup JSON watchers can initially expose the old reserve to the
+			// hook guard. A scheduled wake still honors its start + 15s window.
+			// Keep the history deadline above separate from optional hook latency.
+			const hookTimeoutMs = Math.max(5000, program.start + 15000 - Date.now() + 5000);
+			await waitForCondition(() => fs.existsSync(fixture.recordedCommandLog),
+			'recovered history hook did not run after the recording guard', hookTimeoutMs, fixture);
 			const saved = fixture.read('recorded');
 			assert.strictEqual(saved.length, 2);
 			assert.deepStrictEqual(saved[0], oldHistory);
@@ -590,7 +596,7 @@ describe('Operator recording preparation attempts', function() {
 			await waitForCondition(() => fixture.read('recording').length === 0 &&
 				(fixture.output().match(/RECOVERED HISTORY: #2\b/g) || []).length > recoveredCount &&
 				fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length === 2,
-			'recovery replay did not finish', 5000);
+			'recovery replay did not finish', 5000, fixture);
 			assert.deepStrictEqual(fixture.read('recorded'), saved);
 			assert.strictEqual(fixture.requests.length, 1);
 			assert.deepStrictEqual(fixture.read('reserves'), []);
