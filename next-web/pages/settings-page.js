@@ -1466,7 +1466,7 @@ export function renderSettingsPage(container) {
 
   function render() {
     dependentUpdates.length = 0;
-    container.innerHTML = `<div class="settings-page"><div class="settings-intro"><div><h2>Chinachu設定</h2><p>Chinachuの接続先、録画、Storage、履歴、Web画面の動作を設定します。</p></div><span class="settings-change-count"></span></div><div class="settings-page-message" role="status" hidden></div><div class="settings-tabs" role="tablist" aria-label="設定カテゴリ"></div><div class="settings-content"></div><div class="settings-actions"><span>変更内容に応じた反映条件を保存確認画面に表示します。サービスは自動では再起動しません。</span><button class="button settings-discard" type="button">変更を破棄</button><button class="button primary settings-save" type="button">変更を確認して保存</button></div></div>`;
+    container.innerHTML = `<div class="settings-page"><div class="settings-intro"><div><h2>Chinachu設定</h2><p>Chinachuの接続先、録画、Storage、履歴、Web画面の動作を設定します。</p></div><div class="settings-intro-actions"><span class="settings-change-count"></span><a class="button settings-help-link" href="#help" target="_blank" rel="noopener" aria-label="設定のヘルプ（別タブで開く）">設定のヘルプ ↗</a></div></div><div class="settings-page-message" role="status" hidden></div><div class="settings-tabs" role="tablist" aria-label="設定カテゴリ"></div><div class="settings-content"></div><div class="settings-actions"><span>変更内容に応じた反映条件を保存確認画面に表示します。サービスは自動では再起動しません。</span><button class="button settings-discard" type="button">変更を破棄</button><button class="button primary settings-save" type="button">変更を確認して保存</button></div></div>`;
     const tabs = container.querySelector('.settings-tabs');
     const content = container.querySelector('.settings-content');
     TABS.forEach(([key, label]) => {

@@ -1,0 +1,58 @@
+.help-page { max-width: 1280px; min-width: 0; margin: 0 auto; display: grid; gap: 20px; line-height: 1.85; }
+.help-intro h2 { margin: 0; font-size: 24px; }
+.help-intro p { margin: 6px 0 0; color: var(--muted); }
+.help-legend,.help-toc { padding: 18px 22px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.help-legend p { margin: 0 0 8px; }
+.help-legend p:last-child { margin-bottom: 0; }
+.help-legend-note { color: var(--muted); font-size: 12px; }
+.help-toc h3 { margin: 0 0 10px; font-size: 16px; }
+.help-toc ol { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px 20px; margin: 0; padding: 0; list-style: none; }
+.help-page a { color: var(--brand-text); text-underline-offset: 3px; }
+.help-section { min-width: 0; padding: 24px; scroll-margin-top: calc(var(--header-height) + 16px); }
+.help-section > h3 { margin: 0 0 18px; padding-left: 12px; border-left: 4px solid var(--brand); font-size: 21px; }
+.help-section h4 { margin: 28px 0 12px; padding-left: 12px; border-left: 3px solid var(--border); font-size: 17px; }
+.help-section h5 { margin: 24px 0 10px; padding-left: 12px; border-left: 3px solid var(--brand); font-size: 15px; }
+.help-topic { scroll-margin-top: calc(var(--header-height) + 16px); }
+.help-chapter-toc { padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-subtle); font-size: 13px; }
+.help-section .help-chapter-toc p { margin: 0; font-weight: var(--font-heading-weight); }
+.help-section .help-chapter-toc ul { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0 0; padding: 0; list-style: none; }
+.help-chapter-toc li { max-width: 100%; }
+.help-chapter-toc .help-detail-link { font-size: 12px; }
+.help-chapter-toc a { overflow-wrap: anywhere; }
+.help-section p,.help-section ul { margin: 14px 0; }
+.help-section > :last-child { margin-bottom: 0; }
+.help-page code { font-family: ui-monospace,SFMono-Regular,Consolas,monospace; font-size: .92em; overflow-wrap: anywhere; }
+.help-page p code,.help-page li code { padding: 1px 4px; border-radius: 4px; background: var(--panel-subtle); }
+.help-page pre { max-width: 100%; overflow-x: auto; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-subtle); line-height: 1.65; }
+.help-table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.help-table-wrap table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+.help-table-wrap th,.help-table-wrap td { min-width: 150px; padding: 14px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+.help-table-wrap thead th { background: var(--panel-subtle); font-weight: var(--font-heading-weight); }
+.help-table-wrap tbody th { width: 24%; font-weight: 400; }
+.help-settings-table tbody th { width: 22%; }
+.help-settings-table td:nth-child(2) { width: 44%; }
+.help-settings-table td:nth-child(3) { width: 20%; }
+.help-settings-table td:nth-child(4) { width: 14%; }
+.help-setting-row td > p { margin: 0 0 8px; }
+.help-setting-row td > p:last-child { margin-bottom: 0; }
+.help-table-wrap tr:last-child > * { border-bottom: 0; }
+.help-wui { --help-accent: #26836b; }
+.help-config { --help-accent: #b47827; }
+.help-setting-row > th { background: color-mix(in srgb,var(--help-accent) 8%,var(--panel)); }
+.help-setting-name { display: block; padding-left: 10px; border-left: 3px solid var(--help-accent); line-height: 1.65; }
+.help-badge { display: inline-block; width: fit-content; padding: 2px 8px; border: 1px solid color-mix(in srgb,var(--help-accent) 60%,var(--border)); border-radius: 5px; background: color-mix(in srgb,var(--help-accent) 12%,var(--panel)); color: var(--text); font-size: 11px; line-height: 1.7; white-space: nowrap; }
+.help-setting-row .help-badge { margin-top: 9px; }
+.settings-intro-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+.settings-help-link { flex-shrink: 0; white-space: nowrap; text-decoration: none; }
+@media (max-width: 900px) {
+  .help-toc ol { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@media (max-width: 600px) {
+  .help-intro h2 { font-size: 20px; }
+  .help-section,.help-legend,.help-toc { padding: 16px; }
+  .help-toc ol { grid-template-columns: minmax(0,1fr); }
+  .help-section > h3 { font-size: 18px; }
+  .help-table-wrap th,.help-table-wrap td { min-width: 160px; padding: 12px; }
+  .settings-intro { flex-wrap: wrap; }
+  .settings-intro-actions { width: 100%; justify-content: space-between; }
+}

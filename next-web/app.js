@@ -13,6 +13,7 @@ import { renderCleanerPage } from './pages/cleaner-page.js';
 import { renderGuidePage } from './pages/guide-page.js';
 import { renderSearchPage } from './pages/search-page.js';
 import { renderSettingsPage } from './pages/settings-page.js';
+import { renderHelpPage } from './pages/help-page.js';
 import { renderRulesPage } from './pages/rules-page.js';
 import { renderSeriesPage } from './pages/series-page.js';
 import { invalidateResources, loadResource } from './services/api-client.js';
@@ -160,6 +161,7 @@ const routeTitles = {
   storage: 'ストレージ',
   log: 'サービスとログ',
   settings: '設定',
+  help: 'ヘルプ',
   program: '番組詳細',
   cleaner: '台帳整理'
 };
@@ -344,6 +346,10 @@ async function route() {
   }
   if (name === 'settings') {
     disposeCurrentPage = renderSettingsPage(page);
+    return;
+  }
+  if (name === 'help') {
+    disposeCurrentPage = renderHelpPage(page, query);
     return;
   }
   page.innerHTML = '<section class="panel empty-page"><h2>この画面は現在準備中です</h2></section>';

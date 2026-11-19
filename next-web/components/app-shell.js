@@ -18,6 +18,7 @@ const sprite = `
     <symbol id="icon-storage" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15h10m-2-6h2"/></symbol>
     <symbol id="icon-log" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM9 8h6m-6 4h6m-6 4h4"/></symbol>
     <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M10 2h4l1 3 3 1 3-1 2 4-2 2v2l2 2-2 4-3-1-3 1-1 3h-4l-1-3-3-1-3 1-2-4 2-2v-2L1 9l2-4 3 1 3-1z"/></symbol>
+    <symbol id="icon-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></symbol>
     <symbol id="icon-menu" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18m3-13h6m-6 4h6m-6 4h6"/></symbol>
     <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/></symbol>
     <symbol id="icon-options" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16M8 3v6m8 0v6m-5 0v6"/></symbol>
@@ -128,7 +129,7 @@ export function createAppShell(root) {
         <div class="sidebar-separator"></div>
         <nav class="sidebar-nav">${adminItems.map(navItem).join('')}<a class="nav-item mobile-only" href="#cleaner" data-route="cleaner">${icon('storage')}<span class="nav-label">台帳整理</span></a></nav>
         <button class="button mobile-drawer-close mobile-only" type="button">メニューを閉じる</button>
-        <div class="sidebar-bottom"><div class="sidebar-separator"></div>${navItem(['settings','settings','設定'])}</div>
+        <div class="sidebar-bottom"><div class="sidebar-separator"></div><a class="nav-item" href="#help" target="_blank" rel="noopener" data-route="help" title="ヘルプ（別タブで開く）">${icon('help')}<span class="nav-label">ヘルプ ↗</span></a>${navItem(['settings','settings','設定'])}</div>
       </aside></div>
       <main class="main-content">
         <div class="mobile-page-toolbar"></div>
