@@ -109,8 +109,7 @@ const config = require(CONFIG_FILE);
 
 // settings
 const schedulerIntervalTime = 1000 * 60 * 10;// 最長10分毎
-const prepTime = getHandoffPrepMillis();// 録画開始前の準備猶予
-const endLackMaxSeconds = getEndLackMaxSeconds();// LACKで削ってよい最大秒数
+const prepTime = getHandoffPrepMillis();// 録画開始前の準備猶予・末尾短縮の共通上限（ms）
 const recordingExpireGraceTime = 1000 * 60 * 5;// 終了後5分で録画中固着を掃除
 const recordingPriority = config.recordingPriority || 2;
 const conflictedPriority = config.conflictedPriority || 1;
@@ -171,27 +170,15 @@ const BROADCAST_CLOCK_SLOT_MINUTES = [ 40, 42, 44, 46, 48 ];
 
 
 // 録画境界の準備猶予を取得する
-// 未指定時は従来互換の20秒、指定時は0〜60秒の範囲で使用する
+// 未指定時は10秒、指定時は0〜60秒の範囲で使用する
 function getHandoffPrepMillis() {
 	const seconds = Number(config.handoffPrepSeconds);
 
 	if (!Number.isFinite(seconds) || seconds < 0) {
-		return 1000 * 20;
+		return 1000 * 10;
 	}
 
 	return Math.min(seconds, 60) * 1000;
-}
-
-// LACKで削ってよい最大秒数を取得する
-// 未指定時は30秒、指定時も0〜60秒の範囲に丸める。
-function getEndLackMaxSeconds() {
-	const seconds = Number(config.endLackMaxSeconds);
-
-	if (!Number.isFinite(seconds) || seconds < 0) {
-		return 30;
-	}
-
-	return Math.min(seconds, 60);
 }
 
 // 録画開始前HDD起動秒数を取得する
@@ -2329,7 +2316,7 @@ function getHandoffEndLackCandidateInfo(nextProgram, tuners = null) {
 		if (typeof currentType !== 'string' || !currentType || typeof nextType !== 'string' || !nextType) {
 			continue;
 		}
-		if (remainSeconds <= endLackMaxSeconds) {
+		if (remainSeconds <= prepTime / 1000) {
 			if (tuners === null) { needsTunerInfo = true; continue; }
 			if (!canHandoffTuner(current, nextType, tuners)) continue;
 			if (!candidate || Number(boundaryOverride(current)) < Number(boundaryOverride(candidate)) ||
@@ -2362,7 +2349,7 @@ function logHandoffEndLackSkip(info, nextProgram) {
 
 	operatorLog('HANDOFF END LACK SKIP: tuner shortage but candidate remains ' +
 		formatSecondsForLog(info.skippedRemainSeconds) + ', over limit ' +
-		formatSecondsForLog(endLackMaxSeconds) + ': ' +
+		formatSecondsForLog(prepTime / 1000) + ': ' +
 		printProgram(info.skipped) + (nextProgram ? ' -> ' + printProgram(nextProgram) : ''));
 }
 

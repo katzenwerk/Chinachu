@@ -42,6 +42,7 @@ export function setHistoryRetentionDays(config, days) {
 
 export function configForSave(config) {
   const result = cloneConfig(config);
+  delete result.endLackMaxSeconds;
   if (!Object.prototype.hasOwnProperty.call(result, 'wuiBlockGlobalAccess')) result.wuiBlockGlobalAccess = true;
   if (!Object.prototype.hasOwnProperty.call(result, 'recordedCommandSerial')) result.recordedCommandSerial = true;
   if (!Object.prototype.hasOwnProperty.call(result, 'recordedThumbnailAutoEnabled')) result.recordedThumbnailAutoEnabled = true;
@@ -94,7 +95,7 @@ const CONFIG_APPLICATION = {
   recordingBoundaryPolicy: application(['operator'], value => value === 'start' ? 'start' : 'end'),
   recordingPriority: application(['operator'], value => value || 2),
   conflictedPriority: application(['operator'], value => value || 1),
-  handoffPrepSeconds: application(['operator'], value => Number.isFinite(Number(value)) && Number(value) >= 0 ? Math.min(Number(value), 60) : 20),
+  handoffPrepSeconds: application(['operator'], value => Number.isFinite(Number(value)) && Number(value) >= 0 ? Math.min(Number(value), 60) : 10),
   dropDetectionMode: application(['operator'], value => {
     const mode = typeof value === 'string' ? value.trim().toLowerCase() : '';
     return ['mirakurun', 'ts', 'both', 'file', 'mirakurun-file', 'off'].includes(mode) ? mode : 'mirakurun';
@@ -128,6 +129,7 @@ const CONFIG_APPLICATION = {
 export function configApplicationEffects(before, after) {
   const effects = { operator: false, wui: false, scheduler: false, history: false, immediate: false, connectionChanged: false, unknown: [] };
   for (const change of configChanges(before, after)) {
+    if (change.key === 'endLackMaxSeconds') continue; // Removing the retired key has no runtime effect.
     const entry = CONFIG_APPLICATION[change.key];
     if (!entry) { effects.unknown.push(change.key); continue; }
     if (sameValue(entry.effective(change.before, before), entry.effective(change.after, after))) continue;
@@ -151,7 +153,7 @@ export function configApplicationMessages(effects) {
 }
 
 export function unknownConfigKeys(config) {
-  return Object.keys(config || {}).filter(key => !KNOWN_KEYS.has(key)).sort();
+  return Object.keys(config || {}).filter(key => key !== 'endLackMaxSeconds' && !KNOWN_KEYS.has(key)).sort();
 }
 
 export function setConfigValue(config, key, value, options = {}) {
@@ -334,6 +336,7 @@ export function formatChangeValue(value, removed = false, key) {
 
 export function configPreview(config) {
   const result = cloneConfig(config);
+  delete result.endLackMaxSeconds;
   if (result.externalNotifications) {
     for (const route of Object.values(result.externalNotifications.routes)) {
       for (const key of ['webhook', 'token', 'user', 'password']) delete route[key];

@@ -56,7 +56,7 @@ const FIELD = {
   ] },
   recordingPriority: { label: '通常録画の優先度', type: 'number', integer: true },
   conflictedPriority: { label: '競合録画の優先度', type: 'number', integer: true },
-  handoffPrepSeconds: { label: 'チューナー引継ぎ準備時間', type: 'number', min: 0 },
+  handoffPrepSeconds: { label: 'チューナー引継ぎ時間', type: 'number', min: 0 },
   dropDetectionMode: { label: 'DROP検出方式', type: 'text', select: DROP_DETECTION_MODES },
   autoTsMaxRecordings: { label: '解析を許可する同時録画数', type: 'number', integer: true, min: 0 },
   recordedStorageWakeupBeforeSec: { label: '録画先HDDの事前起動', type: 'number', integer: true, min: 0 },
@@ -570,7 +570,7 @@ export function renderSettingsPage(container) {
       const descriptions = {
         recordingPriority: 'Mirakurunに通常録画を要求する際の優先度です。値が大きい要求が優先され、0を指定すると既定値の2が使われます。',
         conflictedPriority: '予約競合がある番組を録画する際の優先度です。通常録画より低くすると通常録画を優先でき、0を指定すると既定値の1が使われます。',
-        handoffPrepSeconds: '次の録画を開始するための準備時間です。チューナーに空きがあれば早めに録画を開始し、空きがない場合は前の録画の末尾が短くなることがあります。'
+        handoffPrepSeconds: '取得準備を始める秒数と、前番組の末尾を短縮できる秒数の共通設定です。未指定時は10秒、0〜60秒の範囲で使用します。番組開始の指定秒数前から取得を試み、ストリーム取得成功後に録画を開始します。チューナー不足時に前番組の残りが指定秒数以内なら、開始・終了優先とルールの優先保護などの条件に従って短縮候補にします。'
       };
       fields.append(bindValueField(key, descriptions[key], { compact: true }).wrap);
     });

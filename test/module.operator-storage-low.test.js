@@ -26,7 +26,7 @@ async function assertHandoffBehavior(source) {
 	const next = { id: 'E', end: now + 60000, channel: { type: 'GR', channel: 'E', sid: 'E' }, recordingHandoffProtected: true };
 	const tuners = rows.map(row => ({ types: ['GR', 'BS'], users: [{ url: row.mirakurunStreamPath }] }));
 	const context = vm.createContext({ config: { recordingBoundaryPolicy: 'start' }, clock: now,
-		endLackMaxSeconds: 20, recording: rows, reservationStore: require('../lib/reservation-store'),
+		prepTime: 20000, recording: rows, reservationStore: require('../lib/reservation-store'),
 		shutdownStarted: false, handoffEndLackUsed: new Set(), reserves: [next],
 		recordingAttempt: require('../lib/recording-attempt'), recordingPriority: 2, conflictedPriority: 1,
 		ensureRecordingDestinationHealthy: () => true, getResumableInterruptedRecording: () => null,

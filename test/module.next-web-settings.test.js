@@ -24,7 +24,7 @@ test('settings model preserves unknown and untouched values while validating exp
 		recordedFolderOrganizeEnabled: false, recordedFolderOrganizeOrder: 'filename',
 		storageLowSpaceThresholdMB: 3000, storageLowSpaceAction: 'stop',
 		storageLowSpaceWarningThresholdMB: 0, storageLowSpaceWarningIntervalMinutes: 180,
-		storageLowSpaceCriticalNotifyIntervalMinutes: 180, handoffPrepSeconds: 20,
+		storageLowSpaceCriticalNotifyIntervalMinutes: 180, handoffPrepSeconds: 10,
 		matchRetentionDays: 365, reserves2RetentionDays: 365, recordedHistoryRetentionDays: 365,
 		recordedStorage: { protectRootFilesystem: false }, broadcastClockIntervalHours: 3,
 		recordingBoundaryPolicy: 'end', recordingPriority: 2, conflictedPriority: 1,
@@ -57,6 +57,7 @@ test('settings model preserves unknown and untouched values while validating exp
 	assert.deepStrictEqual(model.configApplicationMessages(effects({}, { externalNotifications: {} })), []);
 	const original = {
 		recordedDir: '/recorded',
+		handoffPrepSeconds: 20, endLackMaxSeconds: 30,
 		recordedDurationProbeTimeoutMs: '8000',
 		customFutureSetting: { enabled: true },
 		recordedStorage: { expectedMount: '/recorded', custom: 'keep-default' },
@@ -68,6 +69,23 @@ test('settings model preserves unknown and untouched values while validating exp
 	assert.strictEqual(draft.recordedDurationProbeTimeoutMs, 9000);
 	assert.deepStrictEqual(draft.customFutureSetting, { enabled: true });
 	assert.deepStrictEqual(model.unknownConfigKeys(draft), ['customFutureSetting']);
+	const saved = model.configForSave(original);
+	assert.ok(!Object.hasOwn(saved, 'endLackMaxSeconds'));
+	assert.ok(!Object.hasOwn(model.configPreview(original), 'endLackMaxSeconds'));
+	assert.deepStrictEqual(saved.customFutureSetting, original.customFutureSetting);
+	assert.deepStrictEqual(saved.recordedDirs, original.recordedDirs);
+	assert.deepStrictEqual(saved.recordedStorage, original.recordedStorage);
+	assert.strictEqual(saved.recordedDurationProbeTimeoutMs, '8000');
+	assert.strictEqual(saved.handoffPrepSeconds, 20);
+	assert.strictEqual(original.endLackMaxSeconds, 30);
+	const changedHandoff = model.configForSave({ ...original, handoffPrepSeconds: 10 });
+	assert.strictEqual(changedHandoff.handoffPrepSeconds, 10);
+	assert.ok(!Object.hasOwn(changedHandoff, 'endLackMaxSeconds'));
+	const retiredOnly = model.configForSave({ endLackMaxSeconds: 60 });
+	assert.ok(!Object.hasOwn(retiredOnly, 'handoffPrepSeconds'));
+	assert.deepStrictEqual(model.configApplicationMessages(effects({ endLackMaxSeconds: 60 }, retiredOnly)), []);
+	assert.strictEqual(effects({}, { handoffPrepSeconds: 20 }).operator, true);
+	assert.strictEqual(model.configForSave({ handoffPrepSeconds: 0 }).handoffPrepSeconds, 0);
 
 	const dirs = model.normalizeRecordedDirs([{
 		original: original.recordedDirs[0], id: 'one', name: 'One renamed', path: '/one', protectRootFilesystem: true

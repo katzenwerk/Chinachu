@@ -34,7 +34,7 @@
   "recordingPriority": 2,
   "conflictedPriority": 1,
   "dropDetectionMode": "mirakurun",
-  "handoffPrepSeconds": 20,
+  "handoffPrepSeconds": 10,
   "broadcastClockEnabled": false,
   "broadcastClockIntervalHours": 3,
   "broadcastClockGrChannel": null,
