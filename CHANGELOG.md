@@ -1,3 +1,29 @@
+# Chinachu 0.10.7-thorn.41
+
+## Web UI and Settings
+
+- Reorganize Settings with clearer application and restart requirements, a manual WUI restart action, and a new in-app help page covering configuration options.
+- Simplify history retention settings, improve service exclusion and ordering controls, and move advanced filename replacement and ffprobe options to `config.json`. Preserve existing retention values until edited.
+- Improve dark-mode appearance with muted genre backgrounds in the programme guide and clearer storage warnings on Home.
+- Refine Home recording-card metadata and playback action layout.
+
+## Recording and Post-processing
+
+- Add `<fulltitle2>` to remove unnecessary technical broadcast markers while retaining programme flags and episode information, and `<channel-code>` to identify GR physical channels or BS/CS service IDs.
+- Improve post-recording command execution by waiting for file closure and history saving, running commands serially by default, and deferring new commands during recording handoff protection periods. Add `recordedCommandSerial` and sample scripts, including an Amatsukaze task-submission example.
+- Unify recording handoff preparation and tail-shortening limits under `handoffPrepSeconds`, changing the default to 10 seconds and retiring `endLackMaxSeconds`.
+
+## Data Management and Reliability
+
+- Standardize MATCH ledger updates on schema v2, with backup and migration of legacy data and safeguards against overwriting existing history.
+- Fix an Operator startup race that could overwrite recovered recording history and cause duplicate recording attempts.
+- Initialize missing recording rules as an empty list and align sample history retention settings with the existing 365-day defaults.
+
+## Notifications
+
+- Add WUI-managed command notifications using structured JSON input. Saving the new command route replaces legacy command delivery, which is not automatically restored when the route is disabled.
+- Improve recording notifications with scheduled broadcast times, channel information, and clearer missed-recording messages.
+
 # Chinachu 0.10.7-thorn.40
 
 ## Web UI
