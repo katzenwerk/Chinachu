@@ -316,20 +316,40 @@ describe('notification behavior contracts', function() {
 		notifier.finish('failure', program, 'NG RECORDING'); await drain();
 		notifier.outcomes([{ schemaVersion: 2, key, status: 'MISSED', start: 1000 }]); await drain();
 		assert.strictEqual(delivered.length, 5);
+		const missedStart = Date.UTC(2026, 10, 18, 14, 0);
+		const missedKey = resolver.makeCanonicalKey({ ...program, start: missedStart });
+		fs.writeFileSync(path.join(temporaryDir, 'data/schedule.json'), JSON.stringify([
+			{ id: program.channel.id, name: 'Fixture Station', programs: [] }
+		]));
+		const outcomes = [{ schemaVersion: 2, key, status: 'MISSED', start: 1000 },
+			{ schemaVersion: 2, key: missedKey, status: 'MISSED', fullTitle: 'Missed Fixture' }];
+		notifier.outcomes(outcomes); await drain();
+		assert.strictEqual(delivered.length, 6);
+		assert.match(delivered.at(-1), /未録画を検出しました/);
+		assert.match(delivered.at(-1), /検出日時: .* JST/);
+		assert.match(delivered.at(-1), /番組: Missed Fixture/);
+		assert.match(delivered.at(-1), /チャンネル: Fixture Station/);
+		assert.match(delivered.at(-1), /放送予定: 2026\/11\/18 23:00:00 JST ～ 2026\/11\/18 23:01:00 JST/);
+		assert.match(delivered.at(-1), /録画結果: 未録画（MISSED）/);
+		notifier.outcomes(outcomes); await drain();
+		assert.strictEqual(delivered.length, 6);
+		const fallback = external.message('failure', { status: 'MISSED', channel: { id: 'unknown-channel' } }, '未録画', missedStart);
+		assert.match(fallback.text, /チャンネル: ID: unknown-channel/);
+		assert.match(fallback.text, /放送予定: 不明 ～ 不明/);
 		const analysis = { status: 'SUSPECT', completed: true, ccErrorEvents: 2, ccErrorsByPid: { 100: 2 }, elapsedMs: 100 };
 		await external.notifyAnalysis(temporaryDir, program, analysis, null, { ...dependencies, log });
-		assert.strictEqual(delivered.length, 6);
+		assert.strictEqual(delivered.length, 7);
 		assert.match(delivered.at(-1), /疑い/);
 		await external.notifyAnalysis(temporaryDir, program, { ...analysis, elapsedMs: 200 }, analysis, { ...dependencies, log });
-		assert.strictEqual(delivered.length, 6);
-		await external.notifyAnalysis(temporaryDir, program, { status: 'NO_FINDINGS', completed: true }, analysis, { ...dependencies, log });
-		assert.strictEqual(delivered.length, 6);
-		await external.notifyAnalysis(temporaryDir, program, { status: 'ERROR', completed: false, error: 'fixture error' }, analysis, { ...dependencies, log });
 		assert.strictEqual(delivered.length, 7);
+		await external.notifyAnalysis(temporaryDir, program, { status: 'NO_FINDINGS', completed: true }, analysis, { ...dependencies, log });
+		assert.strictEqual(delivered.length, 7);
+		await external.notifyAnalysis(temporaryDir, program, { status: 'ERROR', completed: false, error: 'fixture error' }, analysis, { ...dependencies, log });
+		assert.strictEqual(delivered.length, 8);
 		fs.writeFileSync(path.join(temporaryDir, 'data/external-notification-state.json'), '{invalid');
 		const stateLogs = [];
 		external.createNotifier(temporaryDir, line => stateLogs.push(line), dependencies).conflicts([program]); await drain();
-		assert.strictEqual(delivered.length, 7);
+		assert.strictEqual(delivered.length, 8);
 		assert.strictEqual(stateLogs.length, 1);
 		assert.strictEqual(fs.readFileSync(path.join(temporaryDir, 'data/external-notification-state.json'), 'utf8'), '{invalid');
 	});
