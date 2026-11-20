@@ -10,7 +10,6 @@ import {
 import { buildRecordedResultModels } from '../services/recorded-result-model.js';
 import { hasRecordedResultWarnings } from '../services/recorded-result-warnings.js';
 import { buildRecordedCardModels, createRecordedCard } from '../components/recorded-card.js';
-import { buildRecordedResultsCsv, recordedResultsCsvFilename } from '../services/recorded-results-csv.js';
 import { openRecordedPlaybackOverlay } from '../services/live-player-adapter.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { deleteRecordedFromContext } from '../services/recorded-delete-action.js';
@@ -75,18 +74,6 @@ function appendUnique(target, additions) {
   return target;
 }
 
-function downloadCsv(text, filename) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.hidden = true;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
 export function renderRecordedPage(container, query = new URLSearchParams(), { setHeaderActions = () => {} } = {}) {
   let active = true;
   let search = query.get('search') || '';
@@ -107,12 +94,10 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   let totalPages = 0;
   let loading = false;
   let refreshing = false;
-  let exporting = false;
   let searchComposing = false;
   let searchTimer = null;
   let requestSequence = 0;
   let requestController = null;
-  let exportController = null;
   let refreshPromise = null;
   let refreshQueued = false;
   let autoLoadArmed = false;
@@ -144,11 +129,10 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
                 <label class="recorded-results-ts-option"><input type="checkbox" value="tsIssues"><span>DROP／TS異常ありのみ</span></label>
               </div>
             </div>
-            <button class="button recorded-results-csv" type="button">CSV出力</button>
 	            <button class="button recorded-results-cleaner" type="button">台帳整理</button>
             <span class="reserves-count" aria-label="録画結果件数">--</span>
           </div>
-          <p class="reserves-jump-feedback recorded-results-export-feedback" role="status" hidden></p>
+          <p class="reserves-jump-feedback recorded-results-action-feedback" role="status" hidden></p>
           <div class="reserves-rule-filter" hidden><span></span><a href="#recorded">絞り込みを解除</a></div>
         </div>
       </div>
@@ -162,19 +146,19 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   container.replaceChildren(page);
 
   // Move the existing controls into the shared green header without rebuilding them.
-  // Keep export feedback and scoped-filter status in the content area.
+  // Keep action feedback and scoped-filter status in the content area.
   const controls = page.querySelector('.reserves-controls');
   const toolbar = controls.querySelector('.recorded-results-toolbar');
-  const exportFeedback = controls.querySelector('.recorded-results-export-feedback');
+  const actionFeedback = controls.querySelector('.recorded-results-action-feedback');
   const ruleFilter = controls.querySelector('.reserves-rule-filter');
-  controls.replaceWith(exportFeedback, ruleFilter);
+  controls.replaceWith(actionFeedback, ruleFilter);
 
   const headerToolbar = document.createElement('div');
   headerToolbar.className = 'recorded-header-toolbar';
   headerToolbar.innerHTML = '<details class="recorded-header-controls" open><summary>録画結果操作</summary><div class="recorded-header-content"></div></details>';
   const headerControls = headerToolbar.querySelector('.recorded-header-controls');
   headerToolbar.querySelector('.recorded-header-content').append(toolbar);
-  // Search -> filter -> result count -> view switch -> export/maintenance.
+  // Search -> filter -> result count -> view switch -> maintenance.
   const viewSwitch = toolbar.querySelector('.recorded-view-switch');
   toolbar.insertBefore(toolbar.querySelector('.recorded-results-filter'), viewSwitch);
   toolbar.insertBefore(toolbar.querySelector('.reserves-count'), viewSwitch);
@@ -194,7 +178,6 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   const filterLabel = filterTrigger.querySelector('span');
   attentionOption.title = ATTENTION_DESCRIPTION;
   attentionInput.setAttribute('aria-label', '注意ありのみ（削除済み・スキップ・DROP／TS異常のみを除く）');
-  const csvButton = toolbar.querySelector('.recorded-results-csv');
   const cleanerButton = toolbar.querySelector('.recorded-results-cleaner');
   const content = page.querySelector('.reserves-list-content');
   const listRenderer = createReservationListRenderer(content);
@@ -614,53 +597,9 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     }, SEARCH_DELAY_MS);
   }
 
-  async function exportCsv() {
-    if (exporting || !isActive()) return;
-    window.clearTimeout(searchTimer);
-    if (searchInput.value !== search) {
-      search = searchInput.value;
-      await loadPage(true);
-    }
-    exporting = true;
-    csvButton.disabled = true;
-    csvButton.textContent = 'CSV作成中…';
-    exportFeedback.hidden = true;
-    const controller = new AbortController();
-    exportController = controller;
-    try {
-      if (storageToken !== null && storageData === null) {
-        const data = await loadResource('storage');
-        if (!Array.isArray(data?.storages)) throw new Error('Storage API response is invalid');
-        storageData = data;
-      }
-      const exportItems = await loadScopedResults({
-        search,
-        ruleUid,
-        results: resultValues(),
-        tsIssues: tsIssuesOnly,
-        signal: controller.signal
-      });
-      if (!isActive()) return;
-      downloadCsv(buildRecordedResultsCsv(exportItems), recordedResultsCsvFilename());
-      exportFeedback.textContent = `${exportItems.length}件をCSVへ出力しました`;
-      exportFeedback.hidden = false;
-    } catch (error) {
-      if (!isActive() || error?.name === 'AbortError') return;
-      exportFeedback.textContent = `CSVを出力できませんでした: ${String(error?.message || error)}`;
-      exportFeedback.hidden = false;
-    } finally {
-      if (exportController === controller) exportController = null;
-      exporting = false;
-      if (isActive()) {
-        csvButton.disabled = false;
-        csvButton.textContent = 'CSV出力';
-      }
-    }
-  }
-
   function showContextError(error) {
-    exportFeedback.textContent = `操作できませんでした: ${String(error?.message || error)}`;
-    exportFeedback.hidden = false;
+    actionFeedback.textContent = `操作できませんでした: ${String(error?.message || error)}`;
+    actionFeedback.hidden = false;
   }
 
   function applyContextFilter(action, item) {
@@ -762,8 +701,8 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
             viewStates.card.loaded = false;
             await requestDynamicRefresh();
             if (result.storageRefreshError) {
-              exportFeedback.textContent = `録画ファイルは削除しましたが、容量表示の更新に失敗しました: ${result.storageRefreshError}`;
-              exportFeedback.hidden = false;
+              actionFeedback.textContent = `録画ファイルは削除しましたが、容量表示の更新に失敗しました: ${result.storageRefreshError}`;
+              actionFeedback.hidden = false;
             }
           })
           .catch(showContextError);
@@ -872,7 +811,6 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     if (initialPageLoaded) renderItems();
     else loadPage(true);
   }));
-  csvButton.addEventListener('click', exportCsv);
   moreButton.addEventListener('click', () => {
     autoLoadBlocked = false;
     loadPage(false);
@@ -909,7 +847,6 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     active = false;
     listRenderer.dispose();
     requestController?.abort();
-    exportController?.abort();
     window.clearTimeout(searchTimer);
     compactHeader.removeEventListener('change', syncHeaderLayout);
     document.removeEventListener('pointerdown', closeHeaderOnOutsideClick);

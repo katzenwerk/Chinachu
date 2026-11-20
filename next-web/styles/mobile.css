@@ -63,7 +63,7 @@
   .mobile-page-toolbar .recorded-header-toolbar { display: block; }
   .mobile-page-toolbar .recorded-results-toolbar { display: flex; justify-content: flex-start; }
   .mobile-page-toolbar .recorded-results-toolbar > .reserves-count { flex: 1 1 100%; color: var(--muted); }
-  .mobile-page-toolbar .recorded-results-toolbar > .recorded-results-csv,.mobile-page-toolbar .recorded-results-toolbar > .recorded-results-cleaner { width: auto; }
+  .mobile-page-toolbar .recorded-results-toolbar > .recorded-results-cleaner { width: auto; }
   .mobile-page-toolbar .recorded-results-toolbar > .recorded-results-filter { width: auto; margin-left: 0; }
   .mobile-page-toolbar .recorded-header-toolbar .recorded-results-toolbar > .reserves-search { order: 5; flex: 1 1 100%; }
   .mobile-page-toolbar .recorded-header-toolbar .recorded-results-toolbar > .recorded-results-filter { order: 4; }
