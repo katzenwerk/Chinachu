@@ -2,6 +2,12 @@ import { applyCleanerPlan, loadCleanerState, startCleanerScan } from '../service
 
 let currentDialog = null;
 
+const MISSING_POLICIES = [
+  ['report', '確認結果だけを表示する', '録画ファイルの所在を確認し、結果を表示します。台帳は変更しません。'],
+  ['keep-history', '履歴を残して「行方不明」にする', '見つからない録画を「行方不明」として記録し、履歴は保持します。'],
+  ['remove-history', '不在の録画と対象の過去履歴を台帳から削除する', '見つからない録画の台帳記録と、条件に合う削除済み・スキップ履歴を削除します。録画ファイル自体は削除しません。']
+];
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -69,7 +75,7 @@ export function openCleanerDialog() {
       <fieldset class="cleaner-dialog-options"><legend>オプション</legend>
         <label><input data-cleaner-location-check type="checkbox" ${checkLocations ? 'checked' : ''}><span><strong>録画ファイルの所在確認</strong><small>登録録画フォルダを走査し、recorded.json と実ファイルを照合</small></span></label>
         <label><input data-cleaner-path-repair type="checkbox" ${pathRepair ? 'checked' : ''} ${checkLocations && missingPolicy !== 'report' ? '' : 'disabled'}><span><strong>録画ファイルのパス修復</strong><small>別フォルダで一意に見つかった同名録画の台帳パスを修復</small></span></label>
-        <label><span><strong>不在時の履歴の扱い</strong><select data-cleaner-policy>${[['report','報告のみ'],['keep-history','履歴を保持して行方不明を記録'],['remove-history','従来の条件で履歴を整理']].map(([value,label]) => `<option value="${value}" ${missingPolicy === value ? 'selected' : ''}>${label}</option>`).join('')}</select></span></label>
+        <label class="cleaner-dialog-policy"><span><strong>録画が見つからない場合の処理</strong><select data-cleaner-policy aria-describedby="cleaner-policy-description">${MISSING_POLICIES.map(([value,label]) => `<option value="${value}" ${missingPolicy === value ? 'selected' : ''}>${label}</option>`).join('')}</select><small id="cleaner-policy-description">${MISSING_POLICIES.find(([value]) => value === missingPolicy)[2]}</small></span></label>
         <label class="cleaner-dialog-suboption"><input data-cleaner-cleanup-missed type="checkbox" ${cleanupMissed ? 'checked' : ''} ${cleanupMissing ? '' : 'disabled'}><span><strong>録画実績のない過去予約も整理する</strong><small>停電・容量不足・録画処理の失敗などにより、録画実績が残っていない過去予約を整理します。原因が不明なものも含みます。</small></span></label>
       </fieldset>
       <details class="cleaner-dialog-roots"><summary>対象フォルダを確認</summary>${roots.map(root => `<code>${escapeHtml(root.path)}</code>`).join('') || '<p>登録録画フォルダがありません。</p>'}</details>

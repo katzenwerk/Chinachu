@@ -62,6 +62,8 @@
 .cleaner-dialog-options legend { padding: 0 6px; font-weight: var(--font-title-weight); }
 .cleaner-dialog-options label { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: start; gap: 10px; padding: 10px; border-radius: var(--radius-sm); background: var(--panel-subtle); cursor: pointer; }
 .cleaner-dialog-options label.cleaner-dialog-suboption { margin-left: 28px; }
+.cleaner-dialog-options label.cleaner-dialog-policy { grid-template-columns: minmax(0,1fr); }
+.cleaner-dialog-policy select { width: 100%; min-width: 0; }
 .cleaner-dialog-options input { margin-top: 3px; }
 .cleaner-dialog-options label span { display: grid; gap: 3px; }
 .cleaner-dialog-options small,.cleaner-dialog-note,.cleaner-dialog-empty { color: var(--muted); font-size: 12px; }
