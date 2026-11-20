@@ -45,7 +45,7 @@ function fixture() {
 	};
 }
 
-test('monthly CSV is activation-bounded, classified, escaped, immutable, and idempotent', function () {
+test('monthly CSV is activation-bounded, classified, escaped, supplemented without changing outcomes, and idempotent', async function () {
 	const subject = fixture();
 	try {
 		const enabledAt = jstTimestamp(2026, 1, 1, 0, 0);
@@ -107,6 +107,52 @@ test('monthly CSV is activation-bounded, classified, escaped, immutable, and ide
 		assert.ok(!original.includes('canceled'));
 		assert.ok(!original.includes('/recorded/old.m2ts'));
 		assert.strictEqual(rows[5][6], ''); // No recorded.json row; match-only path is not a fallback.
+
+		// Legacy reason files keep all historical fields while migrating to remarks.
+		fs.writeFileSync(csvFile, original.replace(',remarks,', ',reason,'));
+		ok.mirakurunDrop = { dropTotal: 12 };
+		assert.strictEqual(history.exportHistory(options).updated, 1);
+		assert.strictEqual(history.readFile(subject.outputDir, path.basename(csvFile)).rows[0][5], 'DROPあり（12）');
+		ok.savedTsAnalysis = { checkedAt: options.nowMs, result: { completed: true, status: 'SUSPECT', ccErrorEvents: 3 } };
+		assert.strictEqual(history.exportHistory(options).updated, 1);
+		let supplemented = history.readFile(subject.outputDir, path.basename(csvFile));
+		assert.strictEqual(supplemented.legacy, false);
+		assert.strictEqual(supplemented.rows[0][5], 'DROPあり（3）'); // TS wins; never add 12 + 3.
+		assert.deepStrictEqual(supplemented.rows[0].slice(0, 5), rows[1].slice(0, 5));
+		assert.strictEqual(supplemented.rows[0][6], rows[1][6]);
+		assert.deepStrictEqual(history.listFiles(subject.outputDir), [path.basename(csvFile)]);
+		assert.throws(() => history.readFile(subject.outputDir, '../outside.csv'), /invalid CSV filename/);
+
+		// A completed zero replaces Mirakurun findings; an incomplete retry does not.
+		ok.savedTsAnalysis.result = { completed: true, status: 'NO_FINDINGS', ccErrorEvents: 0 };
+		history.exportHistory(options);
+		assert.strictEqual(history.readFile(subject.outputDir, path.basename(csvFile)).rows[0][5], '');
+		ok.savedTsAnalysis.result = { completed: false, status: 'ERROR' };
+		history.exportHistory(options);
+		assert.strictEqual(history.readFile(subject.outputDir, path.basename(csvFile)).rows[0][5], '');
+
+		// Missing and deleted recordings freeze the saved row, even with newer findings.
+		ok.savedTsAnalysis.result = { completed: true, status: 'SUSPECT', ccErrorEvents: 99 };
+		const okMatch = matches.find(row => row.key === match(ok, 'RECORDED').key);
+		okMatch.fileMissing = { recordedId: ok.id, checkedAt: options.nowMs };
+		const frozen = fs.readFileSync(csvFile, 'utf8');
+		history.exportHistory(options);
+		assert.strictEqual(fs.readFileSync(csvFile, 'utf8'), frozen);
+		delete okMatch.fileMissing;
+		okMatch.deletion = { deletedAt: options.nowMs, reason: 'manual' };
+		history.exportHistory(options);
+		assert.strictEqual(fs.readFileSync(csvFile, 'utf8'), frozen);
+
+		// The post-analysis hook reads current ledgers and changes only existing CSV rows.
+		delete okMatch.deletion;
+		for (const [filename, value] of [['recorded', options.recordedList], ['match', matches], ['recording', []]]) {
+			fs.writeFileSync(path.join(subject.root, 'data', filename + '.json'), JSON.stringify(value));
+		}
+		await history.refreshAnalysis(subject.root, { recordingResultCsvEnabled: true });
+		supplemented = history.readFile(subject.outputDir, path.basename(csvFile));
+		assert.strictEqual(supplemented.rows[0][5], 'DROPあり（99）');
+		assert.strictEqual(supplemented.rows.length, 5);
+		assert.deepStrictEqual(supplemented.rows.map(row => row[4]), rows.slice(1).map(row => row[4]));
 
 		options.recordedList = [active];
 		const recovery = history.exportHistory(options);

@@ -1040,21 +1040,12 @@ function main() {
 		recordedList = ledger.sourceRecordedList;
 		reserves2List = ledger.sourceReserves2List;
 
-		// Do not write back the snapshot used to build match: recordings may have
-		// finished (or acquired duration metadata) while this process was running.
-		// Never hold the match lock while acquiring the recorded lock.
-		cleanup = reservationStore.withLock(options.recorded, function () {
-			var latest = reservationStore.readArray(options.recorded);
-			var result = cleanupRecordedHistory(latest, options.recordedHistoryDays, options.nowMs);
-			if (result.enabled && result.removedCount > 0) {
-				reservationStore.writeArrayAtomic(options.recorded, result.kept);
-			}
-			return result;
-		});
-
+		var csvSaveFailed = false;
+		var csvFailedFiles = new Set();
 		try {
 			var historyResult = recordingHistoryCsv.exportHistory({
 				enabled: config.recordingResultCsvEnabled === true,
+				ledgerFiles: { recorded: options.recorded, match: options.output, recording: options.recording },
 				outputDir: path.join(path.dirname(options.config), "data", "csv"),
 				stateFile: path.join(path.dirname(options.config), "data", "recording-history-csv-state.json"),
 				nowMs: options.nowMs,
@@ -1068,9 +1059,37 @@ function main() {
 			} else if (historyResult.appended > 0) {
 				console.log("RECORDING_HISTORY_CSV appended=" + historyResult.appended + " files=" + historyResult.files.length);
 			}
+			csvFailedFiles = new Set(historyResult.failedFiles || []);
+			if (historyResult.updated > 0) console.log("RECORDING_HISTORY_CSV updated=" + historyResult.updated);
+			(historyResult.errors || []).forEach(function (message) { console.error("WARNING: recording history CSV update failed: " + message); });
 		} catch (historyError) {
+			csvSaveFailed = true;
 			console.error("WARNING: recording history CSV update failed: " + historyError.message);
 		}
+
+		// Do not write back the snapshot used to build match: recordings may have
+		// finished (or acquired duration metadata) while this process was running.
+		// Never hold the match lock while acquiring the recorded lock.
+		cleanup = reservationStore.withLock(options.recorded, function () {
+			var latest = reservationStore.readArray(options.recorded);
+			var result = cleanupRecordedHistory(latest, options.recordedHistoryDays, options.nowMs);
+			if (csvSaveFailed || csvFailedFiles.size) {
+				var held = result.removed.filter(function (program) {
+					var month = formatJstMinute(safeInt(program.start, 0)).slice(0, 7).replace('/', '-');
+					return csvSaveFailed || csvFailedFiles.has('recording-history_' + month + '.csv');
+				});
+				var heldSet = new Set(held);
+				result.removed = result.removed.filter(function (program) { return !heldSet.has(program); });
+				var removedSet = new Set(result.removed);
+				result.kept = latest.filter(function (program) { return !removedSet.has(program); });
+				result.removedCount = result.removed.length;
+				if (held.length) console.error('WARNING: CSV保存失敗のため録画履歴' + held.length + '件の整理を延期。CSV保存成功後のMatchingで整理を再試行します。');
+			}
+			if (result.enabled && result.removedCount > 0) {
+				reservationStore.writeArrayAtomic(options.recorded, result.kept);
+			}
+			return result;
+		});
 
 		printSummary(ledger.summary, options.output);
 		if (cleanup.enabled) {
