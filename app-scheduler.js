@@ -480,7 +480,7 @@ function scheduler() {
 
 	schedule.forEach(function (ch) {
 		ch.programs.forEach(function (p) {
-			if (chinachu.isMatchedProgram(rules, p, config.normalizationForm)) {
+			if (chinachu.isMatchedProgram(rules, p, config.normalizationForm, config.epgTitleHalfWidthEnabled)) {
 				matches.push(p);
 			}
 		});
@@ -1266,8 +1266,8 @@ function splitProgramTitleAndEpisode(rawTitle, detail, flags) {
 }
 
 function formatEpgTitle(value) {
-	const symbols = { '　': ' ', '!': '！', '?': '？', '*': '＊', '<': '＜', '>': '＞', '＃': '#' };
-	return value.replace(/[Ａ-Ｚａ-ｚ０-９　!?*<>＃]/g, character =>
+	const symbols = { '　': ' ', '!': '！', '?': '？', '*': '＊', '<': '＜', '>': '＞', '＃': '#', '♯': '#' };
+	return value.replace(/[Ａ-Ｚａ-ｚ０-９　!?*<>＃♯]/g, character =>
 		symbols[character] || String.fromCharCode(character.charCodeAt(0) - 0xFEE0));
 }
 

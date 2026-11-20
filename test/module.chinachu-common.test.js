@@ -118,6 +118,19 @@ describe("programMatchesRule title conditions", function() {
 		assert.strictEqual(chinachu.programMatchesRule({ reserve_titles_mode: "or", reserve_titles: [] }, program), false);
 		assert.strictEqual(chinachu.programMatchesRule({ reserve_titles_mode: "and", reserve_titles: [] }, program), false);
 		assert.strictEqual(chinachu.programMatchesRule({ reserve_titles_mode: "and", reserve_titles: ["新番組", "Special"] }, program, "NFKC"), true);
+		const sharpProgram = Object.assign({}, program, { fullTitle: '夢劇場音楽堂 #33 C#', detail: '説明♯' });
+		for (const nf of [undefined, 'NFKC']) {
+			const rule = { reserve_titles: ['音楽堂 ♯33'] };
+			assert.strictEqual(chinachu.isMatchedProgram([rule], sharpProgram, nf), false);
+			assert.strictEqual(chinachu.isMatchedProgram([rule], sharpProgram, nf, false), false);
+			assert.strictEqual(chinachu.isMatchedProgram([rule], sharpProgram, nf, true), true);
+			assert.strictEqual(chinachu.isMatchedProgram([{ reserve_titles: ['音楽堂 ＃33'] }], sharpProgram, nf, true), true);
+			assert.strictEqual(chinachu.isMatchedProgram([{ reserve_titles: ['音楽堂 #33'] }], Object.assign({}, sharpProgram, { fullTitle: '夢劇場音楽堂 ♯33' }), nf, true), true);
+			assert.strictEqual(chinachu.programMatchesRule({ ignore_titles: ['C♯'] }, sharpProgram, nf, undefined, undefined, true), false);
+			assert.strictEqual(chinachu.programMatchesRule({ reserve_descriptions: ['説明#'] }, sharpProgram, nf, undefined, undefined, true), false);
+			assert.strictEqual(chinachu.programMatchesRule({ reserve_descriptions: ['説明♯'] }, sharpProgram, nf, undefined, undefined, true), true);
+			assert.strictEqual(rule.reserve_titles[0], '音楽堂 ♯33');
+		}
 	});
 });
 

@@ -1248,9 +1248,8 @@ function isMatchedProgram(program) {
 			if ((rule.duration.min > program.seconds) || (rule.duration.max < program.seconds)) return;
 		}
 
-		var title_norm, detail_norm;
+		var title_norm = chinachu.normalizeTitleForMatch(program.title, nf, config.epgTitleHalfWidthEnabled), detail_norm;
 		if (nf) {
-			title_norm = program.title.normalize(nf);
 			if (program.detail) {
 				detail_norm = program.detail.normalize(nf);
 			}
@@ -1258,12 +1257,7 @@ function isMatchedProgram(program) {
 		// ignore_titles
 		if (rule.ignore_titles) {
 			for (var i = 0; i < rule.ignore_titles.length; i++) {
-				if (nf) {
-					if (title_norm.match(new RegExp(rule.ignore_titles[i].normalize(nf))) !== null) return;
-				}
-				else {
-					if (program.title.match(new RegExp(rule.ignore_titles[i])) !== null) return;
-				}
+				if (title_norm.match(new RegExp(chinachu.normalizeTitleForMatch(rule.ignore_titles[i], nf, config.epgTitleHalfWidthEnabled))) !== null) return;
 			}
 		}
 
@@ -1272,12 +1266,7 @@ function isMatchedProgram(program) {
 			var isFound = false;
 
 			for (var i = 0; i < rule.reserve_titles.length; i++) {
-				if (nf) {
-					if (title_norm.match(new RegExp(rule.reserve_titles[i].normalize(nf))) !== null) isFound = true;
-				}
-				else {
-					if (program.title.match(new RegExp(rule.reserve_titles[i])) !== null) isFound = true;
-				}
+				if (title_norm.match(new RegExp(chinachu.normalizeTitleForMatch(rule.reserve_titles[i], nf, config.epgTitleHalfWidthEnabled))) !== null) isFound = true;
 			}
 
 			if (!isFound) return;

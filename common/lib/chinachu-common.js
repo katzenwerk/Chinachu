@@ -442,8 +442,14 @@ exports.stripFilename = function (a) {
 	return a;
 };
 
+// Keep Unicode normalization configurable; fold title sharps only for the EPG option.
+exports.normalizeTitleForMatch = function (value, nf, epgTitleHalfWidthEnabled) {
+	var text = nf ? value.normalize(nf) : value;
+	return epgTitleHalfWidthEnabled === true ? text.replace(/[＃♯]/g, '#') : text;
+};
+
 // 全ルールとのマッチ判定
-exports.isMatchedProgram = function (rules, program, nf) {
+exports.isMatchedProgram = function (rules, program, nf, epgTitleHalfWidthEnabled) {
 	var i;
 
 	// fullTitle, detailを正規化しておく。
@@ -461,7 +467,7 @@ exports.isMatchedProgram = function (rules, program, nf) {
 		}
 	}
 	for (i = 0; i < rules.length; i++) {
-		if (exports.programMatchesRule(rules[i], program, nf, fullTitle_norm, detail_norm)) {
+		if (exports.programMatchesRule(rules[i], program, nf, fullTitle_norm, detail_norm, epgTitleHalfWidthEnabled)) {
 			return true;
 		}
 	}
@@ -470,7 +476,7 @@ exports.isMatchedProgram = function (rules, program, nf) {
 };
 
 // 単体のルールとのマッチ判定
-exports.programMatchesRule = function (rule, program, nf, fullTitle_norm, detail_norm) {
+exports.programMatchesRule = function (rule, program, nf, fullTitle_norm, detail_norm, epgTitleHalfWidthEnabled) {
 	var i, j, l, m, isFound;
 
 	// 引数に互換性を持たせるため、追加した分はチェック
@@ -483,6 +489,8 @@ exports.programMatchesRule = function (rule, program, nf, fullTitle_norm, detail
 			detail_norm = program.detail.normalize(nf);
 		}
 	}
+
+	var titleForMatch = exports.normalizeTitleForMatch(nf ? fullTitle_norm : program.fullTitle, null, epgTitleHalfWidthEnabled);
 
 	// isDisabled
 	if (rule.isDisabled) { return false; }
@@ -565,12 +573,7 @@ exports.programMatchesRule = function (rule, program, nf, fullTitle_norm, detail
 				console.log("program: " + JSON.stringify(program));
 			}
 			var titleMatched = false;
-			if (nf) {
-				titleMatched = fullTitle_norm.match(rule.reserve_titles[i].normalize(nf)) !== null;
-			}
-			else {
-				titleMatched = program.fullTitle.match(rule.reserve_titles[i]) !== null;
-			}
+			titleMatched = titleForMatch.match(exports.normalizeTitleForMatch(rule.reserve_titles[i], nf, epgTitleHalfWidthEnabled)) !== null;
 			if (requireAllTitles && !titleMatched) { isFound = false; break; }
 			if (!requireAllTitles && titleMatched) { isFound = true; break; }
 		}
@@ -581,12 +584,7 @@ exports.programMatchesRule = function (rule, program, nf, fullTitle_norm, detail
 	// ignore_titles
 	if (rule.ignore_titles) {
 		for (i = 0; i < rule.ignore_titles.length; i++) {
-			if (nf) {
-				if (fullTitle_norm.match(rule.ignore_titles[i].normalize(nf)) !== null) { return false; }
-			}
-			else {
-				if (program.fullTitle.match(rule.ignore_titles[i]) !== null) { return false; }
-			}
+			if (titleForMatch.match(exports.normalizeTitleForMatch(rule.ignore_titles[i], nf, epgTitleHalfWidthEnabled)) !== null) { return false; }
 		}
 	}
 

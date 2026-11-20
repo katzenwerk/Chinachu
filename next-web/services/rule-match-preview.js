@@ -1,12 +1,13 @@
-function normalize(value, form) {
-  return form ? value.normalize(form) : value;
+function normalize(value, form, epgTitleHalfWidthEnabled = false) {
+  const text = form ? value.normalize(form) : value;
+  return epgTitleHalfWidthEnabled === true ? text.replace(/[＃♯]/g, '#') : text;
 }
 
 // Keep this predicate aligned with common/lib/chinachu-common.js#programMatchesRule.
 // It is intentionally browser-side so editing a rule never saves it or runs Scheduler.
-export function programMatchesRulePreview(rule, program, normalizationForm) {
+export function programMatchesRulePreview(rule, program, normalizationForm, epgTitleHalfWidthEnabled = false) {
   let found;
-  const title = normalize(program.fullTitle, normalizationForm);
+  const title = normalize(program.fullTitle, normalizationForm, epgTitleHalfWidthEnabled);
   const detail = program.detail ? normalize(program.detail, normalizationForm) : null;
 
   if (rule.isDisabled) return false;
@@ -41,7 +42,7 @@ export function programMatchesRulePreview(rule, program, normalizationForm) {
     const requireAll = rule.reserve_titles_mode === 'and';
     found = requireAll && rule.reserve_titles.length > 0;
     for (const pattern of rule.reserve_titles) {
-      const matched = title.match(normalize(pattern, normalizationForm)) !== null;
+      const matched = title.match(normalize(pattern, normalizationForm, epgTitleHalfWidthEnabled)) !== null;
       if (requireAll && !matched) { found = false; break; }
       if (!requireAll && matched) { found = true; break; }
     }
@@ -50,7 +51,7 @@ export function programMatchesRulePreview(rule, program, normalizationForm) {
 
   if (rule.ignore_titles) {
     for (const pattern of rule.ignore_titles) {
-      if (title.match(normalize(pattern, normalizationForm)) !== null) return false;
+      if (title.match(normalize(pattern, normalizationForm, epgTitleHalfWidthEnabled)) !== null) return false;
     }
   }
 
@@ -95,14 +96,14 @@ export function schedulePrograms(schedule) {
   );
 }
 
-export function buildRuleMatchQuery(rule, normalizationForm) {
+export function buildRuleMatchQuery(rule, normalizationForm, epgTitleHalfWidthEnabled = false) {
   const previewRule = structuredClone(rule || {});
   delete previewRule.isDisabled;
-  return { version: 1, rule: previewRule, normalizationForm: normalizationForm || null };
+  return { version: 1, rule: previewRule, normalizationForm: normalizationForm || null, epgTitleHalfWidthEnabled: epgTitleHalfWidthEnabled === true };
 }
 
-export function previewRuleMatches(rule, programs, normalizationForm) {
-  const query = buildRuleMatchQuery(rule, normalizationForm);
-  const matches = programs.filter(program => programMatchesRulePreview(query.rule, program, normalizationForm));
+export function previewRuleMatches(rule, programs, normalizationForm, epgTitleHalfWidthEnabled = false) {
+  const query = buildRuleMatchQuery(rule, normalizationForm, epgTitleHalfWidthEnabled);
+  const matches = programs.filter(program => programMatchesRulePreview(query.rule, program, normalizationForm, epgTitleHalfWidthEnabled));
   return { count: matches.length, programs: matches, query };
 }

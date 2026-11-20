@@ -3,7 +3,7 @@ function normalize(value) {
   return String(value ?? '').normalize('NFKC').toLocaleLowerCase('ja-JP');
 }
 
-export function searchSchedule(schedule, { query = '', types = null, type = '', channelId = '', category = '', period = '', now = Date.now() } = {}) {
+export function searchSchedule(schedule, { query = '', types = null, type = '', channelId = '', category = '', period = '', now = Date.now(), epgTitleHalfWidthEnabled = false } = {}) {
   const terms = normalize(query).trim().split(/\s+/).filter(Boolean);
   const lowerBound = Number(now);
   const periodHours = period === '24h' ? 24 : period === '7d' ? 7 * 24 : 0;
@@ -22,7 +22,10 @@ export function searchSchedule(schedule, { query = '', types = null, type = '', 
         program?.title, program?.fullTitle, program?.subTitle, program?.description, program?.detail,
         channel?.name
       ].filter(Boolean).join(' '));
-      if (!terms.every(term => haystack.includes(term))) continue;
+      const titleText = epgTitleHalfWidthEnabled === true ? normalize([
+        program?.title, program?.fullTitle, program?.subTitle
+      ].filter(Boolean).join(' ')).replace(/[＃♯]/g, '#') : null;
+      if (!terms.every(term => haystack.includes(term) || titleText !== null && titleText.includes(term.replace(/[＃♯]/g, '#')))) continue;
       results.push({ program, channel, start });
     }
   }

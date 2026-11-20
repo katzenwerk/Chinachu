@@ -48,6 +48,7 @@ function linkedRuleProgram(program, reserves) {
 export function renderSearchPage(container, initialParams = new URLSearchParams(), { setHeaderActions = () => {} } = {}) {
   let disposed = false;
   let schedule = [];
+  let epgTitleHalfWidthEnabled = false;
   let reserves = [];
   let recording = [];
   let hasReservationData = false;
@@ -113,7 +114,7 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
     const query = keyword.value.trim();
     const waves = waveChecks.filter(check => check.checked).map(check => check.value);
     const now = Date.now();
-    const found = searchSchedule(schedule, { query, types: waves, category: category.value })
+    const found = searchSchedule(schedule, { query, types: waves, category: category.value, epgTitleHalfWidthEnabled })
       .filter(entry => !defaultUpcomingOnly || programEndTime(entry.program) > now);
     window.clearTimeout(displayBoundaryTimer);
     displayBoundaryTimer = null;
@@ -337,9 +338,10 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   releases.push(subscribeRecordingNotifications(() => { if (!disposed) void reloadReservations(); }));
   releases.push(subscribeScheduleNotifications(() => {
     const request = ++scheduleRequest;
-    loadResource('schedule', { force: true }).then(value => {
+    Promise.all([loadResource('schedule', { force: true }), loadResource('status', { force: true })]).then(([value, status]) => {
       if (disposed || request !== scheduleRequest) return;
       schedule = Array.isArray(value) ? value : [];
+      epgTitleHalfWidthEnabled = status.epgTitleHalfWidthEnabled === true;
       const selectedCategory = category.value;
       populateFilters();
       if ([...category.options].some(item => item.value === selectedCategory)) category.value = selectedCategory;
@@ -349,9 +351,10 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
   }));
 
   const initialScheduleRequest = ++scheduleRequest;
-  loadResource('schedule').then(value => {
+  Promise.all([loadResource('schedule'), loadResource('status', { force: true })]).then(([value, status]) => {
     if (disposed || initialScheduleRequest !== scheduleRequest) return;
     schedule = Array.isArray(value) ? value : [];
+    epgTitleHalfWidthEnabled = status.epgTitleHalfWidthEnabled === true;
     populateFilters();
     redraw();
     void reloadReservations();

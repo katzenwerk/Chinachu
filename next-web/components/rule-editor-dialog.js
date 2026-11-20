@@ -487,7 +487,7 @@ export function openRuleEditorDialog({ row = null, initialRule = null, title = n
         try { payload = buildPayload(form, original); } catch (error) { renderPreviewError(error); return; }
         const signature = JSON.stringify(payload); if (signature === previewSignature) return; previewSignature = signature;
         const revision = ++previewRevision; tabs.querySelector('[data-tab="matches"]').textContent = '一致番組（計算中）'; matchIntro.querySelector('span').textContent = '計算中';
-        Promise.resolve().then(() => previewRuleMatches(payload, programs, editorData.config?.normalizationForm)).then(result => {
+        Promise.resolve().then(() => previewRuleMatches(payload, programs, editorData.config?.normalizationForm, editorData.config?.epgTitleHalfWidthEnabled)).then(result => {
           if (revision !== previewRevision) return;
           latestMatchResult = result;
           tabs.querySelector('[data-tab="matches"]').textContent = `一致番組（${result.count}件）`;

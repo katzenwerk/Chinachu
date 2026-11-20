@@ -2,6 +2,7 @@ const RESOURCE_PATHS = Object.freeze({
   rules: '/api/rules.json',
   reserves: '/api/reserves.json',
   schedule: '/api/schedule.json',
+  status: '/api/status.json',
   recording: '/api/recording.json',
   recorded: '/api/recorded.json',
   storage: '/api/storage.json'
