@@ -4376,8 +4376,8 @@ function handleRecordedThumbnailRequest(request) {
 	}
 	if (request && request.folderOrganize === true) {
 		if (request.action === 'state') return { version: 1, busy: isFolderOrganizing(), job: recordedFolderApply.get(), pending: recordedFolderApply.pending() };
-		if (!['apply', 'recover'].includes(request.action)) throw recordedThumbnailRequestError('invalid_request', 400, '振り分け操作が不正です。');
-		return { version: 1, job: recordedFolderApply.start(request.action, { previewId: request.previewId }) };
+		if (request.action !== 'run') throw recordedThumbnailRequestError('invalid_request', 400, '振り分け操作が不正です。');
+		return { version: 1, job: recordedFolderApply.start('run', { requestId: request.requestId }) };
 	}
 	if (isFolderOrganizing() && !request?.organizerIndex && !(request?.maintenance === true ?
 		['state', 'monitor-status'].includes(request.maintenanceAction) : request?.action === 'status')) {

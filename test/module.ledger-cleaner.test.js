@@ -101,7 +101,7 @@ function waitForJob(jobs, timeoutMs) {
 		const deadline = Date.now() + timeoutMs;
 		const timer = setInterval(() => {
 			const state = jobs.get();
-			if (state && state.status !== 'running') {
+			if (state && state.status !== 'running' && (!jobs.isBusy || !jobs.isBusy())) {
 				clearInterval(timer);
 				resolve(state);
 			} else if (Date.now() >= deadline) {
@@ -216,7 +216,7 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		['recorded', 'reserves2'].forEach((name, i) => assert.equal(fs.readFileSync(fixture.files[name], 'utf8'), beforeHistory[i]));
 		// Use Operator's actual selector with no transient failure status: exclusion must be durable.
 		const operator = fs.readFileSync(path.join(__dirname, '../app-operator.js'), 'utf8');
-		const selection = vm.createContext({ config: {}, recorded: [retainedProgram], recording: [], activeRecordingOutputs: new Set(),
+		const selection = vm.createContext({ folderPendingId: () => null, config: {}, recorded: [retainedProgram], recording: [], activeRecordingOutputs: new Set(),
 			path, __dirname: fixture.root, MATCH_DATA_FILE: fixture.files.match, RECORDED_THUMBNAIL_DIR: outputDir,
 			reservationStore, recordedThumbnail, recordedThumbnailGenerator: { getTaskStatus: () => null },
 			require: () => require('../lib/match-detail-resolver') });
@@ -524,7 +524,7 @@ test('apply rejects stale ledgers and an incomplete root without changing data',
 	}
 });
 
-test('apply restores every ledger without persistent backups when an atomic write fails', function () {
+test('write failures restore cleanup ledgers and leave folder moves recoverable by the next run', async function () {
 	const fixture = createFixture();
 	const originalWrite = reservationStore.writeArrayAtomic;
 	try {
@@ -542,13 +542,31 @@ test('apply restores every ledger without persistent backups when an atomic writ
 			assert.deepStrictEqual(JSON.parse(fs.readFileSync(fixture.files[name], 'utf8')), JSON.parse(value));
 		});
 		assert.strictEqual(fs.existsSync(path.join(fixture.data, 'ledger-cleaner-backups')), false);
+		const folders = require('../lib/recorded-folder-maintenance');
+		fs.mkdirSync(path.join(fixture.recordings, 'normal'));
+		reservationStore.writeArrayAtomic = function (file, value) {
+			if (file === fixture.files.recorded) throw new Error('fixture folder write failure');
+			return originalWrite(file, value);
+		};
+		const interrupted = await folders.run(fixture.root, { entries: [] });
+		assert.strictEqual(interrupted.results.find(row => row.id === 'normal').status, 'recovery');
+		assert.strictEqual(folders.pendingId(fixture.root), 'normal');
+		assert.strictEqual(JSON.parse(fs.readFileSync(fixture.files.recorded, 'utf8'))[0].recorded, fixture.paths.normal);
+		assert.strictEqual(fs.existsSync(fixture.paths.normal), true);
+		reservationStore.writeArrayAtomic = originalWrite;
+		const resumed = await folders.run(fixture.root, { entries: [] });
+		assert.strictEqual(resumed.results.find(row => row.id === 'normal').status, 'complete');
+		assert.strictEqual(resumed.results.find(row => row.id === 'normal').action, 'move');
+		assert.strictEqual(folders.pendingId(fixture.root), null);
+		assert.strictEqual(fs.existsSync(fixture.paths.normal), false);
+		assert.strictEqual(JSON.parse(fs.readFileSync(fixture.files.recorded, 'utf8'))[0].recorded, path.join(fixture.recordings, 'normal', 'normal.m2ts'));
 	} finally {
 		reservationStore.writeArrayAtomic = originalWrite;
 		fixture.close();
 	}
 });
 
-test('worker jobs keep scan and apply single-flight across a closed modal', async function () {
+test('worker jobs keep cleanup and one-click folder organization single-flight across a closed modal', async function () {
 	const fixture = createFixture();
 	try {
 		const jobs = cleanerJobs.createLedgerCleanerJobs({ rootDir: fixture.root });
@@ -564,6 +582,62 @@ test('worker jobs keep scan and apply single-flight across a closed modal', asyn
 		const completed = await waitForJob(jobs, 5000);
 		assert.strictEqual(completed.status, 'complete');
 		assert.strictEqual(completed.result.counts.recordedRemoved, 1);
+
+		const folders = createFixture();
+		try {
+			const { createJobs } = require('../lib/recorded-folder-jobs');
+			const { createService } = require('../lib/recorded-folder-service');
+			const folderMaintenance = require('../lib/recorded-folder-maintenance');
+			const stablePath = path.join(folders.recordings, 'moved', 'normal-keep.m2ts');
+			fs.writeFileSync(stablePath, 'stable fixture');
+			const stable = program('stable', stablePath);
+			const collision = program('collision', path.join(folders.recordings, 'collision.m2ts'));
+			fs.writeFileSync(collision.recorded, 'source fixture');
+			fs.mkdirSync(path.join(folders.recordings, 'collision'));
+			fs.writeFileSync(path.join(folders.recordings, 'collision', 'collision.m2ts'), 'existing fixture');
+			const rows = folders.programs.concat(stable, collision);
+			writeJson(folders.files.recorded, rows);
+			writeJson(folders.files.match, rows.map(match));
+			const beforeHistory = fs.readFileSync(folders.files.reserves2, 'utf8');
+			writeJson(path.join(folders.root, 'config.json'), { recordedDir: folders.recordings,
+				recordedDirs: [{ id: 'unrelated', path: path.join(folders.root, 'unrelated-not-mounted') }] });
+			const operator = createJobs({ root: folders.root, compact: true });
+			const service = createService({ root: folders.root, getSeries: () => ({ generation: 'fixture', entries: [] }),
+				cleanerBusy: () => false, onChanged() {},
+				operatorRequest: async input => input.action === 'state' ?
+					{ version: 1, job: operator.get(), busy: operator.isBusy(), pending: operator.pending() } :
+					{ version: 1, job: operator.start(input.action, { requestId: input.requestId }) }
+			});
+			// A folder created after the dialog/service opens must be used by the single action.
+			fs.mkdirSync(path.join(folders.recordings, 'normal'));
+			const started = await service.request({ action: 'run' });
+			assert.strictEqual(started.job.action, 'run');
+			await assert.rejects(service.request({ action: 'run' }), error => error.statusCode === 409);
+			const organized = await waitForJob(operator, 5000);
+			assert.strictEqual(organized.status, 'complete', organized.error?.message);
+			const state = await service.request({ action: 'state' });
+			assert.strictEqual(state.busy, false);
+			assert.strictEqual(state.result.results.filter(row => row.status === 'complete' && row.action === 'move').length, 1);
+			assert.strictEqual(state.result.results.filter(row => row.status === 'complete' && row.action === 'repair').length, 1);
+			assert.strictEqual(state.result.results.filter(row => ['failed', 'unapplied', 'recovery', 'unmatched'].includes(row.status)).length, 3);
+			assert.strictEqual(state.result.results.find(row => row.id === 'stable').status, 'unchanged');
+			assert.strictEqual(state.result.results.find(row => row.id === 'active').status, 'excluded');
+			const updated = JSON.parse(fs.readFileSync(folders.files.recorded, 'utf8'));
+			assert.strictEqual(updated.length, rows.length);
+			assert.strictEqual(updated.find(row => row.id === 'normal').recorded, path.join(folders.recordings, 'normal', 'normal.m2ts'));
+			assert.strictEqual(updated.find(row => row.id === 'relocated').recorded, folders.paths.relocatedNew);
+			assert.strictEqual(updated.find(row => row.id === 'stable').recorded, stablePath);
+			assert.strictEqual(fs.existsSync(folders.paths.normal), false);
+			assert.strictEqual(fs.readFileSync(stablePath, 'utf8'), 'stable fixture');
+			assert.strictEqual(fs.readFileSync(path.join(folders.recordings, 'collision', 'collision.m2ts'), 'utf8'), 'existing fixture');
+			assert.strictEqual(fs.readFileSync(folders.files.reserves2, 'utf8'), beforeHistory);
+			assert.strictEqual(fs.readFileSync(path.join(folders.data, 'csv', 'recording-history_2026-10.csv'), 'utf8'), 'sentinel');
+			const progress = [];
+			const again = await folderMaintenance.run(folders.root, { generation: 'fixture', entries: [] }, value => progress.push(value));
+			assert.strictEqual(again.results.filter(row => row.status === 'complete').length, 0);
+			assert.strictEqual(progress.filter(value => value.phase === '所在確認').length, 6);
+		} finally { folders.close(); }
+
 	} finally {
 		fixture.close();
 	}
