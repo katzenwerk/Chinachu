@@ -129,11 +129,11 @@ html:has(.reserves-page) { min-width: 0; }
 .recorded-header-toolbar .recorded-results-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: var(--header-control-gap); min-width: 0; }
 .recorded-header-toolbar .reserves-search { flex: 0 1 var(--header-search-width); width: var(--header-search-width); min-width: 140px; max-width: var(--header-search-width); }
 .recorded-header-toolbar .reserves-search input { height: 34px; }
-.recorded-header-toolbar .recorded-view-switch { grid-template-columns: repeat(2,34px); gap: 0; align-self: center; }
-.recorded-header-toolbar .recorded-view-switch button { width: 34px; height: 34px; border-color: rgba(255,255,255,.65); }
+.header-heading > .recorded-view-switch { grid-template-columns: repeat(2,34px); flex: 0 0 auto; gap: 0; align-self: center; }
+.header-heading > .recorded-view-switch button { width: 34px; height: 34px; border-color: rgba(255,255,255,.65); }
 .recorded-header-toolbar .recorded-results-filter { min-width: 104px; align-self: center; color: var(--brand-ink); }
-.recorded-header-toolbar .recorded-view-switch { margin-left: calc(var(--header-group-gap) - var(--header-control-gap)); }
 .recorded-header-toolbar .reserves-filter-control { height: 34px; }
+.recorded-header-toolbar .reserves-filter-control strong { color: inherit; }
 .recorded-header-toolbar :is(.recorded-results-cleaner,.recorded-results-organize) { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; align-self: center; height: var(--header-control-height); min-height: var(--header-control-height); padding: 0 10px; border: 1px solid rgba(255,255,255,.72); border-radius: var(--radius-sm); background: rgba(255,255,255,.95); color: var(--brand-strong); font: inherit; font-size: var(--header-control-font-size); font-weight: var(--font-body-weight); line-height: 1.2; white-space: nowrap; }
 .recorded-header-toolbar :is(.recorded-results-cleaner,.recorded-results-organize):hover { border-color: #fff; background: #fff; color: var(--header-hover-ink); }
 .recorded-header-toolbar .reserves-count { flex: 0 0 auto; align-self: center; justify-content: flex-end; width: auto; min-width: 0; min-height: var(--header-control-height); font-size: var(--header-count-font-size); }
@@ -149,17 +149,17 @@ html:has(.reserves-page) { min-width: 0; }
   .recorded-header-controls > summary::-webkit-details-marker { display: none; }
   .recorded-header-controls[open] > summary { border-color: #fff; background: #fff; }
   .recorded-header-content { position: absolute; top: calc(100% + 8px); right: 0; z-index: 100; width: min(342px,calc(var(--wui-viewport-width) - 28px)); padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); color: var(--text); }
-  .recorded-header-toolbar .recorded-view-switch { margin-left: 0; }
   .recorded-header-toolbar .recorded-results-toolbar { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 9px; width: 100%; }
   .recorded-header-toolbar .reserves-search { grid-column: 1 / -1; flex: none; width: 100%; max-width: none; min-width: 0; }
-  .recorded-header-toolbar .recorded-view-switch { grid-column: 1; justify-self: start; }
-  .recorded-header-toolbar .recorded-results-filter { grid-column: 2; width: 100%; min-width: 0; }
+  .recorded-header-toolbar .recorded-results-filter { grid-column: 1 / -1; width: 100%; min-width: 0; }
+  .recorded-header-toolbar .recorded-results-filter-menu { position: static; inset: auto; width: 100%; min-width: 0; max-width: none; max-height: none; margin-top: 6px; box-shadow: none; }
+  .recorded-header-toolbar .reserves-filter-control:disabled { opacity: 1; cursor: default; }
+  .recorded-header-toolbar .reserves-filter-control:disabled::after { display: none; }
   .recorded-header-toolbar :is(.recorded-results-cleaner,.recorded-results-organize) { width: 100%; border-color: var(--border); background: var(--panel); color: var(--text); }
   .recorded-header-toolbar :is(.recorded-results-cleaner,.recorded-results-organize):hover { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-strong); }
   .recorded-header-toolbar .reserves-count { grid-column: 1 / -1; justify-self: end; min-height: 22px; color: var(--muted); }
-}
-@media (max-width:720px) {
-  html:has(.recorded-page) .header-page-title { display: none; }
+  .recorded-header-content .reserves-search input,
+  .recorded-header-content .reserves-filter-control { width: 100%; border-color: var(--border); background: var(--panel); color: var(--text); }
 }
 .recorded-results-card-grid { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: var(--space-3); min-width: 0; }
 :is(.recorded-results-card-grid, .recorded-recent-grid) .recorded-card-title-overlay { display: -webkit-box; min-height: 2.8em; overflow: hidden; text-overflow: clip; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
@@ -234,7 +234,7 @@ html:has(.reserves-page) { min-width: 0; }
 @media (max-width:480px) { .recorded-results-card-grid { grid-template-columns: 1fr; } }
 
 
-/* Recorded header: count + view controls + management on the left,
+/* Recorded actions: count + management on the left,
    target filter + search on the right (desktop only). */
 @media (min-width: 1301px) {
   .header-page-actions .recorded-header-toolbar,
@@ -243,7 +243,6 @@ html:has(.reserves-page) { min-width: 0; }
   .header-page-actions .recorded-results-toolbar { width: 100%; }
   .header-page-actions .recorded-results-toolbar { justify-content: flex-start; }
   .recorded-header-toolbar .recorded-results-toolbar > .reserves-count { order: 0; margin-right: 0; }
-  .recorded-header-toolbar .recorded-results-toolbar > .recorded-view-switch { order: 1; margin-left: 0; }
   .recorded-header-toolbar .recorded-results-toolbar > .recorded-results-organize { order: 2; }
   .recorded-header-toolbar .recorded-results-toolbar > .recorded-results-cleaner { order: 3; }
   .recorded-header-toolbar .recorded-results-toolbar > .recorded-results-filter { order: 4; margin-left: auto; }

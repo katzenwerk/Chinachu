@@ -287,12 +287,12 @@ export function createAppShell(root) {
     tsCloseTimer = null;
   };
   tsHeader.addEventListener('mouseenter', () => {
-    if (!fineHover.matches) return;
+    if (mobile.matches || !fineHover.matches) return;
     cancelTsClose();
     tsHeader.open = true;
   });
   tsHeader.addEventListener('mouseleave', () => {
-    if (!fineHover.matches || !tsHeader.open) return;
+    if (mobile.matches || !fineHover.matches || !tsHeader.open) return;
     cancelTsClose();
     tsCloseTimer = setTimeout(() => {
       tsCloseTimer = null;
@@ -371,7 +371,7 @@ export function createAppShell(root) {
     mobileHeaderActions.replaceChildren();
     const pageSearch = headerActions.querySelector('input[type="search"]');
     const guideDate = headerActions.querySelector('.guide-date-controls input[type="date"]');
-    if (pageSearch) {
+    if (pageSearch && !headerActions.querySelector('.recorded-header-toolbar')) {
       const searchButton = mobileActionButton('search', 'このページを検索');
       searchButton.setAttribute('aria-controls', 'header-page-actions');
       searchButton.setAttribute('aria-expanded', 'false');
@@ -403,7 +403,7 @@ export function createAppShell(root) {
       mobileHeaderActions.append(dateButton);
     }
     if (headerActions.children.length) {
-      const optionsButton = mobileActionButton('options', 'ページの表示と操作');
+      const optionsButton = mobileActionButton('options', headerActions.querySelector('.recorded-header-toolbar') ? '録画結果操作' : 'ページの表示と操作');
       optionsButton.setAttribute('aria-controls', 'header-page-actions');
       optionsButton.setAttribute('aria-expanded', 'false');
       optionsButton.addEventListener('click', () => openMobilePageToolbar(optionsButton));
@@ -423,12 +423,16 @@ export function createAppShell(root) {
   }
   function syncMobileLayout() {
     closeDrawer();
+    cancelTsClose();
+    tsHeader.open = false;
     if (mobile.matches) {
       mobileToolbar.append(headerActions);
       header.insertBefore(headerSearch, commonActions);
+      notificationPanel.prepend(tsHeader);
     } else {
       header.insertBefore(headerActions, commonActions);
       header.insertBefore(headerSearch, commonActions);
+      commonActions.prepend(tsHeader);
     }
   }
   menuToggle.addEventListener('click', () => {

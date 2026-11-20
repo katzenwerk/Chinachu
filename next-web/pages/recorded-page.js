@@ -160,15 +160,14 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   headerToolbar.innerHTML = '<details class="recorded-header-controls" open><summary>録画結果操作</summary><div class="recorded-header-content"></div></details>';
   const headerControls = headerToolbar.querySelector('.recorded-header-controls');
   headerToolbar.querySelector('.recorded-header-content').append(toolbar);
-  // Search -> filter -> result count -> view switch -> maintenance.
+  // Keep the view switch beside the page title, including when mobile actions move into a sheet.
   const viewSwitch = toolbar.querySelector('.recorded-view-switch');
-  toolbar.insertBefore(toolbar.querySelector('.recorded-results-filter'), viewSwitch);
-  toolbar.insertBefore(toolbar.querySelector('.reserves-count'), viewSwitch);
+  document.querySelector('.header-heading').append(viewSwitch);
 
   const count = toolbar.querySelector('.reserves-count');
   toolbar.prepend(count);
   const searchInput = toolbar.querySelector('.reserves-search input');
-  const viewButtons = Array.from(toolbar.querySelectorAll('[data-recorded-view]'));
+  const viewButtons = Array.from(viewSwitch.querySelectorAll('[data-recorded-view]'));
   const filter = toolbar.querySelector('.recorded-results-filter');
   const filterTrigger = filter.querySelector('.reserves-filter-control');
   const filterSummary = filterTrigger.querySelector('strong');
@@ -835,7 +834,20 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
 
   updateFilterControl();
   updateViewControl();
-  const filterPopup = createHoverPopupController({ root: filter, trigger: filterTrigger, panel: filterPanel });
+  let filterPopup = null;
+  const inlineFilterMedia = window.matchMedia('(max-width: 1300px)');
+  const syncFilterLayout = () => {
+    filterPopup?.destroy();
+    filterPopup = null;
+    filterTrigger.disabled = inlineFilterMedia.matches;
+    filterTrigger.setAttribute('aria-expanded', String(inlineFilterMedia.matches));
+    filterPanel.hidden = !inlineFilterMedia.matches;
+    if (!inlineFilterMedia.matches) {
+      filterPopup = createHoverPopupController({ root: filter, trigger: filterTrigger, panel: filterPanel, closeDelay: 1000 });
+    }
+  };
+  inlineFilterMedia.addEventListener('change', syncFilterLayout);
+  syncFilterLayout();
   autoLoadObserver?.observe(more);
   const unsubscribe = subscribeMatchNotifications(() => {
     invalidateFilteredCache();
@@ -852,12 +864,14 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
     requestController?.abort();
     window.clearTimeout(searchTimer);
     compactHeader.removeEventListener('change', syncHeaderLayout);
+    inlineFilterMedia.removeEventListener('change', syncFilterLayout);
     document.removeEventListener('pointerdown', closeHeaderOnOutsideClick);
     document.removeEventListener('keydown', closeHeaderOnEscape);
     autoLoadObserver?.disconnect();
-    filterPopup.destroy();
+    filterPopup?.destroy();
     contextMenu.destroy();
     setHeaderActions();
+    viewSwitch.remove();
     unsubscribe();
     unsubscribeSeries();
     clearCards();
