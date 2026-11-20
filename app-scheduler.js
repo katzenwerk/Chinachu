@@ -1265,6 +1265,12 @@ function splitProgramTitleAndEpisode(rawTitle, detail, flags) {
 	};
 }
 
+function formatEpgTitle(value) {
+	const symbols = { '　': ' ', '!': '！', '?': '？', '*': '＊', '<': '＜', '>': '＞', '＃': '#' };
+	return value.replace(/[Ａ-Ｚａ-ｚ０-９　!?*<>＃]/g, character =>
+		symbols[character] || String.fromCharCode(character.charCodeAt(0) - 0xFEE0));
+}
+
 function convertPrograms(p, ch) {
 	const programs = [];
 
@@ -1277,10 +1283,15 @@ function convertPrograms(p, ch) {
 		let subtitle = "";
 		let epinum = null;
 		const flags = new Set();
+		const flagsTitle = c.title;
+		if (config.epgTitleHalfWidthEnabled === true) {
+			c.title = formatEpgTitle(c.title);
+			c.fullTitle = c.title;
+		}
 
 		// 理題 (flag)
 		{
-			const flagsSource = c.title
+			const flagsSource = flagsTitle
 				.replace(/\[無料\]/g, "[無]")
 				.replace(/\[生放送\]/g, "[生]");
 
@@ -1295,7 +1306,7 @@ function convertPrograms(p, ch) {
 
 		// 理題 (flag) Unicode ARIB外字対応
 		{
-			const matchedFlags = c.title.match(flagUniRE) || [];
+			const matchedFlags = flagsTitle.match(flagUniRE) || [];
 			for (const matchedFlag of matchedFlags) {
 				flags.add(matchedFlag.normalize("NFKC"));
 			}

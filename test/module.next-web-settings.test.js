@@ -21,7 +21,7 @@ test('settings model preserves unknown and untouched values while validating exp
 	const explicitDefaults = {
 		wuiBlockGlobalAccess: true, recordedCommandSerial: true, recordedThumbnailAutoEnabled: true, seriesUseSyobocal: true,
 		vaapiEnabled: false, vaapiDevice: '/dev/dri/renderD128', wuiOpenPort: 20772,
-		recordedFolderOrganizeEnabled: false, recordedFolderOrganizeOrder: 'filename',
+		recordedFolderOrganizeEnabled: false, recordedFolderOrganizeOrder: 'filename', epgTitleHalfWidthEnabled: false,
 		storageLowSpaceThresholdMB: 3000, storageLowSpaceAction: 'stop',
 		storageLowSpaceWarningThresholdMB: 0, storageLowSpaceWarningIntervalMinutes: 180,
 		storageLowSpaceCriticalNotifyIntervalMinutes: 180, handoffPrepSeconds: 10,
@@ -40,13 +40,14 @@ test('settings model preserves unknown and untouched values while validating exp
 		['recordedFolderOrganizeOrder', 'title', ['operator']],
 		['recordedCommandSerial', false, ['operator']],
 		['vaapiEnabled', true, ['wui']], ['normalizationForm', 'NFKC', ['wui', 'scheduler', 'history']],
+		['epgTitleHalfWidthEnabled', true, ['epg']],
 		['excludeServices', [211], ['scheduler']], ['serviceOrder', [211], ['scheduler']],
 		['matchRetentionDays', 30, ['history']], ['reserves2RetentionDays', 0, ['history']],
 		['recordedHistoryRetentionDays', 90, ['history']], ['recordingResultCsvEnabled', true, ['history']],
 		['externalNotifications', { routes: {}, events: {} }, ['immediate']]
 	]) {
 		const result = effects({}, { [key]: value });
-		assert.deepStrictEqual(['operator', 'wui', 'scheduler', 'history', 'immediate'].filter(target => result[target]), targets, key);
+		assert.deepStrictEqual(['operator', 'wui', 'scheduler', 'epg', 'history', 'immediate'].filter(target => result[target]), targets, key);
 		assert.deepStrictEqual(result.unknown, []);
 	}
 	assert.deepStrictEqual(model.configApplicationMessages(effects({ vaapiEnabled: false }, { vaapiEnabled: false, vaapiDevice: '/dev/dri/other' })), []);
@@ -55,6 +56,18 @@ test('settings model preserves unknown and untouched values while validating exp
 	assert.ok(model.configApplicationMessages(effects({}, { recordedFolderOrganizeEnabled: true })).some(text => text.includes('WUIだけを再起動しても')));
 	assert.ok(model.configApplicationMessages(effects({}, { serviceOrder: [211] }))[0].startsWith('再起動不要'));
 	assert.deepStrictEqual(model.configApplicationMessages(effects({}, { externalNotifications: {} })), []);
+	assert.deepStrictEqual(model.configApplicationMessages(effects({}, { epgTitleHalfWidthEnabled: true })), ['再起動不要：次回EPG取得時に反映されます。']);
+	assert.deepStrictEqual(model.configApplicationMessages(effects({ epgTitleHalfWidthEnabled: true }, { epgTitleHalfWidthEnabled: false })), ['再起動不要：次回EPG取得時に反映されます。']);
+	assert.ok(!Object.hasOwn(model.configForSave({}), 'epgTitleHalfWidthEnabled'));
+	for (const enabled of [false, true]) {
+		const config = { recordedDir: '/recorded', epgTitleHalfWidthEnabled: enabled };
+		assert.deepStrictEqual(model.validateConfig(config), []);
+		assert.deepStrictEqual(model.unknownConfigKeys(config), []);
+		assert.strictEqual(model.configForSave(config).epgTitleHalfWidthEnabled, enabled);
+	}
+	for (const value of ['false', 0, null, {}]) {
+		assert.ok(model.validateConfig({ epgTitleHalfWidthEnabled: value }).some(message => message.includes('真偽値')));
+	}
 	const original = {
 		recordedDir: '/recorded',
 		handoffPrepSeconds: 20, endLackMaxSeconds: 30,
@@ -313,6 +326,7 @@ test('settings model preserves unknown and untouched values while validating exp
 			assert.ok(loaded.externalNotifications.routes.slack.configured);
 			const edited = model.cloneConfig(loaded);
 			edited.recordedThumbnailAutoEnabled = false;
+			edited.epgTitleHalfWidthEnabled = true;
 			edited.externalNotifications.events.start = !edited.externalNotifications.events.start;
 			edited.externalNotifications.routes.slack.webhook = 'https://hooks.slack.com/services/fixture/edited/new-secret';
 			const result = await client.saveConfig(edited, undefined, loaded);
@@ -320,10 +334,12 @@ test('settings model preserves unknown and untouched values while validating exp
 			assert.strictEqual(result.externalNotifications.routes.slack.webhook, undefined);
 			assert.deepStrictEqual(model.configChanges(result, model.cloneConfig(result)), []);
 			assert.strictEqual((await client.loadConfig()).recordedThumbnailAutoEnabled, false);
-			const onlyOtherTab = { ...result, recordedFormat: 'unchanged-notification', recordedThumbnailAutoEnabled: true };
+			assert.strictEqual((await client.loadConfig()).epgTitleHalfWidthEnabled, true);
+			const onlyOtherTab = { ...result, recordedFormat: 'unchanged-notification', recordedThumbnailAutoEnabled: true, epgTitleHalfWidthEnabled: false };
 			await client.saveConfig(onlyOtherTab, undefined, result);
 			assert.strictEqual(calls.at(-1).init.body.has('notifications'), false);
 			assert.strictEqual((await client.loadConfig()).recordedThumbnailAutoEnabled, true);
+			assert.strictEqual((await client.loadConfig()).epgTitleHalfWidthEnabled, false);
 		} finally { globalThis.fetch = realFetch; }
 		const deleted = model.cloneConfig(combined.body.externalNotifications);
 		deleted.routes.slack = { configured: false, enabled: false };

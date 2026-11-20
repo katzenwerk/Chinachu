@@ -29,6 +29,7 @@
   "recordedNameReplaceEnclosingCharacters": true,
   "recordedNameEnclosingCharacterMap": {},
   "normalizationForm": "NFKC",
+  "epgTitleHalfWidthEnabled": false,
   "vaapiEnabled": false,
   "vaapiDevice": "/dev/dri/renderD128",
   "recordingPriority": 2,

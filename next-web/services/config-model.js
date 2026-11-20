@@ -9,7 +9,7 @@ const KNOWN_KEYS = new Set([
   'externalNotifications', 'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs',
   'recordedFormat', 'recordedCommand', 'recordedCommandSerial', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
   'recordedThumbnailAutoEnabled', 'recordingFilenamePrefixEnabled', 'recordedFolderOrganizeEnabled', 'recordedFolderOrganizeOrder',
-  'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm',
+  'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm', 'epgTitleHalfWidthEnabled',
   'vaapiEnabled', 'vaapiDevice', 'recordingBoundaryPolicy', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode', 'autoTsMaxRecordings',
   'recordedStorageWakeupBeforeSec', 'storageLowSpaceWarningThresholdMB',
   'storageLowSpaceWarningIntervalMinutes', 'storageLowSpaceThresholdMB', 'storageLowSpaceAction',
@@ -90,6 +90,7 @@ const CONFIG_APPLICATION = {
   recordedNameReplaceEnclosingCharacters: application(['operator'], (value, config) => value === true || config.needToReplaceEnclosingCharacters === true),
   recordedNameEnclosingCharacterMap: application(['operator'], value => value || null),
   normalizationForm: application(['wui', 'scheduler', 'history'], value => value || null),
+  epgTitleHalfWidthEnabled: application(['epg'], enabled),
   vaapiEnabled: application(['wui'], enabled),
   vaapiDevice: application(['wui'], (value, config) => config.vaapiEnabled === true ? value || '/dev/dri/renderD128' : null),
   recordingBoundaryPolicy: application(['operator'], value => value === 'start' ? 'start' : 'end'),
@@ -127,7 +128,7 @@ const CONFIG_APPLICATION = {
 };
 
 export function configApplicationEffects(before, after) {
-  const effects = { operator: false, wui: false, scheduler: false, history: false, immediate: false, connectionChanged: false, unknown: [] };
+  const effects = { operator: false, wui: false, scheduler: false, epg: false, history: false, immediate: false, connectionChanged: false, unknown: [] };
   for (const change of configChanges(before, after)) {
     if (change.key === 'endLackMaxSeconds') continue; // Removing the retired key has no runtime effect.
     const entry = CONFIG_APPLICATION[change.key];
@@ -146,6 +147,7 @@ export function configApplicationMessages(effects) {
   else if (effects.wui) messages.push('WUIの再起動が必要です。');
   const prefix = effects.operator || effects.wui ? '' : '再起動不要：';
   if (effects.scheduler) messages.push(`${prefix}次回Scheduler実行時に反映されます。`);
+  if (effects.epg) messages.push(`${prefix}次回EPG取得時に反映されます。`);
   if (effects.history) messages.push(`${prefix}次回履歴・照合処理時に反映されます。`);
   if (effects.connectionChanged) messages.push('待受IP・ポート・アクセス制限の変更により、WUI再起動後は現在のURLで接続できなくなる可能性があります。');
   if (effects.unknown.length) messages.push(`反映条件を確認できない設定：${effects.unknown.join(', ')}`);
@@ -259,6 +261,9 @@ export function validateConfig(config) {
   }
   if (config.normalizationForm !== undefined && !['NFC', 'NFD', 'NFKC', 'NFKD'].includes(config.normalizationForm)) {
     errors.push('予約ルールの文字正規化が不正です。');
+  }
+  if (config.epgTitleHalfWidthEnabled !== undefined && typeof config.epgTitleHalfWidthEnabled !== 'boolean') {
+    errors.push('番組タイトルの英数字を半角に統一は真偽値で指定してください。');
   }
   if (config.storageLowSpaceAction !== undefined && !['stop-new', 'stop', 'remove'].includes(config.storageLowSpaceAction)) {
     errors.push('容量不足時の処置が不正です。');

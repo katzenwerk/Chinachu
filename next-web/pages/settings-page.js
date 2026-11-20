@@ -562,7 +562,8 @@ export function renderSettingsPage(container) {
     const normalization = bindValueField('normalizationForm', '番組名や番組説明と予約ルールを照合する際に、文字の表現の違いを調整します。変更すると、ルールに一致する番組が変わる場合があります。通常はNFKCを使用します。', {
       select: [{ value: '', label: '未指定（正規化なし）' }, { value: 'NFC', label: 'NFC' }, { value: 'NFD', label: 'NFD' }, { value: 'NFKC', label: 'NFKC' }, { value: 'NFKD', label: 'NFKD' }]
     });
-    fields.append(autoThumbnail.wrap, normalization.wrap);
+    const epgTitleHalfWidth = bindBoolean('epgTitleHalfWidthEnabled', '番組タイトルの英数字を半角に統一', 'ONにすると、EPG取得時に全角英数字を半角へ統一し、一部の記号表記も整えます。既存の録画履歴やファイル名は変更しません。');
+    fields.append(autoThumbnail.wrap, epgTitleHalfWidth.wrap, normalization.wrap);
     const boundary = bindValueField('recordingBoundaryPolicy', 'チューナー不足で録画を切り替えるとき、先行録画の末尾と後続録画の先頭のどちらを優先するかを選びます。未指定時は終了優先です。ルールで優先保護された番組と通常の番組が切り替わる場合は、保護された番組を優先します。変更はOperator再起動後に反映されます。', { compact: true });
     if (draft.recordingBoundaryPolicy === undefined) boundary.input.value = 'end';
     fields.append(boundary.wrap);
