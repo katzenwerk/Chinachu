@@ -193,7 +193,7 @@ export const helpContent = `
 <tr class="help-setting-row help-wui"><th scope="row"><span class="help-setting-name">Slack</span></th><td><p>SlackのIncoming Webhook URLを登録し、有効な通知イベントを送ります。URLは通知先へ投稿するための接続情報として扱います。</p><p>経路未設定では送信されません。設定は通常のconfig.jsonとは別に保存され、保存後すぐに反映されます。テスト送信も利用できます。</p></td></tr>
 <tr class="help-setting-row help-wui"><th scope="row"><span class="help-setting-name">Pushover</span></th><td><p>Application API TokenとUser Keyを登録し、有効な通知イベントをPushoverへ送ります。</p><p>経路未設定では送信されません。設定は通常のconfig.jsonとは別に保存され、保存後すぐに反映されます。テスト送信も利用できます。</p></td></tr>
 <tr class="help-setting-row help-wui"><th scope="row"><span class="help-setting-name">コマンド</span></th><td><p>実行ファイルのパス、または<code>["実行ファイル", "引数", "..."]</code>形式のJSON配列を指定します。シェルを介さず起動し、<strong>通知JSONを標準入力へ渡します</strong>。</p><p>録画後コマンドの$1・$2とは受取方法が異なります。外部通知設定として保存後すぐに反映され、テスト送信も利用できます。</p></td></tr>
-</tbody></table></div><p><strong>通知イベント：</strong>予約競合、録画失敗、録画中止、ストレージ容量不足、TS解析異常・DROP疑い、録画開始、録画完了。新規設定時は録画開始・完了がOFF、それ以外はONが既定です。各経路は設定画面からテスト送信できます。</p><details class="help-details"><summary>コマンド通知のスクリプト例と録画後コマンドとの違い</summary><div class="help-details-body"><pre><code>#!/bin/sh
+</tbody></table></div><p><strong>通知イベント：</strong>予約競合、録画失敗、録画中止、ストレージ容量低下、ストレージ容量不足、TS解析異常・DROP疑い、録画開始、録画完了。新規設定時は録画開始・完了がOFF、それ以外はONが既定です。各経路は設定画面からテスト送信できます。</p><p>「ストレージ容量低下」は警告閾値を下回った際と、警告状態が続いて警告の再通知間隔を過ぎた際に通知します。警告閾値が無効なら通知しません。「ストレージ容量不足」とは個別にON/OFFできます。容量不足の外部通知は容量不足への移行時に送信します。</p><details class="help-details"><summary>コマンド通知のスクリプト例と録画後コマンドとの違い</summary><div class="help-details-body"><pre><code>#!/bin/sh
 set -eu
 
 # 通知JSONは標準入力から受け取る

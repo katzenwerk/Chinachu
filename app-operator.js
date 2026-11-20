@@ -4017,7 +4017,10 @@ function handleStorageGroup(group, recordingEvent) {
 		writable: true,
 		value: group.capacityCheckedAt
 	});
-	externalNotifier.storage(group);
+	externalNotifier.storage(group, {
+		warningIntervalMs: storageLowSpaceWarningIntervalTime,
+		warningThresholdMB: storageLowSpaceWarningThresholdMB
+	});
 	notifyStorageGroup(group);
 	if (group.phase !== 'cleanup') {
 		const previous = storageCleanupState[group.filesystemKey];

@@ -1,5 +1,5 @@
 const LABELS = { mail: 'メール', slack: 'Slack', pushover: 'Pushover', command: 'コマンド' };
-const EVENTS = { conflict: '予約競合', failure: '録画失敗', abort: '録画中止', storage: 'ストレージ容量不足',
+const EVENTS = { conflict: '予約競合', failure: '録画失敗', abort: '録画中止', storageWarning: 'ストレージ容量低下', storage: 'ストレージ容量不足',
   analysis: 'TS解析異常・DROP疑い', start: '録画開始', complete: '録画完了' };
 const FIELDS = {
   command: [['command', '実行コマンド（実行ファイルまたはJSON配列）', 'command']],

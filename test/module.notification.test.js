@@ -94,7 +94,7 @@ describe('notification behavior contracts', function() {
 
 		const routes = prepareSettings(temporaryDir);
 		let view = external.publicSettings(external.read(temporaryDir));
-		assert.deepStrictEqual(view.events, { conflict: true, failure: true, abort: true, storage: true, analysis: true, start: false, complete: false });
+		assert.deepStrictEqual(view.events, { conflict: true, failure: true, abort: true, storageWarning: true, storage: true, analysis: true, start: false, complete: false });
 		assert.ok(['mail', 'slack', 'pushover'].every(name => view.routes[name].configured && !view.routes[name].enabled));
 		assert.strictEqual(view.routes.command.configured, false);
 		assert.strictEqual(external.isCommandManaged(temporaryDir), false);
@@ -346,10 +346,35 @@ describe('notification behavior contracts', function() {
 		assert.strictEqual(delivered.length, 7);
 		await external.notifyAnalysis(temporaryDir, program, { status: 'ERROR', completed: false, error: 'fixture error' }, analysis, { ...dependencies, log });
 		assert.strictEqual(delivered.length, 8);
+		// Warning reminders share the existing storage transition contract, without changing critical deduplication.
+		let warningNow = 1000;
+		notifier = external.createNotifier(temporaryDir, log, { ...dependencies, now: () => warningNow });
+		const warning = { ...low, phase: 'warning' };
+		const warningOptions = { warningIntervalMs: 60000, warningThresholdMB: 50000 };
+		notifier.storage(warning, warningOptions); notifier.storage(warning, warningOptions); await drain();
+		assert.strictEqual(delivered.length, 9);
+		assert.match(delivered.at(-1), /ストレージ容量低下/);
+		assert.match(delivered.at(-1), /警告閾値: 50000 MB/);
+		notifier = external.createNotifier(temporaryDir, log, { ...dependencies, now: () => warningNow });
+		warningNow += 59999;
+		notifier.storage(warning, warningOptions); await drain();
+		assert.strictEqual(delivered.length, 9);
+		warningNow++;
+		notifier.storage(warning, warningOptions); await drain();
+		assert.strictEqual(delivered.length, 10);
+		notifier.storage(low); notifier.storage(low); await drain();
+		assert.strictEqual(delivered.length, 11);
+		assert.match(delivered.at(-1), /ストレージ容量不足/);
+		notifier.storage({ ...low, phase: null }); notifier.storage(warning, warningOptions); await drain();
+		assert.strictEqual(delivered.length, 12);
+		external.update(temporaryDir, { events: { storageWarning: false } });
+		warningNow += 60000;
+		notifier.storage(warning, warningOptions); await drain();
+		assert.strictEqual(delivered.length, 12);
 		fs.writeFileSync(path.join(temporaryDir, 'data/external-notification-state.json'), '{invalid');
 		const stateLogs = [];
 		external.createNotifier(temporaryDir, line => stateLogs.push(line), dependencies).conflicts([program]); await drain();
-		assert.strictEqual(delivered.length, 8);
+		assert.strictEqual(delivered.length, 12);
 		assert.strictEqual(stateLogs.length, 1);
 		assert.strictEqual(fs.readFileSync(path.join(temporaryDir, 'data/external-notification-state.json'), 'utf8'), '{invalid');
 	});
