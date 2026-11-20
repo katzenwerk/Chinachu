@@ -1,3 +1,4 @@
+import { renderRecordingHistoryPage } from './recording-history-page.js';
 import { listLogFiles, loadLogChunk, loadRecentLog, openLogStream } from '../services/log-client.js';
 import { renderPostprocessPage } from './postprocess-page.js';
 import { classifyLogLine } from '../services/log-level.js';
@@ -7,7 +8,7 @@ import { checkWuiConnectionNow, getWuiConnectionState, subscribeWuiConnection } 
 import { completePendingRestart, getPendingRestart, subscribePendingRestart } from '../services/service-restart-store.js';
 
 const MAX_BROWSER_LINES = 5000;
-const SOURCE_LABELS = { operator: 'Operator', scheduler: 'Scheduler', wui: 'WUI', mirakurun: 'Mirakurun', task: 'Task' };
+const SOURCE_LABELS = { operator: 'Operator', scheduler: 'Scheduler', wui: 'WUI', mirakurun: 'Mirakurun', task: 'Task', csv: '録画履歴CSV' };
 const LEVEL_LABELS = { all: '全件', error: 'ERROR', warning: 'WARNING', info: 'INFO' };
 const SERVICE_REFRESH_MS = 5000;
 const MIRAKURUN_HEALTH_REFRESH_MS = 5000;
@@ -77,7 +78,7 @@ async function copyText(text) {
 
 export function renderLogPage(container, query = new URLSearchParams()) {
   let active = true;
-  let source = query.get('tab') === 'task' ? 'task' : 'operator';
+  let source = ['task', 'csv'].includes(query.get('tab')) ? query.get('tab') : 'operator';
   let mode = 'realtime';
   let level = 'all';
   let search = query.get('search') || '';
@@ -89,6 +90,7 @@ export function renderLogPage(container, query = new URLSearchParams()) {
   let autoFollow = true;
   let stopStream = null;
   let disposeTask = null;
+  let disposeCsv = null;
   let requestController = null;
   let catalogController = null;
   let generation = 0;
@@ -136,6 +138,7 @@ export function renderLogPage(container, query = new URLSearchParams()) {
       </div>
       <button class="button log-follow" type="button" hidden>最新ログへ戻る</button>
       <div class="log-task" hidden></div>
+      <div class="log-csv" hidden></div>
       <dialog class="log-restart-dialog">
         <form method="dialog">
           <h2></h2>
@@ -150,6 +153,7 @@ export function renderLogPage(container, query = new URLSearchParams()) {
   container.replaceChildren(page);
 
   const taskHost = page.querySelector('.log-task');
+  const csvHost = page.querySelector('.log-csv');
   const consoleElement = page.querySelector('.log-console');
   const linesElement = page.querySelector('.log-lines');
   const logSelection = page.querySelector('.log-selection select');
@@ -170,7 +174,7 @@ export function renderLogPage(container, query = new URLSearchParams()) {
   const restartDialogText = restartDialog.querySelector('p');
 
   function renderServiceAction() {
-    if (source === 'task') {
+    if (source === 'task' || source === 'csv') {
       serviceAction.hidden = true;
       renderServiceIndicators();
       return;
@@ -396,6 +400,8 @@ export function renderLogPage(container, query = new URLSearchParams()) {
   function updateControls() {
     const taskMode = source === 'task';
     page.classList.toggle('is-task', taskMode);
+    page.classList.toggle('is-csv', source === 'csv');
+    csvHost.hidden = source !== 'csv';
     taskHost.hidden = !taskMode;
     page.querySelectorAll('[data-source]').forEach(button => {
       const selected = button.dataset.source === source;
@@ -541,11 +547,16 @@ export function renderLogPage(container, query = new URLSearchParams()) {
     generation += 1;
     const token = generation;
     updateControls();
+    if (source !== 'task' && disposeTask) { disposeTask(); disposeTask = null; }
+    if (source !== 'csv' && disposeCsv) { disposeCsv(); disposeCsv = null; }
+    if (source === 'csv') {
+      if (!disposeCsv) disposeCsv = renderRecordingHistoryPage(csvHost);
+      return;
+    }
     if (source === 'task') {
       if (!disposeTask) disposeTask = renderPostprocessPage(taskHost);
       return;
     }
-    if (disposeTask) { disposeTask(); disposeTask = null; }
     if (mode === 'realtime') startRealtime(token); else startHistory(token);
     if (refreshCatalog) loadLogOptions(token);
   }
@@ -563,7 +574,7 @@ export function renderLogPage(container, query = new URLSearchParams()) {
     if (!button || button.dataset.source === source) return;
     source = button.dataset.source;
     const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
-    if (source === 'task') params.set('tab', 'task'); else params.delete('tab');
+    if (source === 'task' || source === 'csv') params.set('tab', source); else params.delete('tab');
     history.replaceState(null, '', `#log${params.size ? '?' + params : ''}`);
     mode = 'realtime';
     files = [];
@@ -645,6 +656,7 @@ export function renderLogPage(container, query = new URLSearchParams()) {
   refreshMirakurunHealth();
   return () => {
     active = false;
+    if (disposeCsv) { disposeCsv(); disposeCsv = null; }
     generation += 1;
     stopAllRequests();
     if (disposeTask) { disposeTask(); disposeTask = null; }

@@ -95,6 +95,7 @@ const storageRefreshIpc = require('./lib/storage-refresh-ipc');
 const recordedThumbnail = require('./lib/recorded-thumbnail');
 const recordedMaintenanceFiles = require('./lib/recorded-maintenance-files');
 const savedTsAnalysis = require('./lib/saved-ts-analysis');
+const recordingHistoryCsv = require('./lib/recording-history-csv');
 const matchDetailResolver = require('./lib/match-detail-resolver');
 const seriesServiceModule = require('./lib/series-background-service');
 const dictionaryManagerModule = require('./lib/syobocal-dictionary-manager');
@@ -1192,6 +1193,7 @@ function httpServerMain(req, res, query) {
 					matchDeletionHistory: matchDeletionHistory,
 					reservationStore: reservationStore,
 				logHistory    : logHistory,
+				recordingHistoryCsv: recordingHistoryCsv,
 				ledgerCleaner : ledgerCleaner,
 					ledgerCleanerJobs: ledgerCleanerJobs,
 					wuiConfigStore: wuiConfigStore,

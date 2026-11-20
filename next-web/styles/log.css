@@ -237,3 +237,18 @@
   .log-page { height: auto; min-height: calc(var(--wui-viewport-height) - var(--header-height) - var(--layout-page-top)); }
   .log-console { flex: 0 0 280px; }
 }
+
+.log-page.is-csv :is(.log-toolbar:not(.csv-toolbar),.log-summary,.log-console,.log-follow) { display: none; }
+.log-csv { display: flex; flex-direction: column; flex: 1 1 auto; gap: var(--space-3); min-height: 0; min-width: 0; }
+.log-csv[hidden] { display: none; }
+.csv-note,.csv-status { margin: 0; color: var(--muted); font-size: 12px; }
+.csv-status:empty { display: none; }
+.csv-table-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.csv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.csv-table th,.csv-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.csv-table th { position: sticky; top: 0; z-index: 1; background: var(--panel); white-space: nowrap; }
+.csv-table td { min-width: 100px; max-width: 460px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.csv-table td:nth-child(3) { min-width: 230px; }
+.csv-table td:last-child { min-width: 200px; font-size: 12px; }
+.csv-pager { display: flex; align-items: center; justify-content: center; gap: var(--space-3); font-size: 12px; }
+@media (max-height: 620px) { .csv-table-scroll { flex: 0 0 280px; } }
