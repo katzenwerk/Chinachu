@@ -216,6 +216,7 @@ let dictionaryManager;
 const progLookupStore = progLookupStoreModule.createProgLookupStore({ path: SERIES_PROGLOOKUP_CACHE_FILE });
 // シリーズ確定結果の小さな索引だけを既存IPCでOperatorへ渡す。送信は世代順。
 let organizerIndexDelivery = Promise.resolve();
+let recordedFolderSeries = null;
 function publishOrganizerIndex(generation, identities) {
 	if (config.recordedFolderOrganizeEnabled !== true) return;
 	organizerIndexDelivery = organizerIndexDelivery.catch(() => {}).then(async () => {
@@ -252,6 +253,7 @@ const seriesService = seriesServiceModule.createSeriesService({
 	channelMapPath: SERIES_CHANNEL_MAP_FILE,
 	progLookupPath: SERIES_PROGLOOKUP_CACHE_FILE,
 	onPublished: (generation, identities) => {
+		recordedFolderSeries = { generation, entries: identities };
 		ios.emit('notify-series', { generation });
 		publishOrganizerIndex(generation, identities);
 	},
@@ -347,6 +349,16 @@ const serviceControl = serviceControlModule.createServiceControl({
 	log: util.log
 });
 const ledgerCleanerJobs = ledgerCleanerJobsModule.createLedgerCleanerJobs({ rootDir: __dirname });
+const recordedFolderJobs = require('./lib/recorded-folder-service').createService({
+	root: __dirname,
+	operatorRequest: message => storageRefreshIpc.request({ socketPath: RECORDED_THUMBNAIL_SOCKET, timeoutMs: 5000 }, message),
+	getSeries: () => {
+		const snapshot = seriesService.getSnapshot();
+		return !snapshot.building && !snapshot.manualPending && recordedFolderSeries?.generation === snapshot.generation ? recordedFolderSeries : null;
+	},
+	cleanerBusy: () => ledgerCleanerJobs.get()?.status === 'running',
+	onChanged: () => { seriesService.invalidate({ retain: true }); ios.emit('notify-recorded'); ios.emit('notify-match'); }
+});
 const mediaDelivery = mediaDeliveryModule.createMediaDelivery({
 	mirakurun: mirakurun,
 	log: util.log
@@ -1196,6 +1208,7 @@ function httpServerMain(req, res, query) {
 				recordingHistoryCsv: recordingHistoryCsv,
 				ledgerCleaner : ledgerCleaner,
 					ledgerCleanerJobs: ledgerCleanerJobs,
+					recordedFolderJobs: recordedFolderJobs,
 					wuiConfigStore: wuiConfigStore,
 					externalNotification: externalNotification,
 				define: {

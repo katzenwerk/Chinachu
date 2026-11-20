@@ -1073,6 +1073,19 @@ function main() {
 		cleanup = reservationStore.withLock(options.recorded, function () {
 			var latest = reservationStore.readArray(options.recorded);
 			var result = cleanupRecordedHistory(latest, options.recordedHistoryDays, options.nowMs);
+			// A pending file move must remain recoverable even after retention expires.
+			var pendingFolderId;
+			try { pendingFolderId = require('./lib/recorded-folder-maintenance').pendingId(path.dirname(options.config)); }
+			catch (error) {
+				console.error('WARNING: recording history cleanup deferred: ' + error.message);
+				return Object.assign(result, { kept: latest, removed: [], removedCount: 0 });
+			}
+			if (pendingFolderId !== null) {
+				result.removed = result.removed.filter(function (program) { return String(program.id) !== pendingFolderId; });
+				var folderRemoved = new Set(result.removed);
+				result.kept = latest.filter(function (program) { return !folderRemoved.has(program); });
+				result.removedCount = result.removed.length;
+			}
 			if (csvSaveFailed || csvFailedFiles.size) {
 				var held = result.removed.filter(function (program) {
 					var month = formatJstMinute(safeInt(program.start, 0)).slice(0, 7).replace('/', '-');

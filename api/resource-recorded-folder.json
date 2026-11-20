@@ -1,0 +1,3 @@
+{
+  "/": { "script": "recorded-folder", "methods": ["get", "post"], "types": ["json"] }
+}

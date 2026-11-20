@@ -398,6 +398,13 @@ let storageDisplaySnapshots = loadStorageDisplaySnapshots();
 const runManualStorageRefresh = storageManualRefresh.createSingleFlight(handleManualStorageRefresh);
 let storageRefreshServer = null;
 let recordedThumbnailServer = null;
+let recordedFolderApply = null;
+function isFolderOrganizing() { return recordedFolderApply?.isBusy() === true; }
+function folderPendingId() {
+	try { return require('./lib/recorded-folder-maintenance').pendingId(__dirname); }
+	catch (error) { operatorLog('WARNING: folder organize recovery record: ' + error.message); return '*'; }
+}
+
 let recordingChecked = 0;
 const handoffEndLackUsed = new Set();
 let recordedStorageWakeupHistory = {};
@@ -454,6 +461,7 @@ const recordedThumbnailGenerator = recordedThumbnail.createGenerator({
 	probe: filePath => new Promise(resolve => startDurationProbe({ filePath, queuedAt: Date.now(), maintenance: true,
 		callback: duration => resolve(duration) })),
 	getRunDelay: job => {
+		if (isFolderOrganizing()) return Infinity;
 		if (recordedMaintenance && recordedMaintenance.isBusy() && !recordedMaintenance.currentThumbnail(job)) return Infinity;
 		if (shutdownStarted || matchLedgerProcess || activeDurationProbes.size !== 0 ||
 			pendingRecordedLedgerWrites !== 0) return Infinity;
@@ -492,7 +500,7 @@ recordedMaintenance = recordedMaintenanceModule.createMaintenance({
 	log: operatorLog,
 	onCompleted: event => rememberPostProcessing('ts', event.title || recordedTitleForId(event.id),
 		event.status, event.startedAt, event.id, event.mode === 'manual' ? '手動解析' : '自動解析'),
-	canStart: () => !shutdownStarted && !matchLedgerProcess && activeDurationProbes.size === 0 &&
+	canStart: () => !shutdownStarted && !isFolderOrganizing() && !matchLedgerProcess && activeDurationProbes.size === 0 &&
 		pendingRecordedLedgerWrites === 0 && !recordedThumbnailGenerator.getState().active,
 	wake: () => { wakePostProcessing(); completeOperatorShutdown(); },
 	delay: ts => {
@@ -513,6 +521,23 @@ recordedMaintenance = recordedMaintenanceModule.createMaintenance({
 	} catch (error) {
 		operatorLog('WARNING: maintenance ledger reload failed: ' + error.message);
 	} }
+});
+
+recordedFolderApply = require('./lib/recorded-folder-jobs').createJobs({
+	root: __dirname, compact: true,
+	canStart: () => {
+		if (shutdownStarted || recordedMaintenance.isBusy() || (recordedThumbnailGenerator.getState().active || recordedThumbnailGenerator.getState().pending) ||
+			durationProbeQueue.length || activeDurationProbes.size || pendingRecordedLedgerWrites || matchLedgerProcess ||
+			Number.isFinite(recordedMaintenance.nextRequestedAt())) {
+			throw recordedThumbnailRequestError('postprocessing_busy', 409, '録画後処理・録画保守の処理中です。完了後に再実行してください。');
+		}
+	},
+	onDone: () => {
+		try { recorded = reservationStore.readArray(RECORDED_DATA_FILE); }
+		catch (error) { operatorLog('WARNING: folder organize ledger reload failed: ' + error.message); }
+		wakePostProcessing();
+		if (shutdownStarted) completeOperatorShutdown();
+	}
 });
 
 // EPG由来のscheduler要求だけをsingle pendingへ集約する。
@@ -950,7 +975,7 @@ function startScheduler() {
 
 function completeOperatorShutdown() {
 	if (!shutdownStarted || scheduler !== null || activeRecordingOutputs.size !== 0 ||
-		matchLedgerProcess !== null || activeDurationProbes.size !== 0 || pendingRecordedLedgerWrites !== 0 || recordedMaintenance.isBusy()) {
+		matchLedgerProcess !== null || activeDurationProbes.size !== 0 || pendingRecordedLedgerWrites !== 0 || recordedMaintenance.isBusy() || isFolderOrganizing()) {
 		return;
 	}
 
@@ -1485,10 +1510,12 @@ function postProcessingDelay() {
 // still be analyzed up to the configured concurrent-recording limit.
 function nextAutoTsCandidate() {
 	const openFiles = new Set(Array.from(activeRecordingOutputs, output => String(output.path || '')));
-	return recordedAutoAnalysis.summarize(recorded, Date.now(), entry => openFiles.has(path.resolve(__dirname, entry.recorded))).candidate;
+	const pendingId = folderPendingId();
+	return recordedAutoAnalysis.summarize(recorded, Date.now(), entry => pendingId === '*' || String(entry.id) === pendingId || openFiles.has(path.resolve(__dirname, entry.recorded))).candidate;
 }
 
 function getAutoThumbnailSummary() {
+	const pendingId = folderPendingId();
 	if (config.recordedThumbnailAutoEnabled === false) return { remaining: 0, candidate: null };
 	const resolver = require('./lib/match-detail-resolver');
 	const blockedById = new Map(), blockedKeys = new Set();
@@ -1508,7 +1535,7 @@ function getAutoThumbnailSummary() {
 		taskStatus: id => recordedThumbnailGenerator.getTaskStatus(id),
 		excluded: entry => {
 			const key = resolver.makeCanonicalKey(entry);
-			return entry.deleted === true || entry.cleanupState === 'deleted' || recordingIds.has(String(entry.id)) ||
+			return pendingId === '*' || String(entry.id) === pendingId || entry.deleted === true || entry.cleanupState === 'deleted' || recordingIds.has(String(entry.id)) ||
 				openPaths.has(path.resolve(__dirname, entry.recorded)) || blockedKeys.has(key) ||
 				(blockedById.get(String(entry.id)) || []).some(value => !value || !key || value === key);
 		}
@@ -1550,6 +1577,7 @@ function wakePostProcessing(delay = 0) {
 }
 
 function runPostProcessing() {
+	if (isFolderOrganizing()) return;
 	if (recordedMaintenance.isBusy()) return;
 	if (shutdownStarted || matchLedgerProcess || activeDurationProbes.size !== 0 ||
 		recordedThumbnailGenerator.getState().active) return;
@@ -3737,13 +3765,27 @@ function getCleanupRoots(group) {
 }
 
 function cleanupScanOptions(group, limit) {
+	const protectedPaths = getRecordingPathSet();
+	let pending;
+	try {
+		const maintenance = require('./lib/recorded-folder-maintenance');
+		pending = maintenance.readOptional(maintenance.locations(__dirname).pending);
+		if (pending) {
+			if (typeof pending.source !== 'string' || typeof pending.target !== 'string') throw new Error('invalid folder recovery paths');
+			protectedPaths.add(path.resolve(pending.source)); protectedPaths.add(path.resolve(pending.target));
+		}
+	}
+	catch (error) {
+		operatorLog('WARNING: Storage cleanup deferred by unreadable folder recovery record: ' + error.message);
+		return { fs, roots: [], filesystemKey: group && group.filesystemKey, protectedPaths, limit };
+	}
 	return {
 		fs: fs,
 		// /proc/self/mountinfo identifies every configured root on this filesystem
 		// without stat'ing unrelated recording HDDs. Unknown roots are not probed.
 		roots: getCleanupRoots(group),
 		filesystemKey: group && group.filesystemKey,
-		protectedPaths: getRecordingPathSet(),
+		protectedPaths: protectedPaths,
 		limit: limit,
 		onError: function (operation, targetPath, error) {
 			operatorLog('WARNING: Storage cleanup ' + operation + ' failed: ' + targetPath + ' (' + error.message + ')');
@@ -4331,6 +4373,19 @@ function handleRecordedThumbnailRequest(request) {
 		}
 		stopRecording(id, 'ABORT RECORDING');
 		return { accepted: true, status: 'stopping' };
+	}
+	if (request && request.folderOrganize === true) {
+		if (request.action === 'state') return { version: 1, busy: isFolderOrganizing(), job: recordedFolderApply.get(), pending: recordedFolderApply.pending() };
+		if (!['apply', 'recover'].includes(request.action)) throw recordedThumbnailRequestError('invalid_request', 400, '振り分け操作が不正です。');
+		return { version: 1, job: recordedFolderApply.start(request.action, { previewId: request.previewId }) };
+	}
+	if (isFolderOrganizing() && !request?.organizerIndex && !(request?.maintenance === true ?
+		['state', 'monitor-status'].includes(request.maintenanceAction) : request?.action === 'status')) {
+		throw recordedThumbnailRequestError('folder_organize_busy', 409, '振り分け適用中です。完了後に再操作してください。');
+	}
+	if (request?.id && !(request.maintenance ? ['state', 'monitor-status'].includes(request.maintenanceAction) : request.action === 'status')) {
+		const pendingId = folderPendingId();
+		if (pendingId === '*' || String(request.id) === pendingId) throw recordedThumbnailRequestError('folder_recovery_required', 409, '未完了の振り分けを復旧してから操作してください。');
 	}
 	if (request && request.organizerIndex === true) return updateRecordedSeriesIndex(request);
 	if (request && request.maintenance === true && request.maintenanceAction === 'monitor-status') return postProcessingMonitorStatus();

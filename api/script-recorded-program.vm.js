@@ -124,6 +124,10 @@ function deleteRecordedProgram(id) {
 
 	try {
 		reservationStore.withLock(recordedFile, function() {
+			var pendingFolderId = recordedFolderJobs.pendingId();
+			if (pendingFolderId !== null && programHasId({ id: pendingFolderId }, id)) {
+				throw deletionFailure('folder-recovery-required', '未完了の振り分けを復旧してから削除してください。', 409, result);
+			}
 			var recordedItems = reservationStore.readArray(recordedFile);
 			var recordedTargets = recordedItems.filter(function(value) { return programHasId(value, id); });
 			if (recordedTargets.length !== 1) {

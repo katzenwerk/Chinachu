@@ -132,6 +132,7 @@ function deleteRecorded(targetScript, fileExists, options = {}) {
 		matchDetailResolver,
 		matchDeletionHistory,
 		recordedThumbnail,
+		recordedFolderJobs: { pendingId: () => null },
 		storageRefreshIpc: { request(_connection, payload) { thumbnailRequests.push(payload); return Promise.resolve({}); } },
 		reservationStore: {
 			withLock(_file, callback) { return callback(); },

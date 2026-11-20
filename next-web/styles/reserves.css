@@ -134,8 +134,8 @@ html:has(.reserves-page) { min-width: 0; }
 .recorded-header-toolbar .recorded-results-filter { min-width: 104px; align-self: center; color: var(--brand-ink); }
 .recorded-header-toolbar .recorded-view-switch { margin-left: calc(var(--header-group-gap) - var(--header-control-gap)); }
 .recorded-header-toolbar .reserves-filter-control { height: 34px; }
-.recorded-header-toolbar .recorded-results-cleaner { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; align-self: center; height: var(--header-control-height); min-height: var(--header-control-height); padding: 0 10px; border: 1px solid rgba(255,255,255,.72); border-radius: var(--radius-sm); background: rgba(255,255,255,.95); color: var(--brand-strong); font: inherit; font-size: var(--header-control-font-size); font-weight: var(--font-body-weight); line-height: 1.2; white-space: nowrap; }
-.recorded-header-toolbar .recorded-results-cleaner:hover { border-color: #fff; background: #fff; color: var(--header-hover-ink); }
+.recorded-header-toolbar :is(.recorded-results-cleaner,.recorded-results-organize) { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; align-self: center; height: var(--header-control-height); min-height: var(--header-control-height); padding: 0 10px; border: 1px solid rgba(255,255,255,.72); border-radius: var(--radius-sm); background: rgba(255,255,255,.95); color: var(--brand-strong); font: inherit; font-size: var(--header-control-font-size); font-weight: var(--font-body-weight); line-height: 1.2; white-space: nowrap; }
+.recorded-header-toolbar :is(.recorded-results-cleaner,.recorded-results-organize):hover { border-color: #fff; background: #fff; color: var(--header-hover-ink); }
 .recorded-header-toolbar .reserves-count { flex: 0 0 auto; align-self: center; justify-content: flex-end; width: auto; min-width: 0; min-height: var(--header-control-height); font-size: var(--header-count-font-size); }
 .recorded-header-toolbar .recorded-results-filter.is-warning-only .reserves-filter-control { border-color: #dfb75c; background: #fff3cf; color: #8a5800; }
 .recorded-header-toolbar .recorded-results-filter.is-warning-only .reserves-filter-control span { color: #8a5800; }
@@ -154,8 +154,8 @@ html:has(.reserves-page) { min-width: 0; }
   .recorded-header-toolbar .reserves-search { grid-column: 1 / -1; flex: none; width: 100%; max-width: none; min-width: 0; }
   .recorded-header-toolbar .recorded-view-switch { grid-column: 1; justify-self: start; }
   .recorded-header-toolbar .recorded-results-filter { grid-column: 2; width: 100%; min-width: 0; }
-  .recorded-header-toolbar .recorded-results-cleaner { width: 100%; border-color: var(--border); background: var(--panel); color: var(--text); }
-  .recorded-header-toolbar .recorded-results-cleaner:hover { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-strong); }
+  .recorded-header-toolbar :is(.recorded-results-cleaner,.recorded-results-organize) { width: 100%; border-color: var(--border); background: var(--panel); color: var(--text); }
+  .recorded-header-toolbar :is(.recorded-results-cleaner,.recorded-results-organize):hover { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-strong); }
   .recorded-header-toolbar .reserves-count { grid-column: 1 / -1; justify-self: end; min-height: 22px; color: var(--muted); }
 }
 @media (max-width:720px) {
@@ -244,6 +244,7 @@ html:has(.reserves-page) { min-width: 0; }
   .header-page-actions .recorded-results-toolbar { justify-content: flex-start; }
   .recorded-header-toolbar .recorded-results-toolbar > .reserves-count { order: 0; margin-right: 0; }
   .recorded-header-toolbar .recorded-results-toolbar > .recorded-view-switch { order: 1; margin-left: 0; }
+  .recorded-header-toolbar .recorded-results-toolbar > .recorded-results-organize { order: 2; }
   .recorded-header-toolbar .recorded-results-toolbar > .recorded-results-cleaner { order: 3; }
   .recorded-header-toolbar .recorded-results-toolbar > .recorded-results-filter { order: 4; margin-left: auto; }
   .recorded-header-toolbar .recorded-results-toolbar > .reserves-search { order: 5; }

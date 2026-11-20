@@ -16,6 +16,7 @@ import { deleteRecordedFromContext } from '../services/recorded-delete-action.js
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
 import { subscribeMatchNotifications, subscribeSeriesNotifications } from '../services/realtime-client.js';
 import { openCleanerDialog } from '../components/cleaner-dialog.js';
+import { openRecordedFolderDialog } from '../components/recorded-folder-dialog.js';
 import { loadSeriesProjection } from '../services/series-client.js';
 import { buildSeriesTitleIndex } from '../services/program-title.js';
 import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
@@ -129,6 +130,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
                 <label class="recorded-results-ts-option"><input type="checkbox" value="tsIssues"><span>DROP／TS異常ありのみ</span></label>
               </div>
             </div>
+	            <button class="button recorded-results-organize" type="button">振り分け</button>
 	            <button class="button recorded-results-cleaner" type="button">台帳整理</button>
             <span class="reserves-count" aria-label="録画結果件数">--</span>
           </div>
@@ -222,6 +224,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   updateScopedFilters();
 	  storePreference(RESULTS_STORAGE_KEY, JSON.stringify(Array.from(selectedResults)));
 	  cleanerButton.addEventListener('click', openCleanerDialog);
+	  toolbar.querySelector('.recorded-results-organize').addEventListener('click', openRecordedFolderDialog);
 
   function isActive() {
     return active && page.isConnected;
