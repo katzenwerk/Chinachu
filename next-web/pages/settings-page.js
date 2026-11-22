@@ -731,12 +731,27 @@ export function renderSettingsPage(container) {
       status.textContent = `サービス ${services.length}件 / 除外 ${services.filter(item => item.excluded).length}件 / 順序指定 ${services.filter(item => item.order !== '').length}件`;
     };
     const rows = new Map();
+    let pointerPending = false, reorderPending = false;
     const reorder = () => {
+      const focused = list.contains(document.activeElement) ? document.activeElement : null;
       sortSettingsServices(services).forEach((item, index) => {
         const row = rows.get(item);
         if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
       });
+      if (focused && document.activeElement !== focused) focused.focus({ preventScroll: true });
     };
+    const finishPointer = () => {
+      document.removeEventListener('click', finishPointer);
+      document.removeEventListener('pointercancel', finishPointer);
+      pointerPending = false;
+      if (reorderPending) { reorderPending = false; reorder(); }
+    };
+    list.addEventListener('pointerdown', () => {
+      pointerPending = true;
+      // Keep the tapped row in place until its click has reached its target.
+      document.addEventListener('click', finishPointer, { once: true, signal: controller.signal });
+      document.addEventListener('pointercancel', finishPointer, { once: true, signal: controller.signal });
+    });
     const draw = () => {
       list.replaceChildren();
       rows.clear();
@@ -778,7 +793,8 @@ export function renderSettingsPage(container) {
           item.order = value;
           commitServices('order');
           updateServiceStatus();
-          reorder();
+          if (pointerPending) reorderPending = true;
+          else reorder();
         };
         order.addEventListener('blur', commitOrder);
         order.addEventListener('keydown', event => {
