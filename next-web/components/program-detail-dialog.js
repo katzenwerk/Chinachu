@@ -613,7 +613,8 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   const play = async (model, startSeconds = 0) => {
     close();
     if (model.media.playable) {
-      await openRecordedPlaybackOverlay({ playable: true, recordedId: model.media.recordedId, title: model.title, startSeconds });
+      await openRecordedPlaybackOverlay({ playable: true, recordedId: model.media.recordedId, title: model.title, startSeconds,
+        channelName: model.channel.name, channelLogoUrl: model.channel.logoUrl, detail: model.detail });
     } else if (model.media.liveModel) {
       await openRecordingLiveOverlay(model.media.liveModel);
     }

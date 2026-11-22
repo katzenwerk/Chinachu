@@ -1,6 +1,9 @@
 // WUI adapter. Conversion, Range seeking and ManagedMediaSource are upstream's.
 import { Mpeg2TsPlayer } from './mpeg2toh264/index.js';
 import { Controller, MPEGTSFeeder, SVGDOMRenderer } from './mpeg2toh264/aribb24.js';
+import { loadCaptionPreference, saveCaptionPreference } from './player-caption-preference.js';
+import { setControlLabel } from './player-control-icons.js';
+import { mountRecordedOverlayUi } from './recorded-overlay-ui.js';
 
 const SEEK_SECONDS = 15;
 
@@ -22,7 +25,12 @@ function isDesktopNonSafariEnvironment(nav) {
 		/(?:Windows NT|Macintosh|X11|CrOS)/i.test(userAgent);
 }
 
-export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compatHlsUrl, chaseStatusUrl, startSeconds = 0, onStatus = () => {} }) {
+export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compatHlsUrl, chaseStatusUrl, startSeconds = 0, onStatus = () => {}, programInfo = {}, onClose = () => {}, statusElement = null }) {
+	const independent = frame.classList.contains('recorded-playback-frame');
+	const labelControl = (button, label, icon) => {
+		if (independent) setControlLabel(button, label, icon);
+		else button.textContent = label;
+	};
 	const stage = document.createElement('div');
 	stage.className = 'program-ts-stage';
 	const picture = document.createElement('div');
@@ -50,12 +58,19 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 	seekFeedback.setAttribute('aria-live', 'polite');
 	seekFeedback.hidden = true;
 	picture.append(video, playOverlay, seekFeedback);
-	stage.append(picture);
+	if (independent) {
+		const viewport = document.createElement('div');
+		viewport.className = 'program-player-viewport';
+		viewport.append(picture);
+		stage.append(viewport);
+	} else {
+		stage.append(picture);
+	}
 	const controls = document.createElement('div');
 	controls.className = 'program-ts-controls';
 	const captionsButton = document.createElement('button');
 	captionsButton.type = 'button';
-	captionsButton.textContent = '字幕を隠す';
+	labelControl(captionsButton, '字幕を隠す', 'captions');
 	captionsButton.setAttribute('aria-pressed', 'true');
 	const speedSelect = chaseStatusUrl ? null : document.createElement('select');
 	if (speedSelect) {
@@ -70,15 +85,15 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 	}
 	const fullscreenButton = document.createElement('button');
 	fullscreenButton.type = 'button';
-	fullscreenButton.textContent = '全画面';
+	labelControl(fullscreenButton, '全画面', 'maximize');
 	const compatButton = document.createElement('button');
 	compatButton.type = 'button';
-	compatButton.textContent = 'FFmpeg互換再生';
+	labelControl(compatButton, 'FFmpeg互換再生', 'film');
 	const desktopNonSafari = isDesktopNonSafariEnvironment(
 		typeof navigator === 'undefined' ? null : navigator
 	);
 	compatButton.hidden = desktopNonSafari || (!compatUrl && !compatHlsUrl);
-	const status = document.createElement('span');
+	const status = statusElement || document.createElement('span');
 	status.setAttribute('role', 'status');
 	controls.append(captionsButton);
 	if (speedSelect) controls.append(speedSelect);
@@ -91,6 +106,7 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		splitFieldSamples: true, chaseStatusUrl
 	});
 	let destroyed = false;
+	let overlayUi = null;
 	const applyPlaybackRate = () => {
 		if (!speedSelect || destroyed) return;
 		const rate = Number(speedSelect.value);
@@ -100,7 +116,7 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		if (video.playbackRate !== rate) video.playbackRate = rate;
 	};
 	let playerDestroyed = false;
-	let captionsEnabled = true;
+	let captionsEnabled = loadCaptionPreference();
 	let seekFeedbackTimer = null;
 	let hlsCloseUrl = null;
 	let requestedUrl = null;
@@ -163,8 +179,9 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		if (pts !== null) entries.forEach(entry => entry.feeder.feedB24(data, pts));
 	};
 	const fullscreenChanged = () => {
-		fullscreenButton.textContent = document.fullscreenElement === stage ||
-			stage.classList.contains('program-ts-expanded') ? '全画面を終了' : '全画面';
+		const fullscreen = document.fullscreenElement === stage || stage.classList.contains('program-ts-expanded');
+		labelControl(fullscreenButton, fullscreen ? '全画面を終了' : '全画面', fullscreen ? 'minimize' : 'maximize');
+		overlayUi?.show();
 	};
 	const escape = event => {
 		if (event.key === 'Escape') {
@@ -239,7 +256,7 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		}
 		disposeMpegPlayer();
 		compatButton.disabled = true;
-		compatButton.textContent = 'FFmpeg互換再生中';
+		labelControl(compatButton, 'FFmpeg互換再生中', 'film');
 		const supportsNativeHls = typeof video.canPlayType === 'function' &&
 			video.canPlayType('application/vnd.apple.mpegurl') !== '';
 		status.textContent = supportsNativeHls && compatHlsUrl ?
@@ -311,6 +328,7 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		}, 900);
 	};
 	const seekByArrow = event => {
+		if (controls.contains(event.target)) return;
 		if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
 		if (event.repeat) {
 			event.preventDefault();
@@ -350,12 +368,14 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 	const resize = () => {
 		if (video.videoWidth && video.videoHeight) {
 			picture.style.setProperty('--program-ts-aspect', String(video.videoWidth / video.videoHeight));
+			if (independent) stage.style.setProperty('--program-ts-aspect', String(video.videoWidth / video.videoHeight));
 		}
 	};
 
 	function destroy() {
 		if (destroyed) return;
 		destroyed = true;
+		overlayUi?.destroy();
 		closeHlsSession();
 		disposeMpegPlayer();
 		video.removeEventListener('ended', ended);
@@ -382,6 +402,22 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 		stage.remove();
 	}
 
+	function setCaptionEnabled(enabled) {
+		captionsEnabled = enabled;
+		for (const { type, controller, overlay } of entries) {
+			if (type !== 'Caption') continue;
+			if (enabled) {
+				overlay.style.removeProperty('display');
+				controller.show();
+			} else {
+				controller.hide();
+				overlay.style.display = 'none';
+			}
+		}
+		labelControl(captionsButton, enabled ? '字幕を隠す' : '字幕を表示', enabled ? 'captions' : 'captions-off');
+		captionsButton.setAttribute('aria-pressed', String(enabled));
+	}
+
 	try {
 		for (const type of ['Caption', 'Superimpose']) {
 			const feeder = new MPEGTSFeeder({ recieve: { type }, tokenizer: {}, offset: {} });
@@ -395,6 +431,7 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 			entry.overlay = picture.lastElementChild;
 			entry.overlay.setAttribute('preserveAspectRatio', 'none');
 		}
+		setCaptionEnabled(captionsEnabled);
 	} catch (error) {
 		destroy();
 		throw error;
@@ -426,19 +463,8 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 	document.addEventListener('keydown', escape);
 	window.addEventListener('pagehide', destroy);
 	captionsButton.addEventListener('click', () => {
-		captionsEnabled = !captionsEnabled;
-		for (const { type, controller, overlay } of entries) {
-			if (type !== 'Caption') continue;
-			if (captionsEnabled) {
-				overlay.style.removeProperty('display');
-				controller.show();
-			} else {
-				controller.hide();
-				overlay.style.display = 'none';
-			}
-		}
-		captionsButton.textContent = captionsEnabled ? '字幕を隠す' : '字幕を表示';
-		captionsButton.setAttribute('aria-pressed', String(captionsEnabled));
+		setCaptionEnabled(!captionsEnabled);
+		saveCaptionPreference(captionsEnabled);
 	});
 	fullscreenButton.addEventListener('click', async () => {
 		if (document.fullscreenElement === stage) {
@@ -480,6 +506,10 @@ export function createRecordedPlayer(frame, { onEnded, onError, compatUrl, compa
 			await video.play().catch(() => {});
 		} catch (error) { failed({ detail: { error } }); }
 	});
+	if (independent) {
+		overlayUi = mountRecordedOverlayUi({ stage, picture, controls, captionsButton, speedSelect,
+			compatButton, fullscreenButton, status, retryButton, programInfo, onClose });
+	}
 	return {
 		destroy,
 		async loadCompat() {

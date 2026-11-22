@@ -376,7 +376,9 @@ export function buildProgramDetailModel(detail, now = Date.now()) {
         programId !== null && finitePositive(program.operatorRecordingStart) !== null &&
         validText(program.recorded) !== null && program.tuner?.isScrambling !== true
         ? { id: programId, title: validText(program.fullTitle) || validText(program.title) || 'タイトル未取得',
-          recordingStart: program.operatorRecordingStart, programStart: start } : null,
+          recordingStart: program.operatorRecordingStart, programStart: start,
+          channelName: validText(channel.name), channelLogoUrl: channelLogoUrl(channel),
+          detail: validText(program.detail) || validText(program.description) } : null,
       recordedId,
       playable,
       canCreateThumbnail: recordedResourceAvailable && ['recorded', 'aborted'].includes(state.key) &&

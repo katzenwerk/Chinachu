@@ -1,5 +1,8 @@
 import { Mpeg2TsPlayer } from './mpeg2toh264/index.js';
 import { Controller, MPEGTSFeeder, SVGDOMRenderer } from './mpeg2toh264/aribb24.js';
+import { loadCaptionPreference, saveCaptionPreference } from './player-caption-preference.js';
+import { MOBILE_QUERY } from '../components/mobile-layout.js';
+import { setControlLabel } from './player-control-icons.js';
 
 function isDesktopNonSafariEnvironment(nav) {
 	if (!nav) return false;
@@ -44,7 +47,7 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	overlay.setAttribute('aria-modal', 'true');
 	overlay.setAttribute('aria-label', 'ライブ視聴');
 	const panel = document.createElement('div');
-	panel.className = 'program-live-panel';
+	panel.className = 'program-live-panel program-live-overlay-panel';
 	const heading = document.createElement('div');
 	heading.className = 'program-live-header';
 	const headingContent = document.createElement('div');
@@ -68,12 +71,16 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	liveLabel.textContent = 'LIVE';
 	channelLine.append(logo, channelLabel, liveLabel);
 	programMeta.append(channelLine);
-	const programLabel = document.createElement('div');
+	const programLabel = document.createElement('button');
+	programLabel.type = 'button';
 	programLabel.className = 'program-live-program';
+	programLabel.setAttribute('aria-expanded', 'false');
+	programLabel.setAttribute('aria-controls', 'program-live-description');
 	programLabel.style.display = 'none';
 	programMeta.append(programLabel);
 	const description = document.createElement('div');
 	description.className = 'program-live-description';
+	description.id = 'program-live-description';
 	description.style.display = 'none';
 	programMeta.append(description);
 	let activeProgram = null;
@@ -112,43 +119,42 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	video.preload = 'none';
 	video.setAttribute('controlslist', 'nofullscreen');
 	picture.append(video);
-	stage.append(picture);
+	const viewport = document.createElement('div');
+	viewport.className = 'program-player-viewport';
+	viewport.append(picture);
+	stage.append(viewport);
 	const controls = document.createElement('div');
 	controls.className = 'program-live-controls';
 	const captionsButton = document.createElement('button');
 	captionsButton.type = 'button';
-	captionsButton.textContent = '字幕を隠す';
+	setControlLabel(captionsButton, '字幕を隠す', 'captions');
 	captionsButton.setAttribute('aria-pressed', 'true');
 	const fullscreenButton = document.createElement('button');
 	fullscreenButton.type = 'button';
-	fullscreenButton.textContent = '全画面';
+	setControlLabel(fullscreenButton, '全画面', 'maximize');
 	const compatButton = document.createElement('button');
 	compatButton.type = 'button';
-	compatButton.textContent = 'FFmpeg互換再生';
+	setControlLabel(compatButton, 'FFmpeg互換再生', 'film');
 	const desktopNonSafari = isDesktopNonSafariEnvironment(
 		typeof navigator === 'undefined' ? null : navigator
 	);
 	compatButton.hidden = desktopNonSafari;
 	const closeButton = document.createElement('button');
 	closeButton.type = 'button';
-	closeButton.textContent = '閉じる';
-	const overlayCloseButton = document.createElement('button');
-	overlayCloseButton.className = 'chinachu-live-player-close';
-	overlayCloseButton.type = 'button';
-	overlayCloseButton.textContent = '×';
-	overlayCloseButton.setAttribute('aria-label', 'ライブ視聴を閉じる');
-	overlayCloseButton.setAttribute('title', '閉じる');
-	heading.append(overlayCloseButton);
+	setControlLabel(closeButton, '閉じる', 'close');
 	const status = document.createElement('span');
 	status.className = 'program-live-status';
 	status.setAttribute('role', 'status');
 	const buttonGroup = document.createElement('div');
 	buttonGroup.className = 'program-live-button-group';
-	buttonGroup.append(captionsButton, fullscreenButton, compatButton, closeButton);
+	buttonGroup.append(captionsButton, fullscreenButton, closeButton, compatButton);
 	controls.append(buttonGroup);
 	controls.append(timeColumn);
 	controls.append(status);
-	panel.append(heading, stage, controls);
+	const chrome = document.createElement('div');
+	chrome.className = 'program-live-chrome';
+	chrome.append(heading, controls);
+	panel.append(stage);
 	overlay.append(panel);
 	document.body.append(overlay);
 
@@ -160,7 +166,76 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	let playerDestroyed = false;
 	let playbackMode = 'mpeg2toh264';
 	let hlsCloseUrl = null;
-	let captionsEnabled = true;
+	let captionsEnabled = loadCaptionPreference();
+	const mouseUi = window.matchMedia('(hover: hover) and (pointer: fine)');
+	const desktopUi = window.matchMedia('(min-width:641px) and (hover: hover) and (pointer: fine)');
+	const mobileUi = window.matchMedia(MOBILE_QUERY);
+	const touchUi = window.matchMedia('(pointer: coarse)');
+	const portraitUi = window.matchMedia('(orientation: portrait)');
+	const isPhone = () => mobileUi.matches && touchUi.matches;
+	const isPhonePortrait = () => isPhone() && portraitUi.matches;
+	let chromeTimer = null;
+	let descriptionPinned = false, controlsHovered = false, controlsPressed = false;
+	const showChrome = () => {
+		window.clearTimeout(chromeTimer);
+		stage.classList.add('is-ui-visible');
+		if (isPhonePortrait()) return;
+		chromeTimer = window.setTimeout(() => {
+			chromeTimer = null;
+			const focused = isPhone() ? controls.querySelector(':focus-visible') : mouseUi.matches ? chrome.querySelector(':focus-visible') : chrome.contains(document.activeElement);
+			if ((!isPhone() && !desktopUi.matches && descriptionPinned) || controlsHovered || controlsPressed || focused) return;
+			stage.classList.remove('is-ui-visible');
+		}, 3000);
+	};
+	const updateDescription = () => {
+		const expanded = !isPhone() && (desktopUi.matches || descriptionPinned);
+		chrome.classList.toggle('is-description-open', expanded);
+		programLabel.disabled = desktopUi.matches || isPhone();
+		if (desktopUi.matches || isPhone()) {
+			programLabel.removeAttribute('aria-expanded');
+			programLabel.removeAttribute('aria-controls');
+		} else {
+			programLabel.setAttribute('aria-expanded', String(expanded));
+			programLabel.setAttribute('aria-controls', description.id);
+		}
+		showChrome();
+	};
+	const toggleDescription = event => {
+		if (isPhone() || desktopUi.matches || event.pointerType === 'mouse') return;
+		descriptionPinned = !descriptionPinned;
+		updateDescription();
+	};
+	const syncLayout = () => {
+		stage.classList.toggle('is-touch-live', isPhone());
+		stage.classList.toggle('is-portrait-live', isPhonePortrait());
+		if (isPhonePortrait()) stage.append(chrome); else picture.append(chrome);
+		buttonGroup.replaceChildren(...(isPhone() ? [captionsButton, compatButton, fullscreenButton, closeButton] : [captionsButton, fullscreenButton, closeButton, compatButton]));
+		controlsHovered = false;
+		controlsPressed = false;
+		updateDescription();
+	};
+	const pressControls = () => {
+		if (!isPhone()) return;
+		controlsPressed = true;
+		showChrome();
+	};
+	const releaseControls = () => {
+		if (!controlsPressed) return;
+		controlsPressed = false;
+		showChrome();
+	};
+	const enterControls = event => {
+		if (isPhone() || event.pointerType !== 'mouse') return;
+		if (mouseUi.matches ? event.currentTarget === controls : event.currentTarget !== controls) return;
+		controlsHovered = true;
+		showChrome();
+	};
+	const leaveControls = event => {
+		if (isPhone() || event.pointerType !== 'mouse') return;
+		if (mouseUi.matches ? event.currentTarget === controls : event.currentTarget !== controls) return;
+		controlsHovered = false;
+		showChrome();
+	};
 	const entries = [];
 	const feed = event => {
 		const { data, pts } = event.detail;
@@ -176,8 +251,9 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 		}
 	};
 	const fullscreenChanged = () => {
-		fullscreenButton.textContent = document.fullscreenElement === stage ||
-			stage.classList.contains('program-live-expanded') ? '全画面を終了' : '全画面';
+		const fullscreen = document.fullscreenElement === stage || stage.classList.contains('program-live-expanded');
+		setControlLabel(fullscreenButton, fullscreen ? '全画面を終了' : '全画面', fullscreen ? 'minimize' : 'maximize');
+		showChrome();
 	};
 	const keydown = event => {
 		if (event.key === 'Escape') {
@@ -205,7 +281,7 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 				captionOverlay.style.display = 'none';
 			}
 		}
-		captionsButton.textContent = enabled ? '字幕を隠す' : '字幕を表示';
+		setControlLabel(captionsButton, enabled ? '字幕を隠す' : '字幕を表示', enabled ? 'captions' : 'captions-off');
 		captionsButton.setAttribute('aria-pressed', String(enabled));
 	};
 	const closeHlsSession = () => {
@@ -219,6 +295,7 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	function close() {
 		if (destroyed) return;
 		destroyed = true;
+		window.clearTimeout(chromeTimer);
 		closeHlsSession();
 		if (progressTimer !== null) {
 			window.clearInterval(progressTimer);
@@ -240,7 +317,21 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 		fullscreenButton.removeEventListener('click', toggleFullscreen);
 		compatButton.removeEventListener('click', startCompatPlayback);
 		closeButton.removeEventListener('click', close);
-		overlayCloseButton.removeEventListener('click', close);
+		stage.removeEventListener('pointermove', showChrome);
+		stage.removeEventListener('pointerdown', showChrome);
+		stage.removeEventListener('keydown', showChrome);
+		chrome.removeEventListener('focusin', showChrome);
+		chrome.removeEventListener('focusout', showChrome);
+		programLabel.removeEventListener('click', toggleDescription);
+		desktopUi.removeEventListener('change', updateDescription);
+		for (const media of [mobileUi, touchUi, portraitUi]) media.removeEventListener('change', syncLayout);
+		controls.removeEventListener('pointerdown', pressControls);
+		window.removeEventListener('pointerup', releaseControls);
+		window.removeEventListener('pointercancel', releaseControls);
+		for (const target of [controls, ...buttonGroup.children]) {
+			target.removeEventListener('pointerenter', enterControls);
+			target.removeEventListener('pointerleave', leaveControls);
+		}
 		for (const { controller, feeder, renderer } of entries) {
 			controller.hide();
 			controller.detachMedia();
@@ -276,7 +367,7 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 		playerDestroyed = true;
 		player.destroy();
 		compatButton.disabled = true;
-		compatButton.textContent = 'FFmpeg互換再生中';
+		setControlLabel(compatButton, 'FFmpeg互換再生中', 'film');
 		const supportsNativeHls = typeof video.canPlayType === 'function' &&
 			video.canPlayType('application/vnd.apple.mpegurl') !== '';
 		status.textContent = supportsNativeHls ?
@@ -310,6 +401,7 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	}
 	function toggleCaptions() {
 		setCaptionEnabled(!captionsEnabled);
+		saveCaptionPreference(captionsEnabled);
 	}
 	async function toggleFullscreen() {
 		if (document.fullscreenElement === stage) {
@@ -335,7 +427,21 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	fullscreenButton.addEventListener('click', toggleFullscreen);
 	compatButton.addEventListener('click', startCompatPlayback);
 	closeButton.addEventListener('click', close);
-	overlayCloseButton.addEventListener('click', close);
+	stage.addEventListener('pointermove', showChrome);
+	stage.addEventListener('pointerdown', showChrome);
+	stage.addEventListener('keydown', showChrome);
+	chrome.addEventListener('focusin', showChrome);
+	chrome.addEventListener('focusout', showChrome);
+	programLabel.addEventListener('click', toggleDescription);
+	desktopUi.addEventListener('change', updateDescription);
+	for (const media of [mobileUi, touchUi, portraitUi]) media.addEventListener('change', syncLayout);
+	controls.addEventListener('pointerdown', pressControls);
+	window.addEventListener('pointerup', releaseControls);
+	window.addEventListener('pointercancel', releaseControls);
+	for (const target of [controls, ...buttonGroup.children]) {
+		target.addEventListener('pointerenter', enterControls);
+		target.addEventListener('pointerleave', leaveControls);
+	}
 	const hasValidTiming = program => Number.isFinite(program && program.start) &&
 		Number.isFinite(program && program.end) && program.end > program.start &&
 		Number.isFinite(new Date(program.start).getTime()) && Number.isFinite(new Date(program.end).getTime());
@@ -457,6 +563,8 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 			entry.overlay = picture.lastElementChild;
 			entry.overlay.setAttribute('preserveAspectRatio', 'none');
 		}
+		setCaptionEnabled(captionsEnabled);
+		syncLayout();
 	} catch (error) {
 		close();
 		throw error;

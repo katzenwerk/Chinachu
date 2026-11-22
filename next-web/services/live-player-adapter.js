@@ -94,18 +94,12 @@ export async function openRecordedPlaybackOverlay(model) {
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-label', `${model.title}の録画再生`);
   overlay.innerHTML = `
-    <div class="program-live-panel recorded-playback-panel">
-      <div class="program-live-header recorded-playback-header">
-        <div class="program-live-header-content"><div class="recorded-playback-title"></div><div class="recorded-playback-status" role="status"></div></div>
-        <button class="chinachu-live-player-close" type="button" aria-label="録画再生を閉じる" title="閉じる">×</button>
-      </div>
+    <div class="program-live-panel program-live-overlay-panel recorded-playback-panel">
       <div class="recorded-playback-frame"></div>
     </div>`;
-  overlay.querySelector('.recorded-playback-title').textContent = model.chase ? `${model.title}（追っかけ再生）` : model.title;
   if (model.chase) overlay.setAttribute('aria-label', `${model.title}の追っかけ再生`);
-  const status = overlay.querySelector('.recorded-playback-status');
+  const status = document.createElement('span');
   const frame = overlay.querySelector('.recorded-playback-frame');
-  const closeButton = overlay.querySelector('.chinachu-live-player-close');
   document.body.append(overlay);
 
   let player = null;
@@ -117,7 +111,6 @@ export async function openRecordedPlaybackOverlay(model) {
     player?.destroy();
     overlay.removeEventListener('click', closeFromBackdrop);
     overlay.removeEventListener('keydown', closeFromKeyboard);
-    closeButton.removeEventListener('click', close);
     window.removeEventListener('pagehide', close);
     overlay.remove();
   };
@@ -129,7 +122,6 @@ export async function openRecordedPlaybackOverlay(model) {
   };
   overlay.addEventListener('click', closeFromBackdrop);
   overlay.addEventListener('keydown', closeFromKeyboard);
-  closeButton.addEventListener('click', close);
   window.addEventListener('pagehide', close, { once: true });
   activeOverlay = { close, overlay };
 
@@ -141,6 +133,16 @@ export async function openRecordedPlaybackOverlay(model) {
   const chaseSuffix = chaseQuery.size ? `?${chaseQuery}` : '';
   const chaseStatusUrl = model.chase ? new URL(`${chaseBase}.json${chaseSuffix}`, document.baseURI).href : undefined;
   player = module.createRecordedPlayer(frame, {
+    programInfo: {
+      title: model.title || model.fullTitle || 'タイトル未取得',
+      channelName: model.channelName || model.channel?.name || '',
+      channelLogoUrl: model.channelLogoUrl || (model.channel?.id && model.channel.hasLogoData === true
+        ? `/api/channel/${encodeURIComponent(model.channel.id)}/logo.png` : null),
+      detail: model.detail || model.description || '',
+      kind: model.chase ? '追っかけ' : '録画済み'
+    },
+    onClose: close,
+    statusElement: status,
     chaseStatusUrl,
     startSeconds: model.chase ? 0 : model.startSeconds,
     compatUrl: model.chase ? undefined : `/api/recorded/${encodedId}/watch.mp4?profile=compat`,
