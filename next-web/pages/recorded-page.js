@@ -181,7 +181,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
   attentionInput.setAttribute('aria-label', '注意ありのみ（削除済み・スキップ・DROP／TS異常のみを除く）');
   const cleanerButton = toolbar.querySelector('.recorded-results-cleaner');
   const content = page.querySelector('.reserves-list-content');
-  const listRenderer = createReservationListRenderer(content);
+  const listRenderer = createReservationListRenderer(content, { compactMobile: true });
   const cardGrid = document.createElement('div');
   cardGrid.className = 'recorded-results-card-grid';
   const cards = new Map();
@@ -712,6 +712,7 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
       }
       if (action === 'play') {
         openRecordedPlaybackOverlay({
+          channel: item.channel, detail: item.detail || item.description,
           playable: true,
           recordedId: item.recordedId,
           title: item.fullTitle || item.title || 'タイトル未取得'

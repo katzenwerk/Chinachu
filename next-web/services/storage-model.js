@@ -36,7 +36,7 @@ function formatCapacityPair(used, total) {
   return `${(used / divisor).toFixed(2)} / ${(total / divisor).toFixed(2)} ${divisor === 1e12 ? 'TB' : 'GB'}`;
 }
 
-function formatThreshold(value) {
+export function formatThreshold(value) {
   if (!finite(value) || value <= 0) return '未設定';
   if (value >= 1024) return `${Math.round(value / 1024 * 10) / 10} GB`;
   return `${value} MB`;
@@ -436,6 +436,7 @@ export function buildStorageViewModels(resources, now = Date.now()) {
       path: String(storage.configuredPath || storage.path || ''),
       state,
       free: reliable ? formatCapacity(available, storage.total) : '未取得',
+      total: reliable ? formatCapacity(storage.total, storage.total) : '未取得',
       usagePercent: percent === null ? null : percent.toFixed(1),
       usage: reliable ? formatCapacityPair(used, storage.total) : '未取得',
       warningThreshold: warningThresholdValid ? formatThreshold(thresholds.warningMB) : null,

@@ -99,6 +99,7 @@ export function buildRecordedResultModels(items, options = {}) {
       key: validText(item?.key) || `recorded-result-${index}`,
       detailUrl: programDetailUrl({ key: validText(item?.key), id: validText(item?.recordedId) }),
       displayTitle: displayTitle.text,
+      fullTitle: validText(item?.fullTitle) || validText(item?.title) || 'タイトル未取得',
       hover: programHoverInfo(item, { channelLogoUrl: channelLogoUrl(channel), statuses: [primaryStatus(item), ...recordedResultWarnings(item)] }),
       displayTitleSource: displayTitle.source,
       displayEpisodeSource: displayTitle.episodeSource || null,

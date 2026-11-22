@@ -5,6 +5,16 @@ import { appendMobileContextButton } from './mobile-layout.js';
 
 const rowStates = new WeakMap();
 
+function mobileWarningLabel(status) {
+  if (status.key === 'head-shortage') return '頭切れ疑い';
+  if (status.key === 'tail-shortage') return '尻切れ疑い';
+  if (status.key === 'saved-ts') {
+    const findings = ['CC', 'GAP'].filter(value => status.label.includes(value));
+    return findings.length ? findings.join('/') : status.label.replace(/^Analyze:\s*/, '');
+  }
+  return status.label;
+}
+
 function setText(element, value) {
   if (element.textContent === value) return false;
   element.textContent = value;
@@ -19,6 +29,8 @@ function tagsForModel(model) {
       .filter(status => status.key !== 'missed' || model.primaryStatus?.key !== 'missed')
       .map(status => ({
         key: 'recording-status',
+        statusKey: status.key,
+        mobileLabel: mobileWarningLabel(status),
         resultTooltip: ['drop', 'saved-ts'].includes(status.key),
         label: status.label,
         description: status.description,
@@ -68,6 +80,37 @@ export function updateReservationListRow(row, model) {
   applyStorageWarning(row.querySelector('.reservation-list-storage-warning'), model.storageNotice);
 
   const tags = tagsForModel(model);
+  if (state.compactMobile) {
+    const header = row.querySelector('.compact-mobile-row-header');
+    const meta = row.querySelector('.compact-mobile-row-meta');
+    header.replaceChildren();
+    meta.replaceChildren();
+    const date = document.createElement('span');
+    date.textContent = `${model.dateText} ${model.timeText}`;
+    header.append(date);
+    const category = document.createElement('span');
+    category.textContent = [model.channelName, model.category].filter(Boolean).join(' · ');
+    meta.append(category);
+    if (model.storageNotice) {
+      const warning = row.querySelector('.reservation-list-storage-warning').cloneNode(true);
+      applyStorageWarning(warning, model.storageNotice);
+      meta.append(warning);
+    }
+    const statuses = model.primaryStatus ? [model.primaryStatus] : [];
+    if (model.isSkip) statuses.push({ key: 'skip', label: 'スキップ' });
+    [...statuses, ...tags.filter(tag => !tag.statusKey || tag.statusKey !== model.primaryStatus?.key)].forEach(tag => {
+      const element = document.createElement('span');
+      element.className = `reservation-list-tag is-${tag.key}${tag.kind ? ` is-${tag.kind}` : ''}${tag.tone ? ` is-${tag.tone}` : ''}`;
+      element.textContent = tag.mobileLabel || tag.label;
+      if (tag.resultTooltip || tag.statusKey) applyResultWarningTooltip(element, [tag.label, tag.description].filter(Boolean).join('。'));
+      else if (tag.description) element.title = tag.description;
+      header.append(element);
+    });
+    const button = row.querySelector('.mobile-context-button');
+    button.textContent = model.fullTitle || model.displayTitle;
+    button.title = button.textContent;
+    button.setAttribute('aria-label', `${button.textContent}の操作メニュー`);
+  }
   const tagsSignature = JSON.stringify(tags);
   if (state.tagsSignature !== tagsSignature) {
     state.tagsSignature = tagsSignature;
@@ -83,7 +126,7 @@ export function updateReservationListRow(row, model) {
   return true;
 }
 
-export function createReservationListRow(model) {
+export function createReservationListRow(model, { compactMobile = false } = {}) {
   const row = document.createElement('div');
   row.className = 'reservation-list-row';
   row.innerHTML = `
@@ -105,7 +148,15 @@ export function createReservationListRow(model) {
     });
   }
   appendMobileContextButton(row);
-  const state = { model, signature: null, channelLogo, tagsSignature: null };
+  if (compactMobile) {
+    row.classList.add('has-compact-mobile-layout');
+    for (const name of ['header', 'meta']) {
+      const element = document.createElement('div');
+      element.className = `compact-mobile-row-${name}`;
+      row.append(element);
+    }
+  }
+  const state = { model, signature: null, channelLogo, tagsSignature: null, compactMobile };
   rowStates.set(row, state);
   setProgramHover(row.querySelector('h2'), () => state.model.hover);
   updateReservationListRow(row, model);
@@ -119,7 +170,7 @@ function captureScrollAnchor(list) {
   return { key: row.dataset.reservationKey, top: row.getBoundingClientRect().top };
 }
 
-export function createReservationListRenderer(content) {
+export function createReservationListRenderer(content, options = {}) {
   const list = document.createElement('div');
   list.className = 'reservation-list';
   const rows = new Map();
@@ -150,7 +201,7 @@ export function createReservationListRenderer(content) {
       const elements = models.map(model => {
         let row = rows.get(model.key);
         if (!row) {
-          row = createReservationListRow(model);
+          row = createReservationListRow(model, options);
           rows.set(model.key, row);
           changed = true;
         } else if (updateReservationListRow(row, model)) {

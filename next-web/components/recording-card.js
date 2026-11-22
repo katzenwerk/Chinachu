@@ -2,6 +2,7 @@ import { openChasePlaybackOverlay } from '../services/live-player-adapter.js';
 import { applyStorageWarning } from './storage-warning.js';
 import { createChannelLogo } from './channel-logo.js';
 import { createProgramHover, setProgramHover } from './program-hover.js';
+import { appendMobileContextButton } from './mobile-layout.js';
 
 function previewUrl(model) {
   return `/api/recording/${encodeURIComponent(model.id)}/preview.jpg?width=480&height=270&_n=${Date.now()}`;
@@ -16,7 +17,7 @@ function loadImage(url) {
   });
 }
 
-export function createRecordingCard(initialModel, { onWatch, variant = 'default' } = {}) {
+export function createRecordingCard(initialModel, { onWatch, variant = 'default', mobileContext = false } = {}) {
   const homeVariant = variant === 'home';
   const playbackActions = `<div class="recording-playback-actions">
     <button class="button recording-live-button" type="button"><svg class="icon icon-small" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47M19.1 1.9a9.96 9.96 0 0 1 0 14.1M9.5 18h5m-6.5 4 4-11 4 11"/></svg><span>LIVE視聴</span></button>
@@ -37,7 +38,7 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
     </div>
     <div class="recording-home-footer">
       <strong class="mobile-card-title"></strong>
-      <span class="mobile-recording-state mobile-only"></span>
+      <span class="recording-home-mobile-meta mobile-only"><span class="recording-home-mobile-channel"></span><span class="mobile-recording-state"></span></span>
       ${playbackActions}
       <div class="recording-home-meta">
         <span class="recording-broadcast"></span>
@@ -56,7 +57,7 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
     </div>
     <div class="recording-card-body">
       <h3></h3>
-      <p class="recording-program-meta"></p>
+      <p class="recording-program-meta"><span class="recording-channel-meta"></span><span class="recording-mobile-remaining mobile-only"></span></p>
       <p class="recording-storage-warning storage-warning" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></p>
       <div class="recording-card-meta"><span class="recording-status" hidden></span><span class="recording-elapsed"></span><span class="recording-remaining"></span></div>
       ${playbackActions}
@@ -64,6 +65,14 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
       <p class="recording-watch-error" role="status" hidden></p>
     </div>`;
 
+  let mobileMenu = null;
+  if (mobileContext) {
+    article.classList.add('has-mobile-menu');
+    mobileMenu = appendMobileContextButton(article);
+    mobileMenu.classList.add('mobile-card-title');
+    if (homeVariant) article.querySelector('.mobile-card-title').replaceWith(mobileMenu);
+    else article.querySelector('.recording-card-body').prepend(mobileMenu);
+  }
   const image = article.querySelector('.recording-preview-image');
   const channelLogo = createChannelLogo({}, { variant: 'thumbnail', focusable: true });
   article.querySelector('.recording-channel-logo-slot').replaceWith(channelLogo.element);
@@ -108,6 +117,7 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
     } else {
       article.querySelector('.recording-elapsed').textContent = model.elapsedText;
       article.querySelector('.recording-remaining').textContent = model.remainingText;
+      article.querySelector('.recording-mobile-remaining').textContent = model.remainingText;
     }
   }
 
@@ -161,14 +171,20 @@ export function createRecordingCard(initialModel, { onWatch, variant = 'default'
     currentModel = model;
     article.dataset.recordingId = model.id || '';
     title.textContent = model.title;
+    if (mobileMenu) {
+      mobileMenu.textContent = model.title;
+      mobileMenu.title = model.title;
+      mobileMenu.setAttribute('aria-label', `${model.title}の操作メニュー`);
+    }
     detailLink.href = model.detailUrl || '';
     detailLink.hidden = model.detailUrl === null;
     detailLink.setAttribute('aria-label', `${model.title}の詳細`);
     if (homeVariant) {
       article.querySelector('.mobile-card-title').textContent = model.title;
+      article.querySelector('.recording-home-mobile-channel').textContent = model.channelMetaText;
       article.querySelector('.recording-broadcast').textContent = model.broadcastText;
     } else {
-      article.querySelector('.recording-program-meta').textContent = model.channelMetaText;
+      article.querySelector('.recording-channel-meta').textContent = model.channelMetaText;
     }
     applyStorageWarning(storageWarning, model.storageNotice);
     if (!homeVariant) {

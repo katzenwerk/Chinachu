@@ -101,6 +101,7 @@ function toRecordedCardModel(item, index, options = {}) {
     channelLogoUrl: channelLogoUrl(item?.channel),
     channelTooltip: channelDetailText(item?.channel),
     title: displayTitle.text,
+    detail: text(item?.detail, text(item?.description)),
     hover: programHoverInfo(item, { channelLogoUrl: channelLogoUrl(item?.channel), statuses: [state.label, ...recordedResultWarnings(item)] }),
     titleSource: displayTitle.source,
     episodeSource: displayTitle.episodeSource || null,
@@ -109,7 +110,7 @@ function toRecordedCardModel(item, index, options = {}) {
     broadcastText: formatDateTime(item?.start, item?.end),
     durationText: formatDuration(recordedDuration || operatorDuration),
     recordingWarnings: recordedResultWarnings(item),
-    savedTsSummary: savedTsCardSummary(item?.savedTsAnalysis)
+    savedTsSummary: recordedFileState(item) === 'deleted' ? null : savedTsCardSummary(item?.savedTsAnalysis)
   };
 }
 
@@ -148,11 +149,14 @@ export function createRecordedCard(initialModel, { onWatch, onOpenDetail } = {})
     </button>
     <div class="recorded-card-meta">
       <strong class="mobile-card-title"></strong>
-      <span class="recorded-card-broadcast"></span>
-      <span class="recorded-card-observations"></span><span class="recorded-card-actions"><span class="recorded-result-warning storage-warning is-align-right" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-tip" role="tooltip"></span></span><a class="recorded-card-detail" href=""><span aria-hidden="true">ⓘ</span> 詳細</a></span>
+      <span class="recorded-card-description" hidden></span>
+      <span class="recorded-card-timing"><span class="recorded-card-broadcast"></span><span class="recorded-card-results"><span class="recorded-card-observations"></span>
+      <span class="recorded-card-actions"><span class="recorded-result-warning storage-warning is-align-right" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-tip" role="tooltip"></span></span><a class="recorded-card-detail" href=""><span aria-hidden="true">ⓘ</span> 詳細</a></span></span></span>
     </div>`;
 
-  appendMobileContextButton(article, article.querySelector('.recorded-card-actions'));
+  const mobileMenu = appendMobileContextButton(article);
+  mobileMenu.classList.add('mobile-card-title');
+  article.querySelector('.recorded-card-meta .mobile-card-title').replaceWith(mobileMenu);
   const thumbnail = article.querySelector('.recorded-card-thumbnail');
   const preview = article.querySelector('.recorded-card-preview');
   const placeholder = article.querySelector('.recorded-card-placeholder');
@@ -200,6 +204,11 @@ export function createRecordedCard(initialModel, { onWatch, onOpenDetail } = {})
     play.hidden = !model.playable;
     title.textContent = model.title;
     article.querySelector('.mobile-card-title').textContent = model.title;
+    const description = article.querySelector('.recorded-card-description');
+    description.textContent = model.detail || '';
+    description.hidden = !model.detail;
+    mobileMenu.title = model.title;
+    mobileMenu.setAttribute('aria-label', `${model.title}の操作メニュー`);
     detailLink.href = model.detailUrl;
     detailLink.setAttribute('aria-label', `${model.title}の詳細`);
     const observations = (model.recordingWarnings || []).filter(item => item.key === 'drop');

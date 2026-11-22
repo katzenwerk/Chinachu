@@ -14,10 +14,13 @@ import { operatorRecordingInfo } from '../services/recorded-result-warnings.js';
 import { subscribeRecordedNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
 import { createGuideProgramMenu } from './guide-page.js';
 import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor-dialog.js';
+import { MOBILE_QUERY } from '../components/mobile-layout.js';
 import { ruleAction } from '../services/program-detail-model.js';
 
+const reservationDescription = '競合が予測された予約の前後と、指定日時の予約状況を表示します。時間帯別の収容超過は対応放送波から推定し、実際のチューナー割当は再現していません。';
+
 const HOUR_MS = 60 * 60 * 1000;
-const TIMELINE_DURATION_MS = 3 * HOUR_MS;
+function timelineDuration() { return (window.matchMedia(MOBILE_QUERY).matches ? 2 : 3) * HOUR_MS; }
 const TIMELINE_STEP_MS = 30 * 60 * 1000;
 const QUARTER_HOUR_MS = 15 * 60 * 1000;
 const dateTimeFormat = new Intl.DateTimeFormat('ja-JP', {
@@ -83,9 +86,9 @@ function timelineRange(period, offsetHours = 0) {
   // Short conflicts stay near the centre. For long programmes focus on the
   // first 30 minutes instead of jumping several hours into the broadcast.
   const center = period.start + Math.min((period.end - period.start) / 2, HOUR_MS / 2);
-  const start = Math.round((center - TIMELINE_DURATION_MS / 2) / QUARTER_HOUR_MS) * QUARTER_HOUR_MS
+  const start = Math.round((center - timelineDuration() / 2) / QUARTER_HOUR_MS) * QUARTER_HOUR_MS
     + offsetHours * HOUR_MS;
-  return { start, end: start + TIMELINE_DURATION_MS, step: TIMELINE_STEP_MS };
+  return { start, end: start + timelineDuration(), step: TIMELINE_STEP_MS };
 }
 
 function timelineEntries(programs, range) {
@@ -196,7 +199,7 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
   const actual = general?.history === true;
   const range = general === null ? timelineRange(targetPeriod, offsetHours) : {
     start: general.start,
-    end: general.start + TIMELINE_DURATION_MS,
+    end: general.start + timelineDuration(),
     step: TIMELINE_STEP_MS
   };
   const duration = range.end - range.start;
@@ -213,7 +216,7 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
   const wrapper = document.createElement('section');
   wrapper.className = 'conflicts-timeline-section';
   const title = document.createElement('h4');
-  title.textContent = actual ? 'チューナー別録画実績（3時間表示）' : general === null ? '競合周辺の予約タイムライン（3時間表示）' : '通常の予約タイムライン（3時間表示）';
+  title.textContent = `${actual ? 'チューナー別録画実績' : general === null ? '競合周辺の予約タイムライン' : '通常の予約タイムライン'}（${duration / HOUR_MS}時間表示）`;
   const legend = document.createElement('p');
   legend.className = 'conflicts-timeline-note';
   legend.textContent = actual ? 'Operatorの録画開始・終了処理時刻です。TSパケットの先頭・末尾時刻や、チューナーの確保・解放・切替時刻ではありません。' : tuners !== null
@@ -255,7 +258,20 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
     general.onCalendarCreated?.(calendar);
   }
   controls.append(previous, rangeLabel, reset, next);
-  wrapper.append(title, legend, controls);
+  const explanation = document.createElement('details');
+  explanation.className = 'conflicts-timeline-explanation';
+  explanation.open = !window.matchMedia(MOBILE_QUERY).matches;
+  const explanationTitle = document.createElement('summary');
+  explanationTitle.textContent = '表示の説明';
+  explanation.append(explanationTitle);
+  if (!actual && general !== null) {
+    const description = document.createElement('p');
+    description.className = 'conflicts-mobile-description conflicts-timeline-note';
+    description.textContent = reservationDescription;
+    explanation.append(description);
+  }
+  explanation.append(legend);
+  wrapper.append(title, explanation, controls);
 
   const scroller = document.createElement('div');
   scroller.className = 'conflicts-timeline-scroll';
@@ -377,11 +393,11 @@ function createTimeline(programs, target, targetPeriod, offsetHours, onShift, on
   scroller.append(chart);
   wrapper.append(scroller);
   const footer = document.createElement('p');
-  footer.className = 'conflicts-timeline-note';
+  footer.className = 'conflicts-timeline-note conflicts-timeline-footer';
   footer.textContent = actual ? `左クリック：番組詳細　右クリック：録画結果の操作${history.unavailable ? `。実績時刻が不足または不正な録画 ${history.unavailable}件は非表示です。` : ''}` : general === null
     ? '左クリック：番組詳細　右クリック：番組表と同じ操作メニュー。薄赤の背景は、対応放送波と共用を考慮した収容超過の推定区間です。'
     : '左クリック：番組詳細　右クリック：番組表と同じ操作メニュー。予約本数は使用台数や録画実績とは異なります。';
-  wrapper.append(footer);
+  explanation.append(footer);
   return wrapper;
 }
 
@@ -474,7 +490,6 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
   const timelineOffsets = new Map();
   let overviewStart = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
   let overviewCalendar = null;
-  const reservationDescription = '競合が予測された予約の前後と、指定日時の予約状況を表示します。時間帯別の収容超過は対応放送波から推定し、実際のチューナー割当は再現していません。';
   let mode = 'reservation';
   let historyPrograms = null;
   let historyRequest = null;
@@ -552,9 +567,9 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
       if (!historyHost.firstChild) historyHost.textContent = '録画実績を取得しています…';
       return;
     }
-    const range = { start: overviewStart, end: overviewStart + TIMELINE_DURATION_MS };
+    const range = { start: overviewStart, end: overviewStart + timelineDuration() };
     const history = historyTracks(historyPrograms, range);
-    const signature = JSON.stringify([overviewStart, Math.floor(Date.now() / HOUR_MS), history]);
+    const signature = JSON.stringify([overviewStart, timelineDuration(), Math.floor(Date.now() / HOUR_MS), history]);
     if (signature === historySignature) return;
     const current = historyHost.querySelector('.conflicts-timeline-section');
     const incoming = createTimeline(historyPrograms, null, null, 0,
@@ -589,7 +604,8 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
       current.querySelector('.conflicts-timeline-range-label').textContent = incoming.querySelector('.conflicts-timeline-range-label').textContent;
       current.querySelectorAll('.conflicts-timeline-nav')[1].disabled = incoming.querySelectorAll('.conflicts-timeline-nav')[1].disabled;
       current.querySelector('.conflicts-timeline-note').textContent = incoming.querySelector('.conflicts-timeline-note').textContent;
-      current.lastElementChild.textContent = incoming.lastElementChild.textContent;
+      current.querySelector('.conflicts-timeline-footer').textContent = incoming.querySelector('.conflicts-timeline-footer').textContent;
+      current.querySelector('h4').textContent = incoming.querySelector('h4').textContent;
       if (historyHost.dataset.start !== String(overviewStart)) historyCalendar.setValue(new Date(overviewStart));
     }
     historyHost.dataset.start = String(overviewStart);
@@ -756,7 +772,7 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
       keys.add(id);
       const offsetHours = timelineOffsets.get(id) || 0;
       const period = interval(program);
-      const signature = JSON.stringify([program, timelineEntries(programs, timelineRange(period, offsetHours)), tuners, offsetHours]);
+      const signature = JSON.stringify([program, timelineDuration(), timelineEntries(programs, timelineRange(period, offsetHours)), tuners, offsetHours]);
       let entry = conflictCards.get(id);
       if (entry?.signature !== signature) {
         const element = createConflictCard(program, period, programs, offsetHours, delta => {
@@ -777,7 +793,7 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
     if (!conflicts.length) {
       if (content.querySelector('.conflicts-message')?.textContent !== '現在、未終了の競合予約はありません。') {
         const empty = document.createElement('p');
-        empty.className = 'panel conflicts-message';
+        empty.className = 'panel conflicts-message conflicts-empty';
         empty.textContent = '現在、未終了の競合予約はありません。';
         content.replaceChildren(empty);
       }
@@ -791,8 +807,8 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
     }
 
     const currentHour = Math.floor(now / HOUR_MS) * HOUR_MS;
-    const nextOverviewSignature = JSON.stringify([overviewStart, currentHour, tuners,
-      timelineEntries(programs, { start: overviewStart, end: overviewStart + TIMELINE_DURATION_MS })]);
+    const nextOverviewSignature = JSON.stringify([overviewStart, timelineDuration(), currentHour, tuners,
+      timelineEntries(programs, { start: overviewStart, end: overviewStart + timelineDuration() })]);
     if (overviewSignature !== nextOverviewSignature) {
       closeRemovedHover(overview);
       overviewCalendar?.destroy();
@@ -843,6 +859,22 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
     });
   }
 
+  const mobileMedia = window.matchMedia(MOBILE_QUERY);
+  const syncModeTabs = () => {
+    const headingHost = document.querySelector('.header-heading');
+    if (mobileMedia.matches && headingHost) {
+      setHeaderActions();
+      headingHost.append(tabs);
+    } else setHeaderActions(tabs);
+  };
+  const updateTimelineLayout = () => {
+    syncModeTabs();
+    render();
+    renderHistory();
+    historyHost.querySelectorAll('.conflicts-timeline-explanation').forEach(element => { element.open = !mobileMedia.matches; });
+  };
+  mobileMedia.addEventListener('change', updateTimelineLayout);
+  syncModeTabs();
   const unsubscribe = subscribeReservationNotifications(() => refresh(true));
   const unsubscribeRecorded = subscribeRecordedNotifications(() => {
     invalidateResources(['recorded']);
@@ -861,8 +893,10 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
     overviewCalendar?.destroy();
     historyCalendar?.destroy();
     ruleDialog?.close();
+    mobileMedia.removeEventListener('change', updateTimelineLayout);
     unsubscribe();
     unsubscribeRecorded();
+    tabs.remove();
     setHeaderActions();
   };
 }

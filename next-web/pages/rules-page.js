@@ -1,5 +1,5 @@
 import { createChannelLogo } from '../components/channel-logo.js';
-import { headerCompactMedia as createHeaderCompactMedia, appendMobileContextButton } from '../components/mobile-layout.js';
+import { headerCompactMedia as createHeaderCompactMedia, appendMobileContextButton, MOBILE_QUERY } from '../components/mobile-layout.js';
 import { openRuleEditorDialog } from '../components/rule-editor-dialog.js';
 import { createRulesContextMenu } from '../components/rules-context-menu.js';
 import { applyStorageWarning } from '../components/storage-warning.js';
@@ -95,6 +95,29 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
   const createButton = headerControls.querySelector('.rules-create');
   const schedulerButton = headerControls.querySelector('.rules-scheduler');
   const deleteButton = headerControls.querySelector('.rules-delete');
+  createButton.title = 'ルール追加';
+  createButton.setAttribute('aria-label', 'ルール追加');
+  schedulerButton.title = 'スケジューラー実行';
+  schedulerButton.setAttribute('aria-label', 'スケジューラー実行');
+  const mobileMedia = window.matchMedia(MOBILE_QUERY);
+  const syncHeaderActions = () => {
+    const headingHost = document.querySelector('.header-heading');
+    if (mobileMedia.matches && headingHost) {
+      for (const button of [createButton, schedulerButton, deleteButton]) {
+        if (button.parentElement !== headingHost) headingHost.append(button);
+      }
+      createButton.textContent = '追加';
+      schedulerButton.textContent = schedulerRunning ? '実行中…' : 'スケジューラー';
+      deleteButton.hidden = selectedRuleUids.size === 0;
+    } else {
+      headerControls.querySelector('.rules-status').before(createButton, deleteButton, schedulerButton);
+      createButton.textContent = 'ルール追加';
+      schedulerButton.textContent = schedulerRunning ? '実行中…' : 'スケジューラー実行';
+      deleteButton.hidden = false;
+    }
+  };
+  mobileMedia.addEventListener('change', syncHeaderActions);
+  syncHeaderActions();
   const listHost = page.querySelector('.rules-list');
   const storageFilter = page.querySelector('.reserves-rule-filter');
   storageFilter.querySelector('a').addEventListener('click', event => {
@@ -155,6 +178,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
     });
     deleteButton.textContent = `削除（${selectedRuleUids.size}）`;
     deleteButton.disabled = selectedRuleUids.size === 0 || deleting;
+    syncHeaderActions();
   }
 
   function currentFilteredRows() {
@@ -248,7 +272,10 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
         <a class="rule-count rule-recorded"></a><span class="rule-state"></span>
         <span class="rule-main"><strong></strong><span class="rule-main-meta"><small></small><span class="rule-storage-warning storage-warning" hidden><span aria-hidden="true">⚠</span><span class="storage-warning-text"></span><span class="storage-warning-tip" role="tooltip"></span></span></span></span>
         <span class="rule-channels"></span>`;
-      appendMobileContextButton(item);
+      const mobileMenu = appendMobileContextButton(item);
+      mobileMenu.textContent = row.summary;
+      mobileMenu.title = row.summary;
+      mobileMenu.setAttribute('aria-label', `${row.summary}の操作メニュー`);
       const checkbox = item.querySelector('.rule-select');
       checkbox.dataset.ruleUid = row.uid;
       checkbox.setAttribute('aria-label', `ルール ${row.index + 1} を選択`);
@@ -269,6 +296,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
       const categories = list(row.rule.categories).map(categoryLabel);
       item.querySelector('.rule-main small').textContent = [list(row.rule.types).join('・'), categories.join('・')].filter(Boolean).join(' / ') || '放送波・ジャンル指定なし';
       const channelHost = item.querySelector('.rule-channels');
+      channelHost.dataset.mobileLabel = row.channelIds.length ? `対象 ${row.channelIds.length}局` : '全局';
       if (!row.channelIds.length) channelHost.textContent = '全局';
       else {
         row.channelIds.slice(0, 3).forEach(id => {
@@ -453,7 +481,7 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
       confirmButton.classList.remove('is-running');
       confirmButton.textContent = '実行';
       schedulerButton.disabled = false;
-      schedulerButton.textContent = 'スケジューラー実行';
+      syncHeaderActions();
     }
   });
 
@@ -640,6 +668,10 @@ export function renderRulesPage(container, query = new URLSearchParams(), { setH
     controller.abort();
     contextMenu.destroy();
     headerCompactMedia.removeEventListener('change', headerCompactListener);
+    mobileMedia.removeEventListener('change', syncHeaderActions);
+    createButton.remove();
+    schedulerButton.remove();
+    deleteButton.remove();
     setHeaderActions();
     disposeLogos();
     openRuleUid = null;

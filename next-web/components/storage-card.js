@@ -7,7 +7,10 @@ function icon() {
 }
 
 function statusBadge(model) {
-  return `<span class="storage-status-badge is-${escapeText(model.state.key)}">${escapeText(model.state.label)}</span>`;
+  const label = { warning: '容量注意', low: '容量不足', normal: '正常', unobserved: '容量未取得' }[model.state.key]
+    || (model.state.key === 'stale' && model.free === '未取得' ? '容量未取得' : model.state.label);
+  const description = model.state.stale ? `${label}（前回確認時の参考値）` : label;
+  return `<span class="storage-status-badge is-${escapeText(model.state.key)}" title="${escapeText(description)}" aria-label="${escapeText(description)}">${escapeText(label)}</span>`;
 }
 
 function usageBar(model) {
@@ -19,30 +22,22 @@ function usageBar(model) {
   return `<div class="storage-usage-wrap"><div class="storage-usage-bar is-${escapeText(model.state.key)}" role="progressbar" aria-label="${escapeText(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}"><i style="width:${value}%"></i></div>${warningMarker}${lowMarker}</div>`;
 }
 
-function thresholdValues(model) {
-  const warning = model.warningThreshold === null ? '' : `<span class="is-warning">Warning閾値：<strong>${escapeText(model.warningThreshold)}</strong></span>`;
-  const low = model.lowThreshold === '対象外' ? '' : `<span class="is-low">Low閾値：<strong>${escapeText(model.lowThreshold)}</strong></span>`;
-  if (!warning && !low) return '';
-  return `<div class="storage-threshold-values">${warning}${low}</div>`;
-}
-
 function note(model) {
-  if (model.notes.length === 0) return '';
-  return `<div class="storage-note is-${escapeText(model.state.key)}">${model.notes.map((line, index) => index === model.notes.length - 1 && (line.includes('停止中') || line.includes('録画禁止中')) ? `<strong>${escapeText(line)}</strong>` : `<span>${escapeText(line)}</span>`).join('')}</div>`;
+  const notes = [...model.notes, ...(model.lowThreshold === '対象外' ? ['容量不足対策の対象外です。'] : [])].filter(line => line !== '空き容量に注意してください。' && !line.startsWith('最終確認：') && line !== '容量情報はまだ取得されていません。');
+  if (notes.length === 0) return '';
+  return `<div class="storage-note is-${escapeText(model.state.key)}">${notes.map((line, index) => index === notes.length - 1 && (line.includes('停止中') || line.includes('録画禁止中')) ? `<strong>${escapeText(line)}</strong>` : `<span>${escapeText(line)}</span>`).join('')}</div>`;
 }
 
 function storageCardMarkup(model, onRefresh) {
   return `
     <div class="storage-card-head">
       <div class="storage-drive-icon">${icon()}</div>
-      <div class="storage-card-ident"><div><h2>${escapeText(model.name)}</h2>${statusBadge(model)}</div><p>${escapeText(model.path)}</p></div>
-      <div class="storage-card-tools"><time><span class="storage-checked-label">最終確認</span><span class="storage-checked-value">${escapeText(model.checkedAt)}</span><span class="storage-checked-ago">${escapeText(model.checkedAgo)}</span></time><button class="storage-refresh" type="button" ${onRefresh === null ? 'disabled' : ''} title="現在の容量情報を確認" aria-label="${escapeText(model.name)} の現在の容量情報を確認">↻</button></div>
+      <div class="storage-card-ident"><div><h2 title="${escapeText(model.path)}">${escapeText(model.name)}</h2>${statusBadge(model)}</div><p>${escapeText(model.path)}</p></div>
+      <div class="storage-card-tools"><time class="storage-card-checked" title="最終確認：${escapeText(model.checkedAt)}" aria-label="最終確認：${escapeText(model.checkedAgo)}">${escapeText(model.checkedAgo)}</time><button class="storage-refresh" type="button" ${onRefresh === null ? 'disabled' : ''} title="現在の容量情報を確認" aria-label="${escapeText(model.name)} の現在の容量情報を確認">↻</button></div>
     </div>
-    <div class="storage-primary-metric"><div><span>空き容量</span><strong>${escapeText(model.free)}</strong></div><div><span>使用率</span><strong>${model.usagePercent === null ? '未取得' : `${escapeText(model.usagePercent)}%`}</strong></div></div>
+    <div class="storage-primary-metric"><div><span>空き容量</span><strong>${model.total === '未取得' ? '未取得' : `${escapeText(model.free)} / ${escapeText(model.total)}`}</strong></div><div><span>使用率</span><strong>${model.usagePercent === null ? '未取得' : `${escapeText(model.usagePercent)}%`}</strong></div></div>
     ${usageBar(model)}
-    <div class="storage-values"><div><span>使用量：</span><strong>${escapeText(model.usage)}</strong></div>${thresholdValues(model)}</div>
-    <div class="storage-card-footer">${note(model)}<div class="storage-links"><a href="${model.ruleHref}" data-filter-link>対象ルール ${model.ruleCount}件</a><a href="${model.reserveHref}" data-filter-link>録画予定 ${model.reserveCount}件</a><a href="${model.recordedHref}" data-filter-link>録画済み ${model.recordedCount}件</a></div></div>
-    <button class="storage-mobile-details-toggle" type="button" aria-expanded="false">詳細を表示</button>`;
+    <div class="storage-card-footer">${note(model)}<div class="storage-links"><a href="${model.ruleHref}" data-filter-link>ルール ${model.ruleCount}</a><a href="${model.reserveHref}" data-filter-link>予約 ${model.reserveCount}</a><a href="${model.recordedHref}" data-filter-link>録画済み ${model.recordedCount}</a></div></div>`;
 }
 
 export function createStorageCard(model, { onRefresh = null } = {}) {
@@ -51,12 +46,6 @@ export function createStorageCard(model, { onRefresh = null } = {}) {
   const article = document.createElement('article');
   article.className = `storage-card is-${model.state.key}${model.state.stale ? ' is-reference' : ''}`;
   article.innerHTML = storageCardMarkup(model, onRefresh);
-  const detailsToggle = article.querySelector('.storage-mobile-details-toggle');
-  detailsToggle.addEventListener('click', () => {
-    const expanded = article.classList.toggle('is-mobile-expanded');
-    detailsToggle.setAttribute('aria-expanded', String(expanded));
-    detailsToggle.textContent = expanded ? '詳細を隠す' : '詳細を表示';
-  });
   if (onRefresh !== null) {
     const button = article.querySelector('.storage-refresh');
     button.addEventListener('click', async () => {
@@ -75,11 +64,11 @@ export function createStorageCard(model, { onRefresh = null } = {}) {
     const nextSignature = JSON.stringify(next);
     if (signature === nextSignature) return;
     signature = nextSignature;
-    article.className = `storage-card is-${next.state.key}${next.state.stale ? ' is-reference' : ''}${article.classList.contains('is-mobile-expanded') ? ' is-mobile-expanded' : ''}`;
+    article.className = `storage-card is-${next.state.key}${next.state.stale ? ' is-reference' : ''}`;
     const template = document.createElement('div');
     template.innerHTML = storageCardMarkup(next, onRefresh);
     for (const selector of ['.storage-card-ident h2', '.storage-card-ident p', '.storage-status-badge',
-      '.storage-checked-label', '.storage-checked-value', '.storage-checked-ago',
+      '.storage-card-checked',
       '.storage-primary-metric strong', '.storage-links a']) {
       const oldNodes = article.querySelectorAll(selector);
       template.querySelectorAll(selector).forEach((incoming, index) => {
@@ -90,7 +79,7 @@ export function createStorageCard(model, { onRefresh = null } = {}) {
         }
       });
     }
-    for (const selector of ['.storage-usage-wrap', '.storage-values']) {
+    for (const selector of ['.storage-usage-wrap']) {
       const retained = article.querySelector(selector), incoming = template.querySelector(selector);
       if (retained.outerHTML !== incoming.outerHTML) retained.replaceWith(incoming);
     }

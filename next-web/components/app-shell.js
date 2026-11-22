@@ -127,7 +127,7 @@ export function createAppShell(root) {
         </div>
         <nav class="sidebar-nav">${primaryItems.map(navItem).join('')}</nav>
         <div class="sidebar-separator"></div>
-        <nav class="sidebar-nav">${adminItems.map(navItem).join('')}<a class="nav-item mobile-only" href="#cleaner" data-route="cleaner">${icon('storage')}<span class="nav-label">台帳整理</span></a></nav>
+        <nav class="sidebar-nav">${adminItems.map(navItem).join('')}</nav>
         <button class="button mobile-drawer-close mobile-only" type="button">メニューを閉じる</button>
         <div class="sidebar-bottom"><div class="sidebar-separator"></div><a class="nav-item" href="#help" target="_blank" rel="noopener" data-route="help" title="ヘルプ（別タブで開く）">${icon('help')}<span class="nav-label">ヘルプ ↗</span></a>${navItem(['settings','settings','設定'])}</div>
       </aside></div>
@@ -257,9 +257,6 @@ export function createAppShell(root) {
   document.addEventListener('pointerdown', event => {
     if (!paletteMenu.contains(event.target) && !paletteToggle.contains(event.target)) closePaletteMenu();
   });
-  paletteMenu.addEventListener('focusout', event => {
-    if (!paletteMenu.contains(event.relatedTarget) && event.relatedTarget !== paletteToggle) closePaletteMenu();
-  });
   window.addEventListener('resize', positionPaletteMenu);
   window.addEventListener('chinachu-theme-change', updateThemeControls);
   updateThemeControls();
@@ -343,7 +340,7 @@ export function createAppShell(root) {
     if (restoreFocus) expanded?.focus();
   }
 
-  function openMobilePageToolbar(button, focusSelector = null) {
+  function openMobilePageToolbar(button, focusSelector = null, view = 'all') {
     if (mobilePanelOpen && button.getAttribute('aria-expanded') === 'true') {
       closeMobilePageToolbar(true);
       return;
@@ -351,6 +348,7 @@ export function createAppShell(root) {
     closeNotifications();
     mobileHeaderActions.querySelectorAll('[aria-expanded]').forEach(item => item.setAttribute('aria-expanded', 'false'));
     mobilePanelOpen = true;
+    mobileToolbar.dataset.view = view;
     mobileToolbar.classList.add('is-open');
     button.setAttribute('aria-expanded', 'true');
     if (focusSelector) window.requestAnimationFrame(() => headerActions.querySelector(focusSelector)?.focus());
@@ -369,9 +367,13 @@ export function createAppShell(root) {
   function syncMobilePageActions() {
     closeMobilePageToolbar();
     mobileHeaderActions.replaceChildren();
+    const searchOnly = headerActions.querySelector('.program-search-header,.rules-header-controls,.reserves-header-toolbar') !== null;
+    const recordedActions = headerActions.querySelector('.recorded-header-toolbar') !== null;
+    mobileHeaderActions.classList.toggle('is-search-only', searchOnly);
+    mobileHeaderActions.classList.toggle('is-recorded-actions', recordedActions);
     const pageSearch = headerActions.querySelector('input[type="search"]');
     const guideDate = headerActions.querySelector('.guide-date-controls input[type="date"]');
-    if (pageSearch && !headerActions.querySelector('.recorded-header-toolbar')) {
+    if (pageSearch) {
       const searchButton = mobileActionButton('search', 'このページを検索');
       searchButton.setAttribute('aria-controls', 'header-page-actions');
       searchButton.setAttribute('aria-expanded', 'false');
@@ -379,7 +381,7 @@ export function createAppShell(root) {
       pageSearch.addEventListener('input', syncActive);
       syncActive();
       window.requestAnimationFrame(syncActive);
-      searchButton.addEventListener('click', () => openMobilePageToolbar(searchButton, 'input[type="search"]'));
+      searchButton.addEventListener('click', () => openMobilePageToolbar(searchButton, 'input[type="search"]', recordedActions ? 'search' : 'all'));
       mobileHeaderActions.append(searchButton);
     }
     if (guideDate) {
@@ -402,12 +404,13 @@ export function createAppShell(root) {
       });
       mobileHeaderActions.append(dateButton);
     }
-    if (headerActions.children.length) {
+    if (headerActions.children.length && !searchOnly) {
       const optionsButton = mobileActionButton('options', headerActions.querySelector('.recorded-header-toolbar') ? '録画結果操作' : 'ページの表示と操作');
       optionsButton.setAttribute('aria-controls', 'header-page-actions');
       optionsButton.setAttribute('aria-expanded', 'false');
-      optionsButton.addEventListener('click', () => openMobilePageToolbar(optionsButton));
-      mobileHeaderActions.append(optionsButton);
+      optionsButton.addEventListener('click', () => openMobilePageToolbar(optionsButton, null, recordedActions ? 'actions' : 'all'));
+      if (recordedActions) mobileHeaderActions.prepend(optionsButton);
+      else mobileHeaderActions.append(optionsButton);
     }
   }
   function closeDrawer(restoreFocus = false) {

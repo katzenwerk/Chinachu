@@ -195,7 +195,23 @@ export function renderSearchPage(container, initialParams = new URLSearchParams(
       details.append(head, sub);
       row.append(date, time, station, details);
       if (program.id) {
-        appendMobileContextButton(row);
+        row.classList.add('has-compact-mobile-layout');
+        const mobileHeader = document.createElement('div');
+        mobileHeader.className = 'compact-mobile-row-header';
+        const mobileDate = document.createElement('span');
+        mobileDate.textContent = `${date.textContent} ${time.textContent}`;
+        mobileHeader.append(mobileDate);
+        const status = head.querySelector('.program-search-status');
+        if (status) mobileHeader.append(status.cloneNode(true));
+        const mobileMeta = document.createElement('div');
+        mobileMeta.className = 'compact-mobile-row-meta';
+        mobileMeta.textContent = [stationName, program.category,
+          end === null ? null : `${Math.round((end - Number(entry.start)) / 60000)}分`].filter(Boolean).join(' · ');
+        row.append(mobileHeader, mobileMeta);
+        const mobileMenu = appendMobileContextButton(row);
+        mobileMenu.textContent = title.textContent;
+        mobileMenu.title = title.textContent;
+        mobileMenu.setAttribute('aria-label', `${title.textContent}の操作メニュー`);
         row.classList.add('is-actionable');
         row.tabIndex = 0;
         row.setAttribute('role', 'button');

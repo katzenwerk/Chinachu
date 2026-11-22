@@ -68,3 +68,10 @@
 .nav-item .timeline-conflict-dot { display: block; flex: 0 0 8px; width: 8px; height: 8px; margin-left: auto; border-radius: 50%; background: var(--danger); }
 .nav-item .timeline-conflict-dot[hidden] { display: none; }
 .app-shell[data-sidebar="compact"] .sidebar:not(.is-preview-open) .nav-item .timeline-conflict-dot:not([hidden]) { position: absolute; top: 7px; left: calc(50% + 5px); margin-left: 0; }
+
+.conflicts-timeline-explanation { display: contents; }
+.conflicts-timeline-explanation > summary { display: none; }
+.conflicts-timeline-footer { order: 1; }
+.conflicts-timeline-explanation .conflicts-timeline-footer { margin-top: 6px; }
+
+.conflicts-mobile-description { display: none; }

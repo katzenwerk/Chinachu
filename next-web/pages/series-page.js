@@ -1,7 +1,7 @@
 import { openOriginalSeriesDialog, createSeriesRegistryView } from '../components/series-registry-dialog.js';
 import { createChannelLogo } from '../components/channel-logo.js';
 import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
-import { appendMobileContextButton, headerCompactMedia } from '../components/mobile-layout.js';
+import { headerCompactMedia, MOBILE_QUERY } from '../components/mobile-layout.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { deleteRecordedFromContext } from '../services/recorded-delete-action.js';
 import { openSeriesBulkCorrectionDialog, openSeriesCorrectionDialog } from '../components/series-correction-dialog.js';
@@ -446,6 +446,12 @@ function createSeriesListEntry(cardMode, tab) {
     state.tid = document.createElement('span');
     state.summary = document.createElement('div');
     state.summary.className = 'series-list-card-summary';
+    state.episodeSummary = document.createElement('span');
+    const separator = document.createElement('span');
+    separator.className = 'series-list-card-summary-separator';
+    separator.textContent = ' · ';
+    state.countSummary = document.createElement('span');
+    state.summary.append(state.episodeSummary, separator, state.countSummary);
     primary.append(state.title, state.tid);
     body.append(primary, state.summary);
     link.append(media, body);
@@ -474,9 +480,10 @@ function updateSeriesListEntry(entry, item, data, tab, context) {
   if (state.link.getAttribute('href') !== href) state.link.setAttribute('href', href);
   const title = text(item.title, '作品名未取得');
   setContent(state.title, title);
-  setContent(state.summary, state.media
-    ? `${seriesEpisodeSummary(item)} · 録画 ${item.counts.currentRecordings}件${item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : ''} · 予約 ${item.counts.reservations}件`
-    : seriesListMeta(item, tab));
+  if (state.media) {
+    setContent(state.episodeSummary, seriesEpisodeSummary(item));
+    setContent(state.countSummary, `録画 ${item.counts.currentRecordings}件${item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : ''} · 予約 ${item.counts.reservations}件`);
+  } else setContent(state.summary, seriesListMeta(item, tab));
   if (state.menuButton) {
     const label = `${title}の操作`;
     state.menuButton.title = label;
@@ -654,7 +661,9 @@ function appendEventLogo(host, event, context, options = {}) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'series-recording-logo';
-  button.setAttribute('aria-label', `${tooltip.replaceAll('\n', '、')}。詳細を表示`);
+  const mobile = window.matchMedia(MOBILE_QUERY).matches;
+  button.setAttribute('aria-label', `${tooltip.replaceAll('\n', '、')}。${mobile ? '操作メニュー' : '詳細を表示'}`);
+  if (mobile) button.setAttribute('aria-haspopup', 'menu');
   const logo = createChannelLogo({
     name: event.channel?.name,
     fallbackText: event.channel?.name,
@@ -678,7 +687,12 @@ function appendEventLogo(host, event, context, options = {}) {
       event.recordings?.length && event.recordings.every(recording => recording.deleted)) {
     button.classList.add('is-deleted');
   }
-  button.addEventListener('click', () => context.openDetail(context.eventIndex?.get(event.key) || seriesEventContext(event, context)));
+  button.addEventListener('click', () => {
+    if (window.matchMedia(MOBILE_QUERY).matches) {
+      const rect = button.getBoundingClientRect();
+      context.openEventMenu(menuContext(), { x: rect.left, y: rect.bottom }, options.kind);
+    } else context.openDetail(context.eventIndex?.get(event.key) || seriesEventContext(event, context));
+  });
   const menuContext = () => ({ ...(context.eventIndex?.get(event.key) || seriesEventContext(event, context)),
     selectedEpisode: options.selectedEpisode ?? null });
   button.addEventListener('contextmenu', eventObject => {
@@ -695,7 +709,6 @@ function appendEventLogo(host, event, context, options = {}) {
     }
   });
   wrapper.append(button);
-  appendMobileContextButton(button, wrapper);
   if (context.selectedEventKey === event.key) wrapper.classList.add('is-selected');
   host.append(wrapper);
   return wrapper;
@@ -1030,7 +1043,7 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
   const controller = new AbortController();
   const setHeaderActions = typeof options.setHeaderActions === 'function' ? options.setHeaderActions : () => {};
   let tab = TABS.has(query.get('tab')) ? query.get('tab') : 'all';
-  let viewMode = readPreference(VIEW_KEY, ['list', 'card'], 'list');
+  let viewMode = window.matchMedia(MOBILE_QUERY).matches ? 'card' : readPreference(VIEW_KEY, ['list', 'card'], 'list');
   let searchValue = query.get('search') || '';
   const selectedId = query.get('id');
   const eventKey = query.get('event');

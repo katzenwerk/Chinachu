@@ -35,7 +35,7 @@ function pickerLabel(value, withTime) {
 }
 
 // mode: icon (the reservation-list popup), date (guide), datetime (timeline).
-export function createMonthCalendar(container, { onSelect, mode = 'icon', value = null, minDate = null } = {}) {
+export function createMonthCalendar(container, { onSelect, mode = 'icon', value = null, minDate = null, highlightDays = null } = {}) {
   const today = startOfDay(new Date());
   const withTime = mode === 'datetime';
   const iconOnly = mode === 'icon';
@@ -136,6 +136,8 @@ export function createMonthCalendar(container, { onSelect, mode = 'icon', value 
   }
 
   function render() {
+    const highlightStart = startOfDay(new Date());
+    const highlightEnd = highlightDays === null ? null : addDays(highlightStart, highlightDays - 1);
     const first = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
     const gridStart = addDays(first, -first.getDay());
     heading.textContent = `${viewMonth.getFullYear()}年 ${viewMonth.getMonth() + 1}月`;
@@ -149,7 +151,9 @@ export function createMonthCalendar(container, { onSelect, mode = 'icon', value 
       button.setAttribute('role', 'gridcell');
       button.setAttribute('aria-label', `${day.getFullYear()}年${day.getMonth() + 1}月${day.getDate()}日`);
       button.className = 'month-calendar-day';
-      if (day.getMonth() !== viewMonth.getMonth()) button.classList.add('is-outside');
+      if (highlightEnd === null ? day.getMonth() !== viewMonth.getMonth() : day < highlightStart || day > highlightEnd) {
+        button.classList.add('is-outside');
+      }
       if (sameDate(day, today)) button.classList.add('is-today');
       if (sameDate(day, selected)) {
         button.classList.add('is-selected');

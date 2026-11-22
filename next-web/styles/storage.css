@@ -15,9 +15,6 @@
 .storage-status-badge.is-low,.storage-status-badge.is-unavailable,.storage-status-badge.is-error,.storage-status-badge.is-safety-error { border-color: var(--danger-border); background: color-mix(in srgb,var(--danger) 12%,transparent); color: var(--danger); }
 .storage-status-badge.is-stale,.storage-status-badge.is-unobserved { border-color: color-mix(in srgb,var(--info) 35%,transparent); background: color-mix(in srgb,var(--info) 12%,transparent); color: var(--info); }
 .storage-card-tools { display: flex; align-items: center; flex: 0 0 auto; gap: 9px; }
-.storage-card-tools time { color: var(--muted); font-size: 10px; line-height: 1.35; text-align: right; font-variant-numeric: tabular-nums; }
-.storage-card-tools time span { display: block; }
-.storage-card.is-reference .storage-checked-value,.storage-card.is-reference .storage-checked-ago { color: var(--danger); }
 .storage-refresh { display: grid; flex: 0 0 auto; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 50%; background: var(--panel); color: var(--muted); }
 .storage-refresh:not([disabled]) { cursor: pointer; }
 .storage-refresh:not([disabled]):hover { border-color: var(--brand); background: var(--brand-soft); color: var(--link-color); }
@@ -40,15 +37,6 @@
 .storage-threshold-marker.is-low { z-index: 3; background: #cf5653; }
 .storage-threshold-marker.is-warning.is-close { transform: translateX(calc(-50% - 2px)); }
 .storage-threshold-marker.is-low.is-close { transform: translateX(calc(-50% + 2px)); }
-.storage-values { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
-.storage-values div { display: flex; align-items: baseline; gap: 7px; min-width: 0; white-space: nowrap; }
-.storage-values div:last-child { justify-content: flex-end; }
-.storage-values span { color: var(--muted); font-size: 10px; }
-.storage-values strong { font-size: 13px; font-weight: var(--font-title-weight); font-variant-numeric: tabular-nums; }
-.storage-threshold-values { display: flex; justify-content: flex-end; gap: 6px 12px; }
-.storage-threshold-values .is-warning { color: var(--warning); }
-.storage-threshold-values .is-low { color: var(--danger); }
-.storage-threshold-values strong { color: inherit; }
 .storage-card-footer { margin-top: auto; padding-top: 13px; }
 .storage-note { display: flex; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 9px; padding: 7px 9px; border-left: 3px solid var(--warning); border-radius: 5px; background: color-mix(in srgb,var(--warning) 8%,transparent); color: var(--muted); font-size: 11px; line-height: 1.45; }
 .storage-note.is-low,.storage-note.is-unavailable,.storage-note.is-error,.storage-note.is-safety-error { border-left-color: var(--danger); background: color-mix(in srgb,var(--danger) 8%,transparent); }
@@ -69,3 +57,5 @@
 @media (prefers-reduced-motion: reduce) { .storage-refresh.is-loading { animation: none; } }
 
 @media (max-width:1180px) { .storage-grid { grid-template-columns: 1fr; } }
+
+.storage-card-checked { display: block; margin: 0; white-space: nowrap; color: var(--muted); font-size: 11px; line-height: 1.3; }

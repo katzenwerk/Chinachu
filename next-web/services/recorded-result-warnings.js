@@ -249,7 +249,9 @@ export function recordedResultWarnings(item) {
         `録画TS解析で同期喪失イベントを${syncEvents.toLocaleString('ja-JP')}件検出`, 'confirmed'));
     }
   }
-  return warnings;
+  return recordedFileState(item) === 'deleted'
+    ? warnings.filter(value => value.key !== 'duration-shortage' && value.key !== 'saved-ts' && !value.key.startsWith('ts-'))
+    : warnings;
 }
 
 export function hasRecordedResultWarnings(item) {

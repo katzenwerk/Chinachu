@@ -229,8 +229,9 @@ function createReservationTimelineRenderer() {
     duration.className = 'home-reservation-timeline-duration';
     meta.append(warning, duration);
     row.append(channelLogo.element, title, meta);
-    appendMobileContextButton(row);
-    return { element: row, channelLogo, title, warning, duration, signature: null };
+    const mobileMenu = appendMobileContextButton(row);
+    mobileMenu.classList.add('home-reservation-mobile-title');
+    return { element: row, channelLogo, title, mobileMenu, warning, duration, signature: null };
   }
 
   function updateRowState(state, model) {
@@ -245,6 +246,9 @@ function createReservationTimelineRenderer() {
       state.title = replacement;
     }
     if (state.title.textContent !== model.timelineTitle) state.title.textContent = model.timelineTitle;
+    state.mobileMenu.textContent = model.timelineTitle;
+    state.mobileMenu.title = model.timelineTitle;
+    state.mobileMenu.setAttribute('aria-label', `${model.timelineTitle}の操作メニュー`);
     setProgramHover(state.title, model.hover);
     if (needsLink && state.title.getAttribute('href') !== model.detailUrl) state.title.href = model.detailUrl;
     state.channelLogo.update({
@@ -854,6 +858,7 @@ export function renderHomePage(container, options = {}) {
       }
       if (action === 'play') {
         return void openRecordedPlaybackOverlay({
+          channel: item.channel, detail: item.detail || item.description,
           playable: true, recordedId: item.recordedId,
           title: item.fullTitle || item.title || 'タイトル未取得'
         }).catch(showActionError);

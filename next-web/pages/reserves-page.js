@@ -4,6 +4,7 @@ import { createHoverPopupController } from '../components/hover-popup-controller
 import { createHomeProgramContextMenu } from '../components/home-program-context-menu.js';
 import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor-dialog.js';
 import { createMonthCalendar } from '../components/month-calendar.js';
+import { MOBILE_QUERY } from '../components/mobile-layout.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { invalidateResources, loadResource } from '../services/api-client.js';
 import { buildReservationListModels, filterReservationListModels, findReservationDateJumpTarget, nextReservationDisplayBoundaryDelay } from '../services/reservation-model.js';
@@ -91,7 +92,7 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
   const targetInputs = Array.from(targetFilter.querySelectorAll('input[type="radio"]'));
   const ruleFilter = page.querySelector('.reserves-rule-filter');
   const content = page.querySelector('.reserves-list-content');
-  const listRenderer = createReservationListRenderer(content);
+  const listRenderer = createReservationListRenderer(content, { compactMobile: true });
   function updateControlsVisibility() {
     controls.hidden = jumpFeedback.hidden && ruleFilter.hidden;
     controlsPanel.hidden = controls.hidden;
@@ -481,7 +482,15 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
   };
   content.addEventListener('keydown', keyboardContext);
 
-  const calendar = createMonthCalendar(dateJumpHost, { onSelect: jumpToDate });
+  const calendar = createMonthCalendar(dateJumpHost, { onSelect: jumpToDate, highlightDays: 8 });
+  const mobileMedia = window.matchMedia(MOBILE_QUERY);
+  const syncCalendarPlacement = () => {
+    const headingHost = document.querySelector('.header-heading');
+    if (mobileMedia.matches && headingHost) headingHost.append(dateJumpHost);
+    else targetFilter.before(dateJumpHost);
+  };
+  mobileMedia.addEventListener('change', syncCalendarPlacement);
+  syncCalendarPlacement();
   const targetPopup = createHoverPopupController({
     root: targetFilter,
     trigger: targetTrigger,
@@ -511,6 +520,8 @@ export function renderReservesPage(container, query = new URLSearchParams(), { s
     content.removeEventListener('keydown', keyboardContext);
     contextMenu.destroy();
     calendar.destroy();
+    mobileMedia.removeEventListener('change', syncCalendarPlacement);
+    dateJumpHost.remove();
     targetPopup.destroy();
     setHeaderActions();
     unsubscribe();

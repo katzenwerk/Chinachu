@@ -1,5 +1,5 @@
 import { invalidateResources, loadResources } from '../services/api-client.js';
-import { buildStorageViewModels, resolveRecordedStorage } from '../services/storage-model.js';
+import { buildStorageViewModels, resolveRecordedStorage, formatThreshold } from '../services/storage-model.js';
 import { isReservationDisplayTarget } from '../services/reservation-model.js';
 import { loadRecordedResultsWithStoragePaths } from '../services/recorded-results-client.js';
 import { refreshStorageCapacity, retryStorageData, subscribeStorageData } from '../services/storage-store.js';
@@ -69,6 +69,7 @@ export function renderStoragePage(container) {
       panel.setAttribute('aria-label', 'ストレージ一覧');
       panel.innerHTML = `
         <div class="storage-snapshot-warning" hidden>Storage情報を更新できないため、最後に取得した情報を表示しています。</div>
+        <p class="storage-page-note storage-threshold-summary"></p>
         <div class="storage-grid" id="storage-grid"></div>
         <p class="storage-page-note">空き容量は録画中に自動更新されます。録画中以外は、休止中のHDDを起動させないため、概算値を表示しています。<BR>最新の空き容量を確認する場合は、各カード右上の更新ボタンを押してください。※手動更新により、休止中のHDDが起動する場合があります。</p>
         <div class="storage-management-row"><p>録画台帳と登録録画フォルダの所在を明示操作で照合します。</p><button class="button" data-open-cleaner type="button">台帳整理</button></div>
@@ -82,6 +83,9 @@ export function renderStoragePage(container) {
     unassigned.hidden = unassignedRecorded === 0;
     const unassignedText = `保存済み情報から登録録画先を特定できない録画済み ${unassignedRecorded}件は、録画先別の件数に含めていません。`;
     if (unassigned.textContent !== unassignedText) unassigned.textContent = unassignedText;
+    const thresholds = storageState.data.thresholds || {};
+    panel.querySelector('.storage-threshold-summary').textContent =
+      `容量注意の閾値：${thresholds.warningEnabled === true ? formatThreshold(thresholds.warningMB) : '無効'} ／ 容量不足の閾値：${formatThreshold(thresholds.cleanupMB)}`;
     const grid = panel.querySelector('#storage-grid');
     const keys = new Set(models.map(model => model.id));
     for (const [key, card] of cards) {
