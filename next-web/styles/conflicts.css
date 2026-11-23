@@ -39,7 +39,9 @@
 .conflicts-timeline-bar:hover,.conflicts-timeline-bar:focus-visible { z-index: 3; outline: 2px solid var(--focus); outline-offset: 1px; }
 @media (max-width: 740px) {
   .conflict-card-heading { align-items: start; }
-  .conflicts-timeline-chart { min-width: 700px; }
+  /* Round the visible scroll viewport, not the wider timeline content. */
+  .conflicts-timeline-scroll { overflow-y: hidden; padding-bottom: 0; border: 1px solid var(--border); border-radius: 8px; }
+  .conflicts-timeline-chart { min-width: 700px; border: 0; border-radius: 0; }
   .conflicts-timeline-row { grid-template-columns: 140px minmax(0,1fr); }
 }
 .conflicts-timeline-controls { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }

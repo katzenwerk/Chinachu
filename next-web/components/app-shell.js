@@ -369,8 +369,10 @@ export function createAppShell(root) {
     mobileHeaderActions.replaceChildren();
     const searchOnly = headerActions.querySelector('.program-search-header,.rules-header-controls,.reserves-header-toolbar') !== null;
     const recordedActions = headerActions.querySelector('.recorded-header-toolbar') !== null;
+    const seriesActions = headerActions.querySelector('.series-header-toolbar') !== null;
     mobileHeaderActions.classList.toggle('is-search-only', searchOnly);
     mobileHeaderActions.classList.toggle('is-recorded-actions', recordedActions);
+    mobileHeaderActions.classList.toggle('is-series-actions', seriesActions);
     const pageSearch = headerActions.querySelector('input[type="search"]');
     const guideDate = headerActions.querySelector('.guide-date-controls input[type="date"]');
     if (pageSearch) {
@@ -409,7 +411,7 @@ export function createAppShell(root) {
       optionsButton.setAttribute('aria-controls', 'header-page-actions');
       optionsButton.setAttribute('aria-expanded', 'false');
       optionsButton.addEventListener('click', () => openMobilePageToolbar(optionsButton, null, recordedActions ? 'actions' : 'all'));
-      if (recordedActions) mobileHeaderActions.prepend(optionsButton);
+      if (recordedActions || seriesActions) mobileHeaderActions.prepend(optionsButton);
       else mobileHeaderActions.append(optionsButton);
     }
   }

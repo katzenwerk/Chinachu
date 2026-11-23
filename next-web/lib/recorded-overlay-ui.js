@@ -62,9 +62,11 @@ export function mountRecordedOverlayUi({ stage, picture, controls, captionsButto
   chrome.append(header, controls);
 
   const mobile = window.matchMedia(MOBILE_QUERY);
+  const narrow = window.matchMedia('(max-width:640px)');
   const coarse = window.matchMedia('(pointer: coarse)');
   const portrait = window.matchMedia('(orientation: portrait)');
   const isPhone = () => mobile.matches && coarse.matches;
+  const isCompactPortrait = () => portrait.matches && narrow.matches;
   let timer = null, hovered = false, pressed = false;
   const disposers = [];
   const listen = (target, event, handler) => {
@@ -74,14 +76,14 @@ export function mountRecordedOverlayUi({ stage, picture, controls, captionsButto
   const show = () => {
     window.clearTimeout(timer);
     stage.classList.add('is-ui-visible');
-    if (isPhone() && portrait.matches) return;
+    if (isCompactPortrait()) return;
     timer = window.setTimeout(() => {
       if (hovered || pressed || controls.querySelector(':focus-visible')) return;
       stage.classList.remove('is-ui-visible');
     }, 3000);
   };
   const layout = () => {
-    const outside = isPhone() && portrait.matches;
+    const outside = isCompactPortrait();
     stage.classList.toggle('is-touch-live', isPhone());
     stage.classList.toggle('is-portrait-live', outside);
     if (outside) stage.append(chrome); else picture.append(chrome);
@@ -89,7 +91,7 @@ export function mountRecordedOverlayUi({ stage, picture, controls, captionsButto
     pressed = false;
     show();
   };
-  for (const media of [mobile, coarse, portrait]) listen(media, 'change', layout);
+  for (const media of [mobile, coarse, portrait, narrow]) listen(media, 'change', layout);
   for (const event of ['pointermove', 'pointerdown', 'keydown']) listen(stage, event, show);
   for (const event of ['focusin', 'focusout']) listen(controls, event, show);
   for (const button of buttons.children) {

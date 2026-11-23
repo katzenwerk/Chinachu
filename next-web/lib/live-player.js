@@ -170,16 +170,17 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	const mouseUi = window.matchMedia('(hover: hover) and (pointer: fine)');
 	const desktopUi = window.matchMedia('(min-width:641px) and (hover: hover) and (pointer: fine)');
 	const mobileUi = window.matchMedia(MOBILE_QUERY);
+	const narrowUi = window.matchMedia('(max-width:640px)');
 	const touchUi = window.matchMedia('(pointer: coarse)');
 	const portraitUi = window.matchMedia('(orientation: portrait)');
 	const isPhone = () => mobileUi.matches && touchUi.matches;
-	const isPhonePortrait = () => isPhone() && portraitUi.matches;
+	const isCompactPortrait = () => portraitUi.matches && narrowUi.matches;
 	let chromeTimer = null;
 	let descriptionPinned = false, controlsHovered = false, controlsPressed = false;
 	const showChrome = () => {
 		window.clearTimeout(chromeTimer);
 		stage.classList.add('is-ui-visible');
-		if (isPhonePortrait()) return;
+		if (isCompactPortrait()) return;
 		chromeTimer = window.setTimeout(() => {
 			chromeTimer = null;
 			const focused = isPhone() ? controls.querySelector(':focus-visible') : mouseUi.matches ? chrome.querySelector(':focus-visible') : chrome.contains(document.activeElement);
@@ -188,10 +189,10 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 		}, 3000);
 	};
 	const updateDescription = () => {
-		const expanded = !isPhone() && (desktopUi.matches || descriptionPinned);
+		const expanded = !isPhone() && !isCompactPortrait() && (desktopUi.matches || descriptionPinned);
 		chrome.classList.toggle('is-description-open', expanded);
-		programLabel.disabled = desktopUi.matches || isPhone();
-		if (desktopUi.matches || isPhone()) {
+		programLabel.disabled = desktopUi.matches || isCompactPortrait() || isPhone();
+		if (desktopUi.matches || isCompactPortrait() || isPhone()) {
 			programLabel.removeAttribute('aria-expanded');
 			programLabel.removeAttribute('aria-controls');
 		} else {
@@ -201,14 +202,14 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 		showChrome();
 	};
 	const toggleDescription = event => {
-		if (isPhone() || desktopUi.matches || event.pointerType === 'mouse') return;
+		if (isPhone() || isCompactPortrait() || desktopUi.matches || event.pointerType === 'mouse') return;
 		descriptionPinned = !descriptionPinned;
 		updateDescription();
 	};
 	const syncLayout = () => {
 		stage.classList.toggle('is-touch-live', isPhone());
-		stage.classList.toggle('is-portrait-live', isPhonePortrait());
-		if (isPhonePortrait()) stage.append(chrome); else picture.append(chrome);
+		stage.classList.toggle('is-portrait-live', isCompactPortrait());
+		if (isCompactPortrait()) stage.append(chrome); else picture.append(chrome);
 		buttonGroup.replaceChildren(...(isPhone() ? [captionsButton, compatButton, fullscreenButton, closeButton] : [captionsButton, fullscreenButton, closeButton, compatButton]));
 		controlsHovered = false;
 		controlsPressed = false;
@@ -324,7 +325,7 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 		chrome.removeEventListener('focusout', showChrome);
 		programLabel.removeEventListener('click', toggleDescription);
 		desktopUi.removeEventListener('change', updateDescription);
-		for (const media of [mobileUi, touchUi, portraitUi]) media.removeEventListener('change', syncLayout);
+		for (const media of [mobileUi, touchUi, portraitUi, narrowUi]) media.removeEventListener('change', syncLayout);
 		controls.removeEventListener('pointerdown', pressControls);
 		window.removeEventListener('pointerup', releaseControls);
 		window.removeEventListener('pointercancel', releaseControls);
@@ -434,7 +435,7 @@ export function openLiveOverlay(channelId, { onClose, channelName, getCurrentPro
 	chrome.addEventListener('focusout', showChrome);
 	programLabel.addEventListener('click', toggleDescription);
 	desktopUi.addEventListener('change', updateDescription);
-	for (const media of [mobileUi, touchUi, portraitUi]) media.addEventListener('change', syncLayout);
+	for (const media of [mobileUi, touchUi, portraitUi, narrowUi]) media.addEventListener('change', syncLayout);
 	controls.addEventListener('pointerdown', pressControls);
 	window.addEventListener('pointerup', releaseControls);
 	window.addEventListener('pointercancel', releaseControls);

@@ -252,3 +252,16 @@
 .csv-table td:last-child { min-width: 200px; font-size: 12px; }
 .csv-pager { display: flex; align-items: center; justify-content: center; gap: var(--space-3); font-size: 12px; }
 @media (max-height: 620px) { .csv-table-scroll { flex: 0 0 280px; } }
+/* Mobile log viewer: retain complete lines without horizontal overflow. */
+@media (max-width: 640px), (max-width: 940px) and (max-height: 500px) and (pointer: coarse) {
+  .log-lines {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .log-line {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}

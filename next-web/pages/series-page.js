@@ -19,6 +19,7 @@ import {
 
 const SIZE_KEY = 'chinachu.next.series.cardSize';
 const COLUMNS_KEY = 'chinachu.next.series.columns';
+const MOBILE_COLUMNS_KEY = 'chinachu.next.series.mobileColumns';
 const VIEW_KEY = 'chinachu.next.series.view';
 const TABS = new Set(['all', 'attention']);
 
@@ -786,9 +787,17 @@ function createEpisodeCard(episode, size, context) {
   heading.textContent = episode.label;
   const subtitle = document.createElement('span');
   subtitle.className = 'series-episode-subtitle';
-  subtitle.textContent = episode.virtual ?
-    `${episode.displaySubtitle ? `${episode.displaySubtitle} · ` : ''}録画・予約の記録なし` :
-    text(episode.displaySubtitle, episode.confirmed ? '副題未取得' : episode.status || '判定保留');
+  if (episode.virtual) {
+    const subtitleText = document.createElement('span');
+    subtitleText.className = 'series-episode-subtitle-text';
+    subtitleText.textContent = text(episode.displaySubtitle);
+    const absence = document.createElement('span');
+    absence.className = 'series-episode-absence';
+    absence.textContent = '録画・予約の記録なし';
+    subtitle.append(subtitleText, absence);
+  } else {
+    subtitle.textContent = text(episode.displaySubtitle, episode.confirmed ? '副題未取得' : episode.status || '判定保留');
+  }
   body.append(heading, subtitle);
   if (!episode.virtual) {
     const eventRows = document.createElement('div');
@@ -819,6 +828,7 @@ function seriesContentSignature(item) {
 function renderSeriesDetail(host, series, tab, context) {
   let cardSize = readPreference(SIZE_KEY, ['small', 'medium', 'large'], 'medium');
   let columns = readPreference(COLUMNS_KEY, ['auto', '3', '4', '5', '6'], 'auto');
+  let mobileColumns = readPreference(MOBILE_COLUMNS_KEY, ['1', '2'], '2');
   let currentSeries = series;
   const eventContext = { ...context, seriesId: series.id, candidates: [{ id: series.id, tid: series.tid, title: series.title }] };
   const episodeCards = new Map();
@@ -841,19 +851,30 @@ function renderSeriesDetail(host, series, tab, context) {
   tid.className = 'series-detail-tid';
   const counts = document.createElement('div');
   counts.className = 'series-detail-counts';
+  const meta = document.createElement('div');
+  meta.className = 'series-detail-meta';
+  meta.append(tid, counts);
   const description = document.createElement('p');
   description.className = 'series-detail-description';
-  info.append(titleLine, tid, counts);
+  info.append(titleLine, meta);
   header.append(image, info);
 
   const sizeSelect = document.createElement('select');
+  sizeSelect.className = 'series-header-desktop-setting';
   sizeSelect.setAttribute('aria-label', 'カードサイズ');
   for (const [value, label] of [['small', '小'], ['medium', '中'], ['large', '大']]) sizeSelect.add(new Option(`サイズ: ${label}`, value));
   sizeSelect.value = cardSize;
   const columnSelect = document.createElement('select');
+  columnSelect.className = 'series-header-desktop-setting';
   columnSelect.setAttribute('aria-label', '列数');
   for (const value of ['auto', '3', '4', '5', '6']) columnSelect.add(new Option(value === 'auto' ? '列数: 自動' : `列数: ${value}列`, value));
   columnSelect.value = columns;
+  const mobileColumnSelect = document.createElement('select');
+  mobileColumnSelect.className = 'series-header-mobile-columns';
+  mobileColumnSelect.setAttribute('aria-label', 'スマホのエピソード表示');
+  mobileColumnSelect.add(new Option('表示: 2列', '2'));
+  mobileColumnSelect.add(new Option('表示: 1列', '1'));
+  mobileColumnSelect.value = mobileColumns;
   const hiddenButton = document.createElement('button');
   hiddenButton.type = 'button';
   hiddenButton.className = 'button series-data-button';
@@ -869,12 +890,7 @@ function renderSeriesDetail(host, series, tab, context) {
     setContent(tid, currentSeries.tid === null ? 'ローカルシリーズ' : `TID ${currentSeries.tid}`);
     const labels = [
       `録画 ${currentSeries.counts.currentRecordings}件`,
-      ...(currentSeries.counts.missingRecordings ? [`行方不明 ${currentSeries.counts.missingRecordings}件`] : []),
-      `予約 ${currentSeries.counts.reservations}件`,
-      `取得済みEP ${currentSeries.counts.currentEpisodes ?? currentSeries.counts.episodes}件`,
-      `辞書登録EP ${currentSeries.counts.dictionaryEpisodes ?? 0}件`,
-      `イベント確定EP ${currentSeries.counts.episodes}件`,
-      `EP未確定 ${currentSeries.counts.episodeUnresolved}件`
+      `予約 ${currentSeries.counts.reservations}件`
     ];
     if (counts.dataset.values !== JSON.stringify(labels)) {
       counts.dataset.values = JSON.stringify(labels);
@@ -906,6 +922,7 @@ function renderSeriesDetail(host, series, tab, context) {
   function renderGrid(firstRender = false, previousAnchor = null) {
     grid.dataset.size = cardSize;
     grid.dataset.columns = columns;
+    grid.dataset.mobileColumns = mobileColumns;
     const anchor = firstRender ? null : previousAnchor || seriesScrollAnchor(grid);
     const nextCards = new Map();
     const keysSeen = new Map();
@@ -950,11 +967,16 @@ function renderSeriesDetail(host, series, tab, context) {
     writePreference(COLUMNS_KEY, columns);
     grid.dataset.columns = columns;
   });
+  mobileColumnSelect.addEventListener('change', () => {
+    mobileColumns = mobileColumnSelect.value;
+    writePreference(MOBILE_COLUMNS_KEY, mobileColumns);
+    grid.dataset.mobileColumns = mobileColumns;
+  });
   updateHeader();
   renderGrid(true);
   host.append(back, header, grid);
   return {
-    root: grid, seriesId: series.id, sizeSelect, columnSelect, hiddenButton,
+    root: grid, seriesId: series.id, sizeSelect, columnSelect, mobileColumnSelect, hiddenButton,
     update(nextSeries, nextContext) {
       const anchor = seriesScrollAnchor(grid);
       currentSeries = nextSeries;
@@ -1543,7 +1565,7 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
           detailView = renderSeriesDetail(container, selected, tab, eventContext);
           installHeader(data, {
             showTabs: false,
-            detailControls: [detailView.sizeSelect, detailView.columnSelect, detailView.hiddenButton]
+            detailControls: [detailView.sizeSelect, detailView.columnSelect, detailView.mobileColumnSelect, detailView.hiddenButton]
           });
         }
         return;

@@ -94,8 +94,12 @@
 .program-live-chrome .program-live-controls { display: grid; justify-content: stretch; gap: 8px; padding: 0; background: transparent; }
 .program-live-chrome .program-live-button-group { justify-content: flex-end; }
 .program-live-chrome .program-live-controls button { background: rgba(20,20,20,.8); }
-.program-live-control-icon { display: none; }
-.program-live-compat-short { display: none; }
+.program-live-chrome .program-live-control-label,
+.program-live-chrome .program-live-compat-short { display: none; }
+.program-live-chrome .program-live-control-icon { display: block; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.program-live-chrome .program-live-controls button { display: inline-grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 5px; box-shadow: none; }
+.program-live-chrome .program-live-controls button[hidden] { display: none; }
+.program-live-chrome button[aria-pressed="false"] .program-live-control-icon { opacity: .5; }
 .program-live-chrome .program-live-time { order: 0; justify-self: end; width: 100%; min-width: 0; max-width: 350px; margin: 0; }
 .program-live-chrome .program-live-status { min-height: 0; margin: 0; text-align: right; }
 .program-live-chrome .program-live-status:empty { display: none; }
@@ -115,9 +119,6 @@
 @media (min-width:641px) and (hover: hover) and (pointer: fine) {
   .program-live-chrome .program-live-controls button { display: inline-grid; place-items: center; flex: 0 0 38px; width: 38px; height: 38px; min-height: 38px; padding: 0; border: 0; border-radius: 5px; background: transparent; box-shadow: none; }
   .program-live-chrome .program-live-controls button:is(:hover,:focus-visible) { background: rgba(255,255,255,.16); }
-  .program-live-chrome .program-live-control-label { display: none; }
-  .program-live-chrome .program-live-control-icon { display: block; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-  .program-live-chrome button[aria-pressed="false"] .program-live-control-icon { opacity: .5; }
   .program-live-chrome { grid-template-columns: minmax(0,1fr) minmax(260px,auto); }
   .program-live-chrome .program-live-meta { display: grid; grid-template-columns: auto minmax(0,1fr); grid-template-rows: auto; align-items: center; gap: 5px 10px; }
   .program-live-chrome .program-live-channel { grid-column: 1; grid-row: 1; }
@@ -139,19 +140,15 @@
 .is-touch-live .program-live-button-group { flex-wrap: nowrap; gap: 4px; }
 .is-touch-live .program-live-controls button { display: inline-grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; padding: 0; border: 0; border-radius: 5px; background: transparent; box-shadow: none; }
 .is-touch-live .program-live-controls button:is(:active,:focus-visible) { background: rgba(255,255,255,.16); }
-.is-touch-live .program-live-control-label { display: none; }
-.is-touch-live .program-live-control-icon { display: block; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.is-touch-live button[aria-pressed="false"] .program-live-control-icon { opacity: .5; }
-.is-touch-live .program-live-compat .program-live-control-icon { display: none; }
-.is-touch-live .program-live-compat-short { display: inline; font-size: 12px; }
 .is-touch-live:not(.is-portrait-live):not(.is-ui-visible) .program-live-chrome { opacity: 0; pointer-events: none; }
-.program-live-overlay-panel > .program-live-stage.is-touch-live.is-portrait-live { display: flex; flex-direction: column; justify-content: center; }
-.program-live-stage.is-touch-live.is-portrait-live > .program-player-viewport { flex: 0 1 auto; width: 100%; aspect-ratio: 16 / 9; }
-.is-touch-live.is-portrait-live .program-live-chrome { display: contents; opacity: 1; pointer-events: auto; }
-.is-touch-live.is-portrait-live .program-live-header { order: -1; flex: 0 0 auto; padding: 6px 8px; background: #000; }
-.is-touch-live.is-portrait-live .program-live-controls { order: 1; flex: 0 0 auto; width: 100%; padding: 6px 8px; background: #000; }
-.is-touch-live.is-portrait-live .program-live-button-group { justify-content: center; }
-.is-touch-live.is-portrait-live .program-live-status { text-align: left; }
+.program-live-overlay-panel > .program-live-stage.is-portrait-live { display: flex; flex-direction: column; justify-content: flex-start; }
+.program-live-stage.is-portrait-live > .program-player-viewport { flex: 0 0 auto; width: 100%; aspect-ratio: 16 / 9; }
+.is-portrait-live .program-live-chrome { display: contents; opacity: 1; pointer-events: auto; }
+.is-portrait-live .program-live-header { order: -1; flex: 0 0 auto; padding: 6px 8px; background: #000; }
+.is-portrait-live .program-live-controls { order: 1; flex: 0 0 auto; width: 100%; padding: 6px 8px; background: #000; }
+.is-portrait-live .program-live-button-group { justify-content: center; }
+.is-portrait-live .program-live-status { text-align: left; }
+.is-portrait-live .program-live-controls button { flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; }
 
 /* Standalone recorded/chase players reuse the LIVE presentation, not its media sizing. */
 .recorded-overlay-stage { --program-ts-aspect: 1.77777778; }
@@ -168,13 +165,11 @@
 .recorded-overlay-stage .program-ts-controls select:is(:hover,:focus-visible) { background: rgba(255,255,255,.16); }
 .recorded-overlay-stage .program-ts-controls select:focus-visible { outline: 3px solid #5bc0de; outline-offset: 2px; }
 .recorded-overlay-stage .program-ts-controls option { background: #222; color: #fff; }
-.recorded-overlay-stage .program-live-compat .program-live-control-icon { display: none; }
-.recorded-overlay-stage .program-live-compat-short { display: inline; font-size: 12px; }
 .recorded-overlay-stage .program-live-controls .recorded-overlay-retry { flex: 0 0 auto; width: auto; padding: 0 8px; }
-.recorded-playback-frame > .program-ts-stage.recorded-overlay-stage.is-touch-live.is-portrait-live { display: flex; flex-direction: column; justify-content: center; }
-.recorded-overlay-stage.is-touch-live.is-portrait-live > .program-player-viewport { flex: 0 1 auto; width: 100%; aspect-ratio: var(--program-ts-aspect); }
+.recorded-playback-frame > .program-ts-stage.recorded-overlay-stage.is-portrait-live { display: flex; flex-direction: column; justify-content: flex-start; }
+.recorded-overlay-stage.is-portrait-live > .program-player-viewport { flex: 0 0 auto; width: 100%; aspect-ratio: var(--program-ts-aspect); }
 .recorded-overlay-stage.is-touch-live .program-ts-controls select { height: 44px; }
-.recorded-overlay-stage.is-touch-live.is-portrait-live .program-live-chrome { opacity: 1; pointer-events: auto; }
+.recorded-overlay-stage.is-portrait-live .program-live-chrome { opacity: 1; pointer-events: auto; }
 @media (max-width:640px) {
   .recorded-playback-panel { height: calc(var(--wui-viewport-dynamic-height) - 24px); }
 }
