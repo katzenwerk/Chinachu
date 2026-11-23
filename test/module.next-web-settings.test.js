@@ -387,7 +387,7 @@ test('settings model preserves unknown and untouched values while validating exp
 	const orderHandlers = {};
 	const orderInput = { value: '2', validity: { badInput: false }, addEventListener(name, callback) { orderHandlers[name] = callback; } };
 	let orderCommits = 0, rowMoves = 0, orderError;
-	const orderContext = { order: orderInput, item: { id: 22, order: '1' }, error: {},
+	const orderContext = { order: orderInput, item: { id: 22, order: '1' }, error: {}, pointerPending: false,
 		setError(key, element, message) { orderError = message; }, markChanged() {}, updateServiceStatus() {},
 		commitServices(kind) { assert.strictEqual(kind, 'order'); orderCommits++; }, reorder() { rowMoves++; } };
 	const bindingStart = settingsSource.indexOf('        const commitOrder = () => {');

@@ -1,3 +1,32 @@
+# Chinachu 0.10.7-thorn.42
+
+## Recording History and File Maintenance
+
+- Enrich automatically saved recording-history CSV files with completed TS analysis findings. Migrate legacy CSV headers and preserve recording ledger history if CSV saving fails.
+- Add a monthly recording-history viewer under Services and Logs, with search, result filters, pagination, and CSV downloads. Remove the separate manual CSV export from Recorded Results.
+- Add a manual action to organize recordings from recording-destination roots into existing subfolders and repair paths for files moved within the same destination. Preview eligible work and run it through Operator with ledger updates, recovery records, and recording/maintenance protections.
+
+## EPG Titles and Rules
+
+- Add opt-in EPG title character normalization for selected alphanumeric and punctuation forms while preserving broadcast-attribute detection. Changes take effect on the next EPG fetch without a service restart.
+- Normalize musical and full-width sharp signs to `#` in enabled title processing, including rule matching, programme searches, and WUI previews, without changing description matching or disabled behavior.
+
+## Playback
+
+- Unify LIVE, recorded, and chase-playback overlays and controls, remember caption preferences in the browser, and show available programme information. Refine portrait/landscape layouts, including narrow browser windows.
+
+## Web UI
+
+- Streamline mobile navigation and header actions, recorded-result controls, recording cards, storage summaries, calendar/timeline presentation, and access to TS analysis status from notifications.
+- Refine Series details and episode cards. Add a phone-only one-/two-column episode layout switch, with horizontal one-column cards and separate desktop display preferences.
+- Align mobile header search icons and avoid unwanted zoom on search focus. Improve timeline borders, long service-log lines, mobile toasts, and touch theme selection; suppress outdated analysis warnings for deleted recordings.
+
+## Notifications, Settings, and Help
+
+- Add external low-storage warning notifications with reminders at the configured warning interval, separate from existing critical storage notifications.
+- Clarify Cleaner ledger cleanup choices without changing cleanup behavior, and avoid interrupting service-row pointer interactions when reordering settings.
+- Update in-app help for filename placeholders, EPG title normalization, recording-file maintenance, and ledger cleanup.
+
 # Chinachu 0.10.7-thorn.41
 
 ## Web UI and Settings

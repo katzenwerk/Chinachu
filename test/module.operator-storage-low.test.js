@@ -389,7 +389,7 @@ describe('Operator low-storage handling', function() {
 		let candidateChecks = 0, queuedThumbnails = 0;
 		const candidate = { id: 'old-recording' };
 		const thumbnailContext = vm.createContext({
-			config: {}, recorded: [], recording: [], activeRecordingOutputs: new Set(),
+			config: {}, recorded: [], recording: [], activeRecordingOutputs: new Set(), folderPendingId: () => null,
 			generateThumbnailAfterClose: true, shutdownStarted: false, program: { id: 'finished' },
 			finalPath: '/fixture/finished.ts', duration: 120, requestedAt: 1,
 			recordedThumbnailGenerator: { enqueue: () => { queuedThumbnails++; } },
@@ -428,6 +428,7 @@ describe('Operator low-storage handling', function() {
 		const context = {
 			storageLoggedPhases: new Map(), storageCleanupState: {}, storageLow,
 			storageLowSpaceThresholdMB: 3000, storageLowSpaceWarningThresholdMB: 10000,
+			storageLowSpaceWarningIntervalTime: 180 * 60 * 1000,
 			storageLowSpaceAction: 'stop', operatorLog: line => logs.push(line),
 			externalNotifier: { storage() {} },
 			notifyStorageGroup: () => { notifications += 1; }, persistStorageRuntimeState() {},

@@ -182,7 +182,7 @@ function createOperatorLaunchFixture(store) {
 	const runtime = {
 		scheduler: null, schedulerStartedAt: 0, shutdownStarted: false,
 		matchLedgerProcess: null, pendingRecordedLedgerWrites: 0,
-		maintenanceBusy: false, recordedMaintenance: { isBusy: () => runtime.maintenanceBusy },
+		maintenanceBusy: false, isFolderOrganizing: () => false, recordedMaintenance: { isBusy: () => runtime.maintenanceBusy },
 		activeRecordingOutputs: new Set(), activeDurationProbes: new Set(), failedRecordingSaves: new Set(),
 		process: { platform: process.platform, exit: code => exits.push(code) },
 		operatorLog: message => logs.push(message),

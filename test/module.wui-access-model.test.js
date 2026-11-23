@@ -209,85 +209,10 @@ describe('WUI access model', function() {
 			fs.symlinkSync(path.join(repositoryRoot, 'node_modules'), path.join(temporaryDir, 'node_modules'), 'dir');
 			fs.symlinkSync(path.join(repositoryRoot, 'next-web'), path.join(temporaryDir, 'next-web'), 'dir');
 
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/runtime-privileges.js'),
-				path.join(libDir, 'runtime-privileges.js')
-			);
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/mirakurun-connection.js'),
-				path.join(libDir, 'mirakurun-connection.js')
-			);
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/rule-uid.js'),
-				path.join(libDir, 'rule-uid.js')
-			);
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/scheduler-state.js'),
-				path.join(libDir, 'scheduler-state.js')
-			);
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/health-diagnostics.js'),
-				path.join(libDir, 'health-diagnostics.js')
-			);
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/service-control.js'),
-				path.join(libDir, 'service-control.js')
-			);
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/media-delivery.js'),
-				path.join(libDir, 'media-delivery.js')
-			);
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/storage-health.js'),
-				path.join(libDir, 'storage-health.js')
-			);
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/storage-low.js'),
-				path.join(libDir, 'storage-low.js')
-			);
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/storage-runtime-state.js'),
-				path.join(libDir, 'storage-runtime-state.js')
-			);
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/storage-refresh-ipc.js'),
-				path.join(libDir, 'storage-refresh-ipc.js')
-			);
-			fs.symlinkSync(
-				path.join(repositoryRoot, 'lib/recorded-thumbnail.js'),
-				path.join(libDir, 'recorded-thumbnail.js')
-			);
-			[
-				'channel-preview.js',
-				'external-notification.js',
-				'ledger-cleaner-jobs.js',
-				'ledger-cleaner.js',
-				'log-history.js',
-				'match-detail-resolver.js',
-				'match-deletion-history.js',
-				'proglookup-store.js',
-				'proglookup-updater.js',
-				'recorded-maintenance-files.js',
-				'reservation-store.js',
-				'runtime-paths.js',
-				'rule-store.js',
-				'saved-ts-analysis.js',
-				'series-manual-store.js',
-				'series-projector.js',
-				'series-resolver.js',
-				'series-service.js',
-				'series-background-service.js',
-				'series-worker.js',
-				'series-input-context.js',
-				'syobocal-channel-catalog.js',
-				'syobocal-channel-map-manager.js',
-				'syobocal-channel-map.js',
-				'syobocal-dictionary-manager.js',
-				'wui-auth.js',
-				'wui-config.js'
-			].forEach(name => {
-				fs.symlinkSync(path.join(repositoryRoot, 'lib', name), path.join(libDir, name));
-			});
+			// Use the real lib modules; override only host detection for this fixture.
+			fs.readdirSync(path.join(repositoryRoot, 'lib'))
+				.filter(name => name.endsWith('.js') && name !== 'wui-open-host.js')
+				.forEach(name => fs.symlinkSync(path.join(repositoryRoot, 'lib', name), path.join(libDir, name)));
 
 			fs.writeFileSync(
 				path.join(libDir, 'wui-open-host.js'),
