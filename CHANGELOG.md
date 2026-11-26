@@ -4,6 +4,7 @@
 
 - Extend series management to live-action TV dramas using work and episode information from Bangumi Archive and Japanese Wikipedia.
 - Rework automatic matching for both anime and live-action works, favoring a single valid candidate or the longest title or alias match when using dictionary data.
+- Consolidate Syoboi Calendar, Bangumi, and Wikipedia under Settings → Series, allowing each source to be enabled or disabled independently. Bangumi and Wikipedia are opt-in.
 
 ## Recording Deletion and Cleanup
 
