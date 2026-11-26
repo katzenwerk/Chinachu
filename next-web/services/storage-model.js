@@ -6,6 +6,10 @@ const UNAVAILABLE_LABELS = {
   'read-only': '読み取り専用'
 };
 
+const BYTES_PER_MB = 1024 ** 2;
+const BYTES_PER_GB = 1024 ** 3;
+const BYTES_PER_TB = 1024 ** 4;
+
 function isSafetyBlocked(storage) {
   return storage?.safetyBlocked === true || storage?.status === 'system-filesystem';
 }
@@ -26,14 +30,14 @@ function normalizePath(value) {
 
 function formatCapacity(value, total) {
   if (!finite(value) || value < 0 || !finite(total) || total <= 0) return '未取得';
-  const divisor = total >= 1e12 ? 1e12 : 1e9;
-  return `${(value / divisor).toFixed(2)} ${divisor === 1e12 ? 'TB' : 'GB'}`;
+  const divisor = total >= BYTES_PER_TB ? BYTES_PER_TB : BYTES_PER_GB;
+  return `${(value / divisor).toFixed(2)} ${divisor === BYTES_PER_TB ? 'TB' : 'GB'}`;
 }
 
 function formatCapacityPair(used, total) {
   if (!finite(used) || !finite(total) || total <= 0) return '未取得';
-  const divisor = total >= 1e12 ? 1e12 : 1e9;
-  return `${(used / divisor).toFixed(2)} / ${(total / divisor).toFixed(2)} ${divisor === 1e12 ? 'TB' : 'GB'}`;
+  const divisor = total >= BYTES_PER_TB ? BYTES_PER_TB : BYTES_PER_GB;
+  return `${(used / divisor).toFixed(2)} / ${(total / divisor).toFixed(2)} ${divisor === BYTES_PER_TB ? 'TB' : 'GB'}`;
 }
 
 export function formatThreshold(value) {
@@ -44,7 +48,7 @@ export function formatThreshold(value) {
 
 function thresholdPosition(thresholdMB, total) {
   if (!finite(thresholdMB) || thresholdMB <= 0 || !finite(total) || total <= 0) return null;
-  const thresholdBytes = thresholdMB * 1024 * 1024;
+  const thresholdBytes = thresholdMB * BYTES_PER_MB;
   if (!finite(thresholdBytes)) return null;
   return Math.max(0, Math.min(100, (1 - thresholdBytes / total) * 100));
 }

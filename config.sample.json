@@ -1,60 +1,22 @@
 {
-  "uid": null,
-  "gid": "video",
   "mirakurunPath": "http+unix://%2Fvar%2Frun%2Fmirakurun.sock/",
+  "wuiOpenServer": true,
+  "wuiOpenPort": 20772,
+
   "recordedDir": "./recorded/",
-  "recordedStorage": {
-    "expectedMount": null,
-    "protectRootFilesystem": false
-  },
-  "recordedDirs": [
-    {
-      "id": "hdd1",
-      "name": "HDD 1",
-      "path": "/mnt/hdd1/recorded",
-      "storage": {
-        "expectedMount": "/mnt/hdd1",
-        "protectRootFilesystem": false
-      }
-    }
-  ],
-  "recordedFormat": "<fulltitle2> <channel-code>[<date:yyyy-mm-dd HHMM>].ts",
-  "recordingFilenamePrefixEnabled": false,
-  "recordedFolderOrganizeEnabled": false,
-  "recordedFolderOrganizeOrder": "filename",
-  "recordedCommand": "",
-  "recordedCommandSerial": true,
-  "ffprobeCommand": "ffprobe",
-  "recordedDurationProbeTimeoutMs": 8000,
-  "recordedNameReplaceEnclosingCharacters": true,
-  "recordedNameEnclosingCharacterMap": {},
-  "normalizationForm": "NFKC",
-  "epgTitleHalfWidthEnabled": false,
-  "vaapiEnabled": false,
-  "vaapiDevice": "/dev/dri/renderD128",
-  "recordingPriority": 2,
-  "conflictedPriority": 1,
-  "dropDetectionMode": "mirakurun",
-  "handoffPrepSeconds": 10,
-  "broadcastClockEnabled": false,
-  "broadcastClockIntervalHours": 3,
-  "broadcastClockGrChannel": null,
-  "seriesUseSyobocal": true,
-  "seriesMatchCleanupIntervalDays": 30,
-  "storageLowSpaceWarningThresholdMB": 50000,
+  "recordedDirs": [],
+
+  "storageLowSpaceWarningThresholdMB": 512000,
   "storageLowSpaceWarningIntervalMinutes": 1440,
-  "storageLowSpaceThresholdMB": 3000,
+  "storageLowSpaceThresholdMB": 30720,
   "storageLowSpaceAction": "stop-new",
   "storageLowSpaceCriticalNotifyIntervalMinutes": 60,
-  "notificationCommand": null,
-  "matchRetentionDays": 365,
-  "reserves2RetentionDays": 365,
-  "recordedHistoryRetentionDays": 365,
-  "recordingResultCsvEnabled": false,
-  "excludeServices": [],
-  "serviceOrder": [],
-  "wuiOpenServer": true,
-  "wuiOpenHost": null,
-  "wuiOpenPort": 20772,
-  "wuiBlockGlobalAccess": true
+
+  "recordedFormat": "<fulltitle2> <channel-code>[<date:yyyy-mm-dd HHMM>].ts",
+  "recordedNameReplaceEnclosingCharacters": true,
+  "normalizationForm": "NFKC",
+  "epgTitleHalfWidthEnabled": true,
+  "bangumiEnabled": false,
+  "wikipediaEnabled": false,
+  "wikipediaStartYear": 2000
 }

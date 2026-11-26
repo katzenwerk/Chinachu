@@ -17,8 +17,8 @@ function usageBar(model) {
   const value = model.usagePercent === null ? 0 : Number(model.usagePercent);
   const label = model.usagePercent === null ? '使用率 未取得' : `使用率 ${model.usagePercent}%`;
   const closeClass = model.thresholdMarkersClose ? ' is-close' : '';
-  const warningMarker = model.warningMarker === null ? '' : `<span class="storage-threshold-marker is-warning${closeClass}" style="left:${model.warningMarker}%" title="Warning：空き${escapeText(model.warningThreshold)}以下" aria-hidden="true"></span>`;
-  const lowMarker = model.lowMarker === null ? '' : `<span class="storage-threshold-marker is-low${closeClass}" style="left:${model.lowMarker}%" title="Low：空き${escapeText(model.lowThreshold)}以下" aria-hidden="true"></span>`;
+  const warningMarker = model.warningMarker === null ? '' : `<span class="storage-threshold-marker is-warning${closeClass}" style="left:${model.warningMarker}%" title="Warning：空き${escapeText(model.warningThreshold)}未満" aria-hidden="true"></span>`;
+  const lowMarker = model.lowMarker === null ? '' : `<span class="storage-threshold-marker is-low${closeClass}" style="left:${model.lowMarker}%" title="Low：空き${escapeText(model.lowThreshold)}未満" aria-hidden="true"></span>`;
   return `<div class="storage-usage-wrap"><div class="storage-usage-bar is-${escapeText(model.state.key)}" role="progressbar" aria-label="${escapeText(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}"><i style="width:${value}%"></i></div>${warningMarker}${lowMarker}</div>`;
 }
 

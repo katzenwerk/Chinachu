@@ -213,7 +213,7 @@ test('settings model preserves unknown and untouched values while validating exp
 	const homeWarning = storage.buildHomeStorageWarning(capacityData);
 	assert.strictEqual(homeWarning.level, 'warning');
 	assert.strictEqual(homeWarning.title, 'ストレージ容量低下');
-	assert.strictEqual(homeWarning.entries[0].free, '8.59 GB');
+	assert.strictEqual(homeWarning.entries[0].free, '8.00 GB');
 	assert.strictEqual(homeWarning.entries[0].usagePercent, '60.0');
 	assert.strictEqual(homeWarning.entries[0].note, '');
 	const low = { ...storageSample, id: 'two', name: 'Two', status: 'low-space', lowSpacePhase: 'cleanup', available: GiB };

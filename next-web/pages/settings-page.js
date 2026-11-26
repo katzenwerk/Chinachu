@@ -610,7 +610,7 @@ export function renderSettingsPage(container) {
     warningNote.className = 'settings-muted is-wide';
     warningNote.textContent = '警告する空き容量が容量不足の閾値以下の場合、警告は無効です。';
     warningGroup.append(warningHeading, warningNote,
-      bindValueField('storageLowSpaceWarningThresholdMB', '空き容量がこの値を下回ると警告します。単位はMBで、60000なら約60GBです。0または空欄で無効です。', { compact: true }).wrap,
+      bindValueField('storageLowSpaceWarningThresholdMB', '空き容量がこの値を下回ると警告します。単位はMB（1 GB = 1024 MB）で、512000なら500 GBです。0または空欄で無効です。', { compact: true }).wrap,
       bindValueField('storageLowSpaceWarningIntervalMinutes', '容量警告が解消しない場合の再通知間隔です。単位は分で、1440なら24時間です。', { compact: true }).wrap
     );
     capacity.body.append(warningGroup);
@@ -621,7 +621,7 @@ export function renderSettingsPage(container) {
     lowHeading.className = 'settings-subsection-title';
     lowHeading.textContent = '容量不足';
     lowGroup.append(lowHeading,
-      bindValueField('storageLowSpaceThresholdMB', '空き容量がこの値を下回ると、選択した容量不足対策を実行します。単位はMBです。', { compact: true }).wrap,
+      bindValueField('storageLowSpaceThresholdMB', '空き容量がこの値を下回ると、選択した容量不足対策を実行します。単位はMB（1 GB = 1024 MB）で、30720なら30 GBです。', { compact: true }).wrap,
       bindValueField('storageLowSpaceCriticalNotifyIntervalMinutes', '容量不足が解消しない場合の再通知間隔です。単位は分です。', { compact: true }).wrap
     );
     const action = bindValueField('storageLowSpaceAction', '「新規録画のみ停止」は録画中の番組を継続しますが、容量枯渇によって完走できない場合があります。「録画中を含めて停止」は対象filesystemの新規録画と録画中番組を停止します。「古い録画ファイルを削除」は対象filesystemの録画先サブフォルダも含めてTS/M2TSを古い順に削除し、削除不能時は録画中も停止します。symlinkや別mountは対象外です。');
