@@ -1,3 +1,23 @@
+# Chinachu 0.10.7-thorn.43
+
+## Series Management
+
+- Extend series management to live-action TV dramas using work and episode information from Bangumi Archive and Japanese Wikipedia.
+- Rework automatic matching for both anime and live-action works, favoring a single valid candidate or the longest title or alias match when using dictionary data.
+
+## Recording Deletion and Cleanup
+
+- Improve recording deletion feedback by displaying progress and lock waits in the WUI header and reporting results even after navigating away. Distinguish file deletion failures from ledger save failures.
+- Reduce lock contention during recording deletion and refresh storage usage after successful deletions when the recording location is known. Retain thumbnails until history cleanup.
+- Improve Cleaner reliability by applying changes against the latest ledger state, preserving concurrent updates and unreviewed entries, and skipping already resolved items.
+- Limit Cleaner lock waits to 45 seconds in total and perform recording directory scans outside ledger locks.
+
+## Storage, Settings, and Help
+
+- Standardize WUI storage capacity displays on 1024-based conversions to match the existing warning and recording-stop thresholds.
+- Simplify `config.sample.json` for initial setup and revise the recommended settings.
+- Update in-app help to reflect the revised configuration and clarify storage protection, recording options, and history retention.
+
 # Chinachu 0.10.7-thorn.42
 
 ## Recording History and File Maintenance
