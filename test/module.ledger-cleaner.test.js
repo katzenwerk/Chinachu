@@ -144,7 +144,7 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		assert.strictEqual(plan.summary.recordedMissingFound, 0);
 		assert.strictEqual(plan.summary.recordedMissingHistory, 2);
 		assert.strictEqual(plan.summary.recordedMissingHistoryHeld, 0);
-		const outcome = cleaner.applyPlan(fixture.root, plan);
+		const outcome = await cleaner.applyPlan(fixture.root, plan);
 			assert.deepStrictEqual(outcome.counts, {
 				fileMissing: 0, fileRestored: 0, pathRepaired: 1, recordedRemoved: 1, matchRemoved: 3, reserves2Removed: 3,
 				programsRemoved: 3, recordedHistoryRemoved: 1, deletedMatchHistoryRemoved: 0,
@@ -172,11 +172,11 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		writeJson(fixture.files.recorded, beforeRecorded.concat([retainedProgram]));
 		const retainedMatch = match(retainedProgram); // Keep the recorded ID for unambiguous file-state reconciliation.
 		writeJson(fixture.files.match, beforeMatch.concat([retainedMatch]));
-		cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
+		await cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
 		assert.ok(JSON.parse(fs.readFileSync(fixture.files.recorded, 'utf8')).some(row => row.id === 'retained-file'));
 		assert.ok(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).find(row => row.key === retainedMatch.key).fileMissing);
 		fs.writeFileSync(retainedProgram.recorded, 'restored fixture');
-		cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
+		await cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
 		assert.equal(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).find(row => row.key === retainedMatch.key).fileMissing, undefined);
 
 		// Automatic source checks retain history, including when a parent directory disappeared.
@@ -225,7 +225,7 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		assert.equal(selection.getAutoThumbnailSummary().candidate, null);
 		maintenance.stop(); thumbnail.stop();
 		fs.writeFileSync(retainedProgram.recorded, 'restored fixture');
-		cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
+		await cleaner.applyPlan(fixture.root, createPlan(fixture, { missingPolicy: 'keep-history' }));
 		assert.equal(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).find(row => row.key === retainedMatch.key).fileMissing, undefined);
 		assert.equal(selection.getAutoThumbnailSummary().candidate.id, 'retained-file');
 
@@ -256,7 +256,7 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 		assert.strictEqual(collisionPlan.results.find(item => item.id === 'collision-a').action, 'remove-history');
 		assert.strictEqual(collisionPlan.results.find(item => item.id === 'collision-b').classification, 'ok');
 		assert.strictEqual(collisionPlan.results.find(item => item.id === 'collision-a').impact.matchRemove, 1);
-		cleaner.applyPlan(fixture.root, collisionPlan);
+		await cleaner.applyPlan(fixture.root, collisionPlan);
 		assert.deepStrictEqual(JSON.parse(fs.readFileSync(fixture.files.recorded, 'utf8')).map(row => row.id), ['collision-b']);
 		assert.deepStrictEqual(JSON.parse(fs.readFileSync(fixture.files.reserves2, 'utf8')).map(row => row.id), ['collision-b']);
 		assert.deepStrictEqual(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).map(row => row.recording.recordedId), ['collision-b']);
@@ -266,7 +266,7 @@ test('apply revalidates and updates only recorded, reserves2, and match while pr
 	}
 });
 
-test('deleted and recorded-missing match-only history can be removed without a file location scan', function () {
+test('deleted and recorded-missing match-only history can be removed without a file location scan', async function () {
 	const fixture = createFixture();
 	try {
 		const thumbnailDir = path.join(fixture.data, 'thumbnails');
@@ -315,7 +315,7 @@ test('deleted and recorded-missing match-only history can be removed without a f
 		assert.match(plan.results.find(item => item.id === 'recorded-missing-unchecked').reason, /no file absence or location/);
 		assert.strictEqual(fs.readFileSync(fixture.files.match, 'utf8'), beforeMatch);
 
-		const outcome = cleaner.applyPlan(fixture.root, plan);
+		const outcome = await cleaner.applyPlan(fixture.root, plan);
 		assert.strictEqual(outcome.counts.matchRemoved, 4);
 		assert.strictEqual(outcome.counts.reserves2Removed, 4);
 		assert.strictEqual(outcome.counts.recordedMissingHistoryRemoved, 1);
@@ -331,7 +331,7 @@ test('deleted and recorded-missing match-only history can be removed without a f
 		const matchItems = JSON.parse(fs.readFileSync(fixture.files.match, 'utf8'));
 		const reserves2Items = JSON.parse(fs.readFileSync(fixture.files.reserves2, 'utf8'));
 		assert.deepStrictEqual(matchItems.map(row => row.key), [sharedValidMatch.key]);
-		assert.ok(matchItems.every(row => row.recording?.path === undefined));
+		assert.deepStrictEqual(matchItems, [sharedValidMatch]);
 		assert.deepStrictEqual(reserves2Items, []);
 		const rebuilt = matching.writeMatchLedgerLocked({
 			oldMatchPath: fixture.files.match,
@@ -354,7 +354,7 @@ test('deleted and recorded-missing match-only history can be removed without a f
 	}
 });
 
-test('history cleanup removes ended skips by default and missed entries only when explicitly requested', function () {
+test('history cleanup removes ended skips by default and missed entries only when explicitly requested', async function () {
 	const fixture = createFixture();
 	try {
 		const now = Date.now();
@@ -410,7 +410,7 @@ test('history cleanup removes ended skips by default and missed entries only whe
 		assert.strictEqual(defaultPlan.results.filter(item => item.classification.endsWith('-held')).length, 0);
 		Object.entries(before).forEach(([name, text]) => assert.strictEqual(fs.readFileSync(fixture.files[name], 'utf8'), text));
 
-		let outcome = cleaner.applyPlan(fixture.root, defaultPlan);
+		let outcome = await cleaner.applyPlan(fixture.root, defaultPlan);
 		assert.strictEqual(outcome.counts.skippedHistoryRemoved, 1);
 		assert.strictEqual(outcome.counts.missedHistoryRemoved, 0);
 		assert.strictEqual(outcome.counts.programsRemoved, 1);
@@ -426,7 +426,7 @@ test('history cleanup removes ended skips by default and missed entries only whe
 			cleanupMissed: true
 		}));
 		assert.strictEqual(missedPlan.summary.missedHistory, 1);
-		outcome = cleaner.applyPlan(fixture.root, missedPlan);
+		outcome = await cleaner.applyPlan(fixture.root, missedPlan);
 		assert.strictEqual(outcome.counts.missedHistoryRemoved, 1);
 		assert.strictEqual(JSON.parse(fs.readFileSync(fixture.files.reserves2, 'utf8')).some(item => item.id === 'missed'), false);
 		assert.strictEqual(JSON.parse(fs.readFileSync(fixture.files.match, 'utf8')).some(item => item.status === 'MISSED'), false);
@@ -453,19 +453,113 @@ test('history cleanup removes ended skips by default and missed entries only whe
 	}
 });
 
-test('apply rejects stale ledgers and an incomplete root without changing data', async function (t) {
+test('apply retains concurrent changes, releases contended locks, and protects uninspected targets', async function (t) {
 	const fixture = createFixture();
 	try {
 		const plan = createPlan(fixture);
-		const originalRecorded = fs.readFileSync(fixture.files.recorded, 'utf8');
-		writeJson(fixture.files.match, []);
-		assert.throws(() => cleaner.applyPlan(fixture.root, plan), error => error.code === 'CLEANER_PLAN_STALE');
-		assert.strictEqual(fs.readFileSync(fixture.files.recorded, 'utf8'), originalRecorded);
+		const read = name => reservationStore.readArray(fixture.files[name]);
+		// Publishing even a byte-for-byte replacement must not invalidate the preview.
+		for (const name of Object.keys(fixture.files)) reservationStore.writeArrayAtomic(fixture.files[name], read(name));
+		const resaved = await cleaner.applyPlan(fixture.root, plan);
+		assert.equal(resaved.counts.pathRepaired, 1);
+		assert.equal(resaved.counts.recordedRemoved, 1);
+		writeJson(fixture.files.recorded, fixture.programs);
+		writeJson(fixture.files.reserves2, fixture.programs);
+		writeJson(fixture.files.match, fixture.programs.map(match));
 
+		const normal = { ...fixture.programs[0], title: 'Updated after preview' };
+		const added = program('new-missing', path.join(fixture.recordings, 'new-missing.m2ts'));
+		const protectedRow = fixture.programs.find(row => row.id === 'missing');
+		const secondMissing = program('second-missing', path.join(fixture.recordings, 'second-missing.m2ts'));
+		const thirdMissing = program('third-missing', path.join(fixture.recordings, 'third-missing.m2ts'));
+		const removable = program('removable', path.join(fixture.recordings, 'removable.m2ts'));
+		for (const name of ['recorded', 'reserves2', 'match']) {
+			const newRows = [secondMissing, thirdMissing, removable].map(value => name === 'match' ? match(value) : value);
+			reservationStore.writeArrayAtomic(fixture.files[name], read(name).concat(newRows));
+		}
+		const concurrentPlan = createPlan(fixture);
+		const readdir = fs.readdirSync;
+		const scanLocks = t.mock.method(fs, 'readdirSync', (...args) => {
+			if (args[0].startsWith(fixture.recordings)) {
+				for (const name of ['recorded', 'reserves', 'reserves2', 'recording']) {
+					assert.equal(fs.existsSync(fixture.files[name] + '.lock'), false);
+				}
+				assert.equal(fs.existsSync(path.join(fixture.data, 'recorded-file-maintenance.lock')), false);
+			}
+			return readdir(...args);
+		});
+		const matchLock = reservationStore.acquire(fixture.files.match);
+		let applying;
+		try {
+			applying = cleaner.applyPlan(fixture.root, concurrentPlan);
+			// All other locks are already free while Cleaner waits on match.
+			for (const name of ['recorded', 'reserves', 'reserves2', 'recording']) {
+				reservationStore.withLock(fixture.files[name], () => {}, { timeoutMs: 0 });
+			}
+			reservationStore.withLock(path.join(fixture.data, 'recorded-file-maintenance'), () => {}, { timeoutMs: 0 });
+			reservationStore.withLock(fixture.files.recorded, () => {
+				const rows = read('recorded').filter(row => row.id !== 'ambiguous' && row.id !== 'normal').reverse();
+				reservationStore.writeArrayAtomic(fixture.files.recorded, [added, normal, ...rows]);
+			}, { timeoutMs: 0 });
+			reservationStore.withLock(fixture.files.recording, () => {
+				reservationStore.writeArrayAtomic(fixture.files.recording, [fixture.programs[4], protectedRow]);
+			}, { timeoutMs: 0 });
+			reservationStore.withLock(fixture.files.reserves, () => {
+				reservationStore.writeArrayAtomic(fixture.files.reserves, [{ ...secondMissing, end: Date.now() + 60000 }]);
+			}, { timeoutMs: 0 });
+			reservationStore.withLock(fixture.files.reserves2, () => {
+				reservationStore.writeArrayAtomic(fixture.files.reserves2, [added, ...read('reserves2').filter(row => row.id !== 'ambiguous')]);
+			}, { timeoutMs: 0 });
+			reservationStore.writeArrayAtomic(fixture.files.match,
+				[match(added), ...read('match').filter(row => row.recording.recordedId !== 'ambiguous')].reverse());
+			fs.writeFileSync(path.join(fixture.recordings, 'moved', path.basename(thirdMissing.recorded)), 'discovered during lock wait');
+		} finally {
+			matchLock.release();
+		}
+		const outcome = await applying;
+		scanLocks.mock.restore();
+		assert.equal(outcome.counts.pathRepaired, 1);
+		assert.equal(outcome.counts.recordedRemoved, 1);
+		assert.equal(outcome.counts.held, 4); // One preview hold, two protected rows, one rediscovered file.
+		assert.deepStrictEqual(read('recorded').slice(0, 2), [added, normal]);
+		assert.equal(read('recorded').find(row => row.id === 'relocated').recorded, fixture.paths.relocatedNew);
+		assert.ok(read('recorded').some(row => row.id === protectedRow.id));
+		assert.ok(read('recorded').some(row => row.id === secondMissing.id));
+		assert.ok(read('recorded').some(row => row.id === thirdMissing.id));
+		assert.ok(read('recorded').every(row => row.id !== removable.id));
+		assert.ok(read('reserves2').every(row => row.id !== removable.id));
+		assert.ok(read('match').every(row => row.recording.recordedId !== removable.id));
+		assert.ok(read('recorded').every(row => row.id !== 'ambiguous'));
+		assert.ok(read('reserves2').every(row => row.id !== 'ambiguous'));
+		assert.ok(read('match').every(row => row.recording.recordedId !== 'ambiguous'));
+		assert.ok(read('reserves2').some(row => row.id === added.id));
+		assert.deepStrictEqual(read('match').find(row => row.key === cleaner.canonicalKey(added)), match(added));
+
+		// The first preview's valid repair has already been completed.
+		const repeated = await cleaner.applyPlan(fixture.root, plan);
+		assert.equal(repeated.counts.pathRepaired, 0);
+		assert.equal(repeated.counts.held, 2);
+
+		// A new related row would expand a confirmed removal. Hold the
+		// entire action, leaving both the recording and its history intact.
+		const expanded = program('expanded', path.join(fixture.recordings, 'expanded.m2ts'));
+		writeJson(fixture.files.recorded, read('recorded').concat(expanded));
+		const narrowPlan = createPlan(fixture);
+		writeJson(fixture.files.reserves2, read('reserves2').concat(expanded));
+		const narrow = await cleaner.applyPlan(fixture.root, narrowPlan);
+		assert.ok(narrow.counts.held >= 1);
+		assert.ok(read('recorded').some(row => row.id === expanded.id));
+		assert.ok(read('reserves2').some(row => row.id === expanded.id));
+
+		const reviewedBeforeMountChange = createPlan(fixture);
+		assert.ok(reviewedBeforeMountChange.results.find(row => row.id === expanded.id).automatic);
 		writeJson(path.join(fixture.root, 'config.json'), {
 			recordedDir: fixture.recordings,
 			recordedDirs: [{ id: 'missing-root', path: path.join(fixture.root, 'not-mounted') }]
 		});
+		const mountChanged = await cleaner.applyPlan(fixture.root, reviewedBeforeMountChange);
+		assert.deepStrictEqual(mountChanged.changedLedgers, []);
+		assert.ok(mountChanged.counts.held >= 1);
 		const uninspected = program('recorded-missing-uninspected', path.join(fixture.recordings, 'not-found.m2ts'));
 		writeJson(fixture.files.match, [Object.assign(match(uninspected), {
 			deletion: { deletedAt: null, reason: 'recorded-missing' }
@@ -476,10 +570,11 @@ test('apply rejects stale ledgers and an incomplete root without changing data',
 		assert.strictEqual(incomplete.summary.recordedMissingHistory, 1);
 		assert.strictEqual(incomplete.summary.recordedMissingHistoryHeld, 0);
 		assert.strictEqual(incomplete.results.find(item => item.id === 'recorded-missing-uninspected').automatic, true);
-		assert.throws(() => cleaner.applyPlan(fixture.root, incomplete), /Every registered recording root/);
+		await assert.rejects(cleaner.applyPlan(fixture.root, incomplete), /Every registered recording root/);
 
 		const files = createFiles(fixture.root, { recordedDir: fixture.recordings });
 		const absent = fixture.programs.find(row => row.id === 'missing');
+		writeJson(fixture.files.recording, [fixture.programs[4]]);
 		writeJson(fixture.files.match, [match(absent)]);
 		const originalMatch = fs.readFileSync(fixture.files.match, 'utf8');
 		const inspect = (beforeCommit) => files.inspect(files.target(absent.id), { saveMissing: true, beforeCommit });
@@ -534,10 +629,14 @@ test('write failures restore cleanup ledgers and leave folder moves recoverable 
 		let writes = 0;
 		reservationStore.writeArrayAtomic = function (file, value) {
 			writes++;
+			for (const name of ['recording', 'reserves']) {
+				assert.throws(() => reservationStore.withLock(fixture.files[name], () => {}, { timeoutMs: 0 }),
+					{ code: 'RESERVATION_LOCK_TIMEOUT' });
+			}
 			if (writes === 2) throw new Error('fixture write failure');
 			return originalWrite(file, value);
 		};
-		assert.throws(() => cleaner.applyPlan(fixture.root, plan), /fixture write failure/);
+		await assert.rejects(cleaner.applyPlan(fixture.root, plan), /fixture write failure/);
 		Object.entries(before).forEach(([name, value]) => {
 			assert.deepStrictEqual(JSON.parse(fs.readFileSync(fixture.files[name], 'utf8')), JSON.parse(value));
 		});

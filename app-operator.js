@@ -1073,7 +1073,7 @@ function printProgram(program) {
 
 // 録画中リストを書き込む
 function writeRecordingData() {
-	reservationStore.writeArrayAtomic(RECORDING_DATA_FILE, recording);
+	reservationStore.withLock(RECORDING_DATA_FILE, () => reservationStore.writeArrayAtomic(RECORDING_DATA_FILE, recording));
 	operatorLog('WRITE: ' + RECORDING_DATA_FILE);
 }
 
@@ -1197,7 +1197,7 @@ function queueRecordedLedgerUpdate(reason, update, afterSave, retryLock, ready) 
 function finishPendingRecording(program) {
 	const remaining = recording.filter(entry => entry !== program);
 	// Remove the durable recovery row before dropping its in-memory reference.
-	reservationStore.writeArrayAtomic(RECORDING_DATA_FILE, remaining);
+	reservationStore.withLock(RECORDING_DATA_FILE, () => reservationStore.writeArrayAtomic(RECORDING_DATA_FILE, remaining));
 	recording = remaining;
 	operatorLog('WRITE: ' + RECORDING_DATA_FILE);
 	delete mirakurunDropSnapshots[program.id];
