@@ -12,7 +12,6 @@ import { hasRecordedResultWarnings } from '../services/recorded-result-warnings.
 import { buildRecordedCardModels, createRecordedCard } from '../components/recorded-card.js';
 import { openRecordedPlaybackOverlay } from '../services/live-player-adapter.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
-import { deleteRecordedFromContext } from '../services/recorded-delete-action.js';
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
 import { subscribeMatchNotifications, subscribeSeriesNotifications } from '../services/realtime-client.js';
 import { openCleanerDialog } from '../components/cleaner-dialog.js';
@@ -694,22 +693,6 @@ export function renderRecordedPage(container, query = new URLSearchParams(), { s
       }
       if (action === 'detail') return openContextDetail(item);
       if (action === 'rule') return openContextDetail(item, action);
-      if (action === 'delete') {
-        void deleteRecordedFromContext({ key: item.key, recordedId: item.recordedId })
-          .then(async result => {
-            if (!result || !isActive()) return;
-            invalidateFilteredCache();
-            viewStates.list.loaded = false;
-            viewStates.card.loaded = false;
-            await requestDynamicRefresh();
-            if (result.storageRefreshError) {
-              actionFeedback.textContent = `録画ファイルは削除しましたが、容量表示の更新に失敗しました: ${result.storageRefreshError}`;
-              actionFeedback.hidden = false;
-            }
-          })
-          .catch(showContextError);
-        return;
-      }
       if (action === 'play') {
         openRecordedPlaybackOverlay({
           channel: item.channel, detail: item.detail || item.description,

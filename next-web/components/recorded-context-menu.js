@@ -1,3 +1,4 @@
+import { deleteRecordedFromContext, isRecordedDeletionPending, subscribeRecordedDeletions } from '../services/recorded-delete-action.js';
 import { viewportCssPixels } from '../services/ui-scale.js';
 import { isRecordedResultPlayable } from '../services/recorded-result-warnings.js';
 
@@ -27,7 +28,7 @@ export function createRecordedContextMenu({ onAction, prepareItem }) {
     <button type="button" role="menuitem" data-action="search-google">Googleで検索</button>
     <button type="button" role="menuitem" data-action="search-wikipedia">Wikipediaで検索</button>
     <div class="recorded-context-separator" role="separator"></div>
-    <button type="button" role="menuitem" class="is-danger" data-action="delete">削除…</button>`;
+    <button type="button" role="menuitem" class="is-danger button-with-spinner" data-action="delete">削除…</button>`;
   // メインメニュー内のスクロール領域で切り取られないよう、サブメニューはbody直下に置く。
   const submenu = document.createElement('div');
   submenu.className = 'recorded-context-submenu';
@@ -45,10 +46,21 @@ export function createRecordedContextMenu({ onAction, prepareItem }) {
   const filterButton = menu.querySelector('[data-action="filter"]');
   filterButton.setAttribute('aria-controls', submenu.id);
   const menuButtons = Array.from(menu.querySelectorAll('button[data-action]'));
+  const deleteButton = menu.querySelector('[data-action="delete"]');
   const submenuButtons = Array.from(submenu.querySelectorAll('button[data-action]'));
   let selected = null;
   let generation = 0;
   let destroyed = false;
+  let selectionController = null;
+
+  function updateDeleteButton() {
+    if (selected === null || menu.hidden) return;
+    const pending = isRecordedDeletionPending(selected.recordedId);
+    deleteButton.disabled = pending || !isRecordedResultPlayable(selected);
+    deleteButton.classList.toggle('is-running', pending);
+    deleteButton.setAttribute('aria-busy', String(pending));
+  }
+  const unsubscribeDeletions = subscribeRecordedDeletions(updateDeleteButton);
 
   function positionSubmenu() {
     // 右側を優先。収まらない場合は左側へ、狭い画面では上下へ退避する。
@@ -101,6 +113,8 @@ export function createRecordedContextMenu({ onAction, prepareItem }) {
     clearMenuFocus();
     menu.hidden = true;
     selected = null;
+    selectionController?.abort();
+    selectionController = null;
     toggleFilters(false);
   }
 
@@ -108,6 +122,7 @@ export function createRecordedContextMenu({ onAction, prepareItem }) {
     if (destroyed) return;
     close();
     selected = item;
+    selectionController = new AbortController();
     if (typeof prepareItem !== 'function') return show(item, point);
     const current = generation;
     return Promise.resolve().then(() => prepareItem(item)).then(ready => {
@@ -127,7 +142,6 @@ export function createRecordedContextMenu({ onAction, prepareItem }) {
     const playable = isRecordedResultPlayable(item);
     menu.querySelector('[data-action="play"]').disabled = !playable;
     menu.querySelector('[data-action="download"]').disabled = !playable;
-    menu.querySelector('[data-action="delete"]').disabled = !playable;
     submenu.querySelector('[data-action="filter-channel"]').disabled = !item?.channel?.id;
     submenu.querySelector('[data-action="filter-rule"]').disabled = !item?.ruleUid;
     submenu.querySelector('[data-action="filter-title"]').disabled = !(item?.title || item?.fullTitle);
@@ -144,10 +158,11 @@ export function createRecordedContextMenu({ onAction, prepareItem }) {
     menu.querySelector('[data-action="series-episode"]').disabled = !series?.seriesId || series.seriesId.startsWith('local:');
     menu.querySelector('[data-action="series-remove"]').hidden = series?.manual !== true;
     menu.hidden = false;
+    updateDeleteButton();
     position(x, y);
   }
 
-  function clickAction(event) {
+  async function clickAction(event) {
     const button = event.target.closest?.('button[data-action]');
     if (!button || button.disabled || button.hidden || selected === null) return;
     const action = button.dataset.action;
@@ -156,6 +171,12 @@ export function createRecordedContextMenu({ onAction, prepareItem }) {
       return;
     }
     const item = selected;
+    if (action === 'delete') {
+      const current = generation;
+      await deleteRecordedFromContext(item, { signal: selectionController.signal });
+      if (current === generation) close();
+      return;
+    }
     close();
     onAction(action, item);
   }
@@ -222,6 +243,7 @@ export function createRecordedContextMenu({ onAction, prepareItem }) {
     close,
     destroy() {
       destroyed = true;
+      unsubscribeDeletions();
       close();
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKeyDown, true);

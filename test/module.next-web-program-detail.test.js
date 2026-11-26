@@ -9,7 +9,7 @@ const test = require('node:test');
 async function checkContextMenus() {
 	// Minimal DOM for the existing menus: no browser, server, timers or real actions.
 	class Element {
-		constructor(tag, document) { this.tag = tag; this.document = document; this.children = []; this.style = {}; this.dataset = {}; this.listeners = new Map(); this.hidden = false; this.disabled = false; this.attributes = {}; }
+		constructor(tag, document) { this.tag = tag; this.document = document; this.children = []; this.style = {}; this.dataset = {}; this.listeners = new Map(); this.hidden = false; this.disabled = false; this.attributes = {}; const classes = new Set(); this.classList = { toggle: (name, force) => force ? classes.add(name) : classes.delete(name), contains: name => classes.has(name) }; }
 		setAttribute(key, value) { this.attributes[key] = value; }
 		set innerHTML(html) {
 			this.children = [];
@@ -42,10 +42,17 @@ async function checkContextMenus() {
 		document.body = document.createElement('body'); document.activeElement = document.body;
 		const window = new Element('window', document); window.innerWidth = 800; window.innerHeight = 800;
 		const requests = [], actions = [], details = [];
-		const sandbox = { document, window, viewportCssPixels: value => `${value}px`,
+		const deletionListeners = new Set(), deleting = new Set(), deletions = [];
+		const sandbox = { document, window, AbortController, viewportCssPixels: value => `${value}px`,
 			loadProgramActionContext: id => { const request = { id, ...deferred() }; requests.push(request); return request.promise; },
 			reservationActionLabel: action => action || '', seriesCorrectionActions: () => [],
-			isRecordedResultPlayable: () => true, openProgramDetailDialog: item => details.push(item) };
+			isRecordedResultPlayable: () => true, openProgramDetailDialog: item => details.push(item),
+			isRecordedDeletionPending: id => deleting.has(id),
+			subscribeRecordedDeletions(listener) { deletionListeners.add(listener); listener(); return () => deletionListeners.delete(listener); },
+			deleteRecordedFromContext(item, { signal }) {
+				const request = { item, signal, ...deferred() };
+				deletions.push(request); return request.promise;
+			} };
 		const source = fs.readFileSync(path.join(__dirname, `../next-web/components/${name}.js`), 'utf8')
 			.replace(/^import .*;\n/gm, '').replace(/export function /g, 'function ');
 		vm.runInNewContext(source, sandbox);
@@ -98,9 +105,29 @@ async function checkContextMenus() {
 		menu.destroy(); assert.strictEqual(document.body.children.length, 0);
 		if (name === modules[1]) {
 			const direct = factory({ onAction() {} });
-			direct.open(item('known'), { x: 30, y: 30 });
-			assert.strictEqual(document.body.children[0].hidden, false); // Known items keep the synchronous path.
+			const first = { ...item('known'), recordedId: 'recorded-a' };
+			const second = { ...item('other'), recordedId: 'recorded-b' };
+			direct.open(first, { x: 30, y: 30 });
+			const directMenu = document.body.children[0];
+			assert.strictEqual(directMenu.hidden, false);
+			const button = directMenu.querySelector('[data-action="delete"]');
+			directMenu.emit('click', { target: button });
+			assert.strictEqual(deletions[0].item, first);
+			deleting.add(first.recordedId);
+			deletionListeners.forEach(listener => listener());
+			assert.ok(button.disabled && button.classList.contains('is-running'));
+			directMenu.emit('click', { target: button });
+			assert.strictEqual(deletions.length, 1);
+			direct.open(second, { x: 30, y: 30 });
+			assert.strictEqual(button.disabled, false);
+			assert.strictEqual(deletions[0].signal.aborted, true);
+			direct.open(first, { x: 30, y: 30 });
+			assert.ok(button.disabled && button.classList.contains('is-running'));
+			deletions[0].resolve(null);
+			await Promise.resolve();
+			assert.strictEqual(directMenu.hidden, false);
 			direct.destroy();
+			assert.strictEqual(deletionListeners.size, 0);
 		}
 		for (const listeners of [...document.listeners.values(), ...window.listeners.values()]) assert.strictEqual(listeners.size, 0);
 	}
@@ -117,19 +144,62 @@ async function checkContextMenus() {
 	assert.strictEqual((await first).seriesContext, known); await second;
 	pending = deferred(); const fresh = service.loadProgramActionContext('same', known);
 	assert.strictEqual(reads, 2); pending.resolve({ program: {} }); await fresh;
-	// Both recording menus use direct deletion without opening a detail dialog.
-	for (const [page, marker] of [['series-page', 'const recordedContextMenu ='], ['conflicts-page', 'const historyMenu =']]) {
-		const source = fs.readFileSync(path.join(__dirname, `../next-web/pages/${page}.js`), 'utf8');
-		const begin = source.indexOf('    onAction(action, item) {', source.indexOf(marker));
-		const end = source.indexOf('\n  });', begin);
-		assert.ok(begin >= 0 && end > begin);
-		const deletion = { calls: [], details: [], deleteRecordedFromContext: value => { deletion.calls.push(value); return Promise.resolve(null); },
-			openProgramDetailDialog: value => deletion.details.push(value),
-			showMenuError: error => { throw error; }, menuError: error => { throw error; } };
-		vm.runInNewContext(`const handler = ({${source.slice(begin, end)}}).onAction; handler('delete', { key: 'event', recordedId: 'recorded' });`, deletion);
-		assert.deepStrictEqual(JSON.parse(JSON.stringify(deletion.calls)), [{ key: 'event', recordedId: 'recorded' }]);
-		assert.strictEqual(deletion.details.length, 0);
-	}
+	// A confirmation belongs to the initiating view. A submitted request does not.
+	let preflight = deferred(), confirmations = 0;
+	const firstRequestStarted = deferred();
+	const inFlight = new Map();
+	const results = [];
+	const state = {
+		window: { location: { hash: '#series' }, confirm() { confirmations++; return true; } },
+		crypto: require('node:crypto').webcrypto,
+		loadProgramDetail: () => preflight.promise,
+		buildProgramDetailModel: value => value,
+		deleteRecordedProgram(id, token) {
+			const request = { token, ...deferred() };
+			inFlight.set(id, request);
+			if (id === 'recorded-a') firstRequestStarted.resolve();
+			return request.promise;
+		}
+	};
+	const source = fs.readFileSync(path.join(__dirname, '../next-web/services/recorded-delete-action.js'), 'utf8')
+		.replace(/^import .*;\n/gm, '').replace(/export function /g, 'function ');
+	vm.runInNewContext(source, state);
+	state.subscribeRecordedDeletionResults(result => results.push(result));
+	let pendingPhases;
+	state.subscribeRecordedDeletions(operations => { pendingPhases = Array.from(operations, operation => operation.phase); });
+	const recording = { recordedId: 'recorded-a', title: '番組A' };
+	const model = { title: recording.title, actions: { deleteRecording: recording } };
+	const abandoned = state.deleteRecordedFromContext(recording);
+	state.window.location.hash = '#recorded';
+	preflight.resolve(model);
+	assert.strictEqual(await abandoned, null);
+	assert.strictEqual(confirmations, 0);
+	assert.strictEqual(inFlight.size, 0);
+
+	preflight = deferred();
+	const controller = new AbortController();
+	const deletion = state.deleteRecordedFromContext(recording, { signal: controller.signal });
+	assert.strictEqual(await state.deleteRecordingFromDetail({ ...recording, confirmed: true }), null);
+	preflight.resolve(model);
+	await firstRequestStarted.promise;
+	controller.abort();
+	assert.strictEqual(state.isRecordedDeletionPending(recording.recordedId), true);
+	assert.deepStrictEqual(pendingPhases, ['requesting']);
+	state.receiveRecordedDeletionProgress({ token: 'another-tab', phase: 'deleting' });
+	assert.deepStrictEqual(pendingPhases, ['requesting']);
+	const token = inFlight.get('recorded-a').token;
+	state.receiveRecordedDeletionProgress({ token, phase: 'lock-waiting' });
+	assert.deepStrictEqual(pendingPhases, ['lock-waiting']);
+	const secondDeletion = state.deleteRecordingFromDetail({ recordedId: 'recorded-b', title: '番組B', confirmed: true });
+	assert.strictEqual(inFlight.size, 2);
+	state.receiveRecordedDeletionProgress({ token, phase: 'deleting' });
+	assert.deepStrictEqual(pendingPhases, ['deleting', 'requesting']);
+	inFlight.get('recorded-a').resolve({ message: '削除しました。' });
+	inFlight.get('recorded-b').reject(Object.assign(new Error('履歴を更新できませんでした。'), { details: { result: { fileDeleted: true } } }));
+	await Promise.all([deletion, secondDeletion]);
+	assert.deepStrictEqual(results.map(result => result.level), ['activity', 'warning']);
+	assert.deepStrictEqual(pendingPhases, []);
+	assert.strictEqual(state.isRecordedDeletionPending(recording.recordedId), false);
 }
 
 async function checkMaintenanceState() {

@@ -1209,6 +1209,23 @@ function httpServerMain(req, res, query) {
 				storageLow   : storageLow,
 				storageRuntimeState: storageRuntimeState,
 				storageRefreshIpc: storageRefreshIpc,
+				notifyRecordedDeletion: function (phase) {
+					const token = req.headers['x-chinachu-recorded-deletion'];
+					if (typeof token === 'string' && /^[0-9a-f]{32}$/.test(token)) {
+						if (!recordedDeletionProgress.has(res)) {
+							const discard = () => {
+								recordedDeletionProgress.delete(res);
+								res.removeListener('finish', discard);
+								res.removeListener('close', discard);
+							};
+							res.once('finish', discard);
+							res.once('close', discard);
+						}
+						const progress = { token, phase };
+						recordedDeletionProgress.set(res, progress);
+						ios.emit('notify-recorded-deletion', progress);
+					}
+				},
 				recordedThumbnail: recordedThumbnail,
 				recordedMaintenanceFiles: recordedMaintenanceFiles,
 					matchDetailResolver: matchDetailResolver,
@@ -1375,6 +1392,8 @@ function httpServerMain(req, res, query) {
 
 var ios = new events.EventEmitter();
 ios.setMaxListeners(0);
+// Reconnects only need in-flight phases. Program metadata never enters the socket.
+const recordedDeletionProgress = new Map();
 
 function iosAddEventListner(io, eventName) {
 	return ios.on(eventName, function () {
@@ -1405,6 +1424,7 @@ function ioAddListener(server) {
 	iosAddEventListner(io, 'notify-reserves');
 	iosAddEventListner(io, 'notify-recording');
 	iosAddEventListner(io, 'notify-recorded');
+	iosAddEventListner(io, 'notify-recorded-deletion');
 	iosAddEventListner(io, 'notify-match');
 	iosAddEventListner(io, 'notify-schedule');
 	iosAddEventListner(io, 'notify-series');
@@ -1431,6 +1451,7 @@ function ioServerMain(socket) {
 	socket.emit('notify-recording');
 	socket.emit('notify-recorded');
 	socket.emit('notify-schedule');
+	for (const progress of recordedDeletionProgress.values()) socket.emit('notify-recorded-deletion', progress);
 }
 
 function ioServerSocketOnDisconnect(socket) {

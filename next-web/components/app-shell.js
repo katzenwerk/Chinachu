@@ -99,6 +99,9 @@ export function createAppShell(root) {
         <button type="submit" class="header-program-search-button" aria-label="番組を検索" title="番組を検索">${icon('search', true)}</button>
       </form>
       <div class="header-common-actions">
+        <button class="icon-button recorded-deletion-toggle button-with-spinner is-running" type="button" aria-controls="recorded-deletion-panel" aria-expanded="false" hidden>
+          <span class="recorded-deletion-label">削除処理中</span><span class="recorded-deletion-count"></span>
+        </button>
         <details class="header-auto-ts" hidden>
           <summary>TS解析 <span class="header-auto-ts-counts">残--</span><a class="header-auto-ts-issues" href="#recorded?tsIssues=1">異常--</a></summary>
           <div class="header-auto-ts-panel">
@@ -152,6 +155,9 @@ export function createAppShell(root) {
     <aside class="notification-panel" id="notification-panel" aria-label="通知" hidden>
       <section><h2>未解決の警告</h2><div class="notification-issues"></div></section>
       <section><h2>最近の動作</h2><div class="notification-activities"></div></section>
+    </aside>
+    <aside class="notification-panel" id="recorded-deletion-panel" aria-labelledby="recorded-deletion-heading" hidden>
+      <section><h2 id="recorded-deletion-heading">録画の削除状況</h2><ul></ul></section>
     </aside>
     <div class="sidebar-toggle-tooltip" id="sidebar-toggle-tooltip" role="tooltip" hidden><strong></strong><span></span></div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>`;
@@ -263,6 +269,10 @@ export function createAppShell(root) {
   const notificationButton = root.querySelector('#notification-button');
   const logoutButton = root.querySelector('#header-logout');
   const notificationPanel = root.querySelector('#notification-panel');
+  const deletionButton = root.querySelector('.recorded-deletion-toggle');
+  const deletionCount = deletionButton.querySelector('.recorded-deletion-count');
+  const deletionPanel = root.querySelector('#recorded-deletion-panel');
+  const deletionList = deletionPanel.querySelector('ul');
   const header = root.querySelector('.app-header');
   const headerActions = root.querySelector('#header-page-actions');
   const mobileHeaderActions = root.querySelector('.mobile-header-actions');
@@ -491,8 +501,24 @@ export function createAppShell(root) {
   let suppressSidebarToggleHover = desktopSidebar.matches;
   let suppressSidebarToggleFocus = desktopSidebar.matches;
   const toast = root.querySelector('#toast');
+  let toastDialog = null;
+  function restoreToast() {
+    if (!toastDialog) return;
+    toastDialog.removeEventListener('close', restoreToast);
+    toastDialog = null;
+    root.append(toast);
+  }
   const toastQueue = createToastQueue({
     show({ message, level }) {
+      // A native modal sits above the shell. Keep the same toast visible and
+      // available to assistive technology inside the active modal.
+      const currentModal = [...document.querySelectorAll('dialog:modal')].at(-1);
+      if (currentModal && currentModal !== toastDialog) {
+        restoreToast();
+        toastDialog = currentModal;
+        toastDialog.append(toast);
+        toastDialog.addEventListener('close', restoreToast);
+      }
       const markerLevel = level === 'warning' ? 'warning' : (level === 'error' || level === 'low' ? 'error' : 'activity');
       toast.replaceChildren();
       toast.classList.remove('has-thumbnail', 'is-clickable');
@@ -539,6 +565,7 @@ export function createAppShell(root) {
     },
     hide() {
       toast.classList.remove('is-visible');
+      restoreToast();
     }
   });
   let notificationPulseToken = 0;
@@ -750,6 +777,13 @@ export function createAppShell(root) {
     toastQueue.resume();
   }
 
+  function closeDeletionPanel(restoreFocus = false) {
+    if (deletionPanel.hidden) return;
+    deletionPanel.hidden = true;
+    deletionButton.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) deletionButton.focus();
+  }
+
   function renderNotificationIndicator() {
     const hasError = currentNotificationIssues.some(issue => issue?.level === 'error' || issue?.level === 'low');
     const hasWarning = currentNotificationIssues.some(issue => issue?.level === 'warning');
@@ -887,6 +921,7 @@ export function createAppShell(root) {
   desktopSidebar.addEventListener('change', applySidebarMode);
   notificationButton.addEventListener('click', () => {
     if (drawerOpen) closeDrawer();
+    closeDeletionPanel();
     const open = notificationPanel.hidden;
     if (open) toastQueue.pause();
     notificationPanel.hidden = !open;
@@ -894,12 +929,21 @@ export function createAppShell(root) {
     if (!open) toastQueue.resume();
   });
   notificationButton.addEventListener('animationend', () => notificationButton.classList.remove('is-alerting'));
+  deletionButton.addEventListener('click', () => {
+    if (!deletionPanel.hidden) return closeDeletionPanel();
+    if (drawerOpen) closeDrawer();
+    closeNotifications();
+    closeMobilePageToolbar();
+    deletionPanel.hidden = false;
+    deletionButton.setAttribute('aria-expanded', 'true');
+  });
   connectionOverlay.querySelector('.wui-connection-retry').addEventListener('click', () => connectionRetryHandler?.());
   connectionOverlay.querySelector('.wui-connection-reload').addEventListener('click', () => window.location.reload());
   document.addEventListener('click', event => {
     if (mobilePanelOpen && !mobileToolbar.contains(event.target) && !mobileHeaderActions.contains(event.target)) {
       closeMobilePageToolbar();
     }
+    if (!deletionPanel.contains(event.target) && !deletionButton.contains(event.target)) closeDeletionPanel();
     if (notificationPanel.hidden || notificationPanel.contains(event.target) || notificationButton.contains(event.target)) return;
     closeNotifications();
   });
@@ -908,6 +952,7 @@ export function createAppShell(root) {
       closePaletteMenu(true);
       closeMobilePageToolbar(true);
       closeNotifications();
+      closeDeletionPanel(true);
     }
   });
   updateSidebarToggle(initialSidebar === 'open');
@@ -917,6 +962,22 @@ export function createAppShell(root) {
     outlet: root.querySelector('#page-outlet'),
     title: root.querySelector('#page-title'),
     showToast,
+    setRecordedDeletions(operations) {
+      deletionButton.hidden = operations.length === 0;
+      if (deletionButton.hidden) closeDeletionPanel();
+      deletionCount.textContent = `${operations.length}件`;
+      deletionButton.setAttribute('aria-label', `削除処理中 ${operations.length}件`);
+      deletionList.replaceChildren(...operations.map(({ title, phase }) => {
+        const row = document.createElement('li');
+        row.className = 'notification-item is-activity';
+        const program = document.createElement('strong');
+        program.textContent = title;
+        const state = document.createElement('span');
+        state.textContent = phase === 'deleting' ? '削除実行中' : phase === 'lock-waiting' ? 'ロック待機中' : '要求送信中';
+        row.append(program, state);
+        return row;
+      }));
+    },
     setAuthentication(enabled, handler) {
       logoutButton.hidden = !enabled;
       logoutButton.onclick = enabled && typeof handler === 'function' ? () => {

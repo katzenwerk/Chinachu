@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { Readable, Writable } = require('node:stream');
@@ -10,6 +11,7 @@ const assert = require('node:assert/strict');
 const matchDetailResolver = require('../lib/match-detail-resolver');
 const matchDeletionHistory = require('../lib/match-deletion-history');
 const recordedThumbnail = require('../lib/recorded-thumbnail');
+const reservationStore = require('../lib/reservation-store');
 
 const script = fs.readFileSync(path.join(__dirname, '../api/script-recorded-program-file.vm.js'), 'utf8');
 const recordedProgramScript = fs.readFileSync(path.join(__dirname, '../api/script-recorded-program.vm.js'), 'utf8');
@@ -87,10 +89,11 @@ async function requestChase(range, options = {}) {
 	return { status, headers, body: Buffer.concat(chunks), closed };
 }
 
-function deleteRecorded(targetScript, fileExists, options = {}) {
+async function deleteRecorded(targetScript, fileExists, options = {}) {
 	const recordedPath = '/fixture.m2ts';
 	const matchPath = '/match.json';
 	const recordedPathJson = '/recorded.json';
+	const recordingPathJson = '/recording.json';
 	const thumbnailDir = '/thumbnails';
 	const thumbnailPath = '/thumbnails/fixture.jpg';
 	const program = { id: 'fixture', recorded: recordedPath, start: 1760194800000, end: 1760196600000, seconds: 1800, channel: { id: 'channel-a' } };
@@ -118,6 +121,7 @@ function deleteRecorded(targetScript, fileExists, options = {}) {
 		define: {
 			MATCH_DATA_FILE: matchPath,
 			RECORDED_DATA_FILE: recordedPathJson,
+			RECORDING_DATA_FILE: recordingPathJson,
 			RESERVES2_DATA_FILE: '/reserves2.json',
 			RECORDED_THUMBNAIL_DIR: thumbnailDir,
 			RECORDED_THUMBNAIL_SOCKET: '/recorded-thumbnail.sock'
@@ -132,11 +136,23 @@ function deleteRecorded(targetScript, fileExists, options = {}) {
 		matchDetailResolver,
 		matchDeletionHistory,
 		recordedThumbnail,
+		notifyRecordedDeletion(phase) { options.trace?.phases?.push(phase); },
 		recordedFolderJobs: { pendingId: () => null },
 		storageRefreshIpc: { request(_connection, payload) { thumbnailRequests.push(payload); return Promise.resolve({}); } },
 		reservationStore: {
-			withLock(_file, callback) { return callback(); },
+			async withRecordedDeletionLocks(recorded, match, callback, onWait) {
+				assert.equal(recorded, recordedPathJson);
+				assert.equal(match, matchPath);
+				if (options.lockTimeout) throw Object.assign(new Error('fixture lock timeout'), { code: 'RESERVATION_LOCK_TIMEOUT' });
+				if (options.lockDirectory) {
+					return reservationStore.withRecordedDeletionLocks(
+						path.join(options.lockDirectory, path.basename(recorded)),
+						path.join(options.lockDirectory, path.basename(match)), callback, onWait);
+				}
+				callback();
+			},
 			readArray(filename) {
+				if (filename === recordingPathJson) return options.recording || [];
 				return filename === recordedPathJson ? [JSON.parse(JSON.stringify(program))] : JSON.parse(JSON.stringify(currentMatch));
 			},
 			writeArrayAtomic(filename, value) {
@@ -167,7 +183,7 @@ function deleteRecorded(targetScript, fileExists, options = {}) {
 			}
 		}
 	};
-	vm.runInNewContext(targetScript, context);
+	await vm.runInNewContext(targetScript, context);
 	return { status, body: responseBody, writes, unlinked, thumbnailRequests };
 }
 
@@ -330,10 +346,27 @@ it('resolves recorded detail from recorded but does not recover file paths from 
 	assert.equal(v2File.status, 404);
 });
 
-it('manual DELETE records its reason only when it actually removes the recording file', () => {
+it('manual DELETE records its reason only when it actually removes the recording file', async t => {
+	const lockDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'recorded-delete-locks-'));
+	t.after(() => fs.rmdirSync(lockDirectory));
 	for (const targetScript of [script, recordedProgramScript]) {
-		const deleted = deleteRecorded(targetScript, true);
+		const trace = { writes: {}, unlinked: [], phases: [] };
+		const matchLock = reservationStore.acquire(path.join(lockDirectory, 'match.json'));
+		const deletion = deleteRecorded(targetScript, true, { lockDirectory, trace });
+		let deleted;
+		try {
+			await new Promise(resolve => setImmediate(resolve));
+			assert.deepEqual(trace.unlinked, []);
+			assert.deepEqual(trace.writes, {});
+			if (targetScript === recordedProgramScript) assert.deepEqual(trace.phases, ['lock-waiting']);
+			// A recording can finish while deletion waits for Matching.
+			reservationStore.acquire(path.join(lockDirectory, 'recorded.json'), { timeoutMs: 0 }).release();
+		} finally {
+			matchLock.release();
+			deleted = await deletion;
+		}
 		assert.equal(deleted.status, 200);
+		if (targetScript === recordedProgramScript) assert.deepEqual(trace.phases, ['lock-waiting', 'deleting']);
 		assert.deepEqual(deleted.unlinked, ['/fixture.m2ts']);
 		const item = deleted.writes['/match.json'][0];
 		for (const value of [item.recordingResult, item.recordingResult.snapshot, item.program]) {
@@ -343,7 +376,7 @@ it('manual DELETE records its reason only when it actually removes the recording
 			assert.ok(value.deletedAt > 0);
 		}
 
-		const historyOnly = deleteRecorded(targetScript, false);
+		const historyOnly = await deleteRecorded(targetScript, false);
 		assert.equal(historyOnly.status, 410);
 		assert.deepEqual(historyOnly.unlinked, []);
 		assert.equal(historyOnly.writes['/match.json'], undefined);
@@ -351,10 +384,10 @@ it('manual DELETE records its reason only when it actually removes the recording
 	}
 });
 
-it('does not update deletion history when file removal fails', () => {
+it('does not update deletion history when file removal fails', async () => {
 	for (const targetScript of [script, recordedProgramScript]) {
 		const trace = { writes: {}, unlinked: [] };
-		const failed = deleteRecorded(targetScript, true, { unlinkFailure: true, trace });
+		const failed = await deleteRecorded(targetScript, true, { unlinkFailure: true, trace });
 		assert.equal(failed.status, 500);
 		assert.equal(failed.body.code, 'file-delete-failed');
 		assert.equal(failed.body.fileDeleted, false);
@@ -363,7 +396,7 @@ it('does not update deletion history when file removal fails', () => {
 	}
 });
 
-it('stops DELETE before unlink when no corresponding match history entry exists', () => {
+it('stops DELETE before unlink when no corresponding match history entry exists', async () => {
 	const unrelated = [{
 		schemaVersion: 2,
 		key: 'channel-other|1760194800000|1800',
@@ -375,7 +408,7 @@ it('stops DELETE before unlink when no corresponding match history entry exists'
 		deletion: null
 	}];
 	for (const targetScript of [script, recordedProgramScript]) {
-		const deleted = deleteRecorded(targetScript, true, { match: unrelated });
+		const deleted = await deleteRecorded(targetScript, true, { match: unrelated });
 		assert.equal(deleted.status, 409);
 		assert.deepEqual(deleted.unlinked, []);
 		assert.equal(deleted.writes['/match.json'], undefined);
@@ -383,7 +416,7 @@ it('stops DELETE before unlink when no corresponding match history entry exists'
 	}
 });
 
-it('manual DELETE updates only the matching v2 entry and preserves recorded history fields', () => {
+it('manual DELETE updates only the matching v2 entry and preserves recorded history fields', async () => {
 	const start = 1760194800000;
 	const target = {
 		schemaVersion: 2,
@@ -407,7 +440,7 @@ it('manual DELETE updates only the matching v2 entry and preserves recorded hist
 	};
 
 	for (const targetScript of [script, recordedProgramScript]) {
-		const deleted = deleteRecorded(targetScript, true, { match: [target, other] });
+		const deleted = await deleteRecorded(targetScript, true, { match: [target, other] });
 		assert.equal(deleted.status, 200);
 		const items = deleted.writes['/match.json'];
 		assert.equal(items[0].status, 'RECORDED');
@@ -423,9 +456,9 @@ it('manual DELETE updates only the matching v2 entry and preserves recorded hist
 		}
 });
 
-it('reports a match history save failure after deletion without claiming history success', () => {
+it('reports a match history save failure after deletion without claiming history success', async () => {
 	for (const targetScript of [script, recordedProgramScript]) {
-		const failed = deleteRecorded(targetScript, true, { saveFailure: true });
+		const failed = await deleteRecorded(targetScript, true, { saveFailure: true });
 		assert.equal(failed.status, 500);
 		assert.deepEqual(failed.unlinked, ['/fixture.m2ts']);
 		assert.equal(failed.writes['/match.json'], undefined);
@@ -436,7 +469,7 @@ it('reports a match history save failure after deletion without claiming history
 	}
 });
 
-it('stops ambiguous and active targets before deleting the recording file', () => {
+it('stops ambiguous and active targets before deleting the recording file', async () => {
 	const duplicate = [{
 		key: 'channel-a|1760194800000|1800', program: { id: 'fixture', recorded: '/fixture.m2ts' },
 		recordingResult: { id: 'fixture', recorded: '/fixture.m2ts' }
@@ -445,27 +478,34 @@ it('stops ambiguous and active targets before deleting the recording file', () =
 		recordingResult: { id: 'fixture', recorded: '/fixture.m2ts' }
 	}];
 	for (const targetScript of [script, recordedProgramScript]) {
-		const ambiguous = deleteRecorded(targetScript, true, { match: duplicate });
+		const ambiguous = await deleteRecorded(targetScript, true, { match: duplicate });
 		assert.equal(ambiguous.status, 409);
 		assert.equal(ambiguous.body.code, 'ambiguous-target');
 		assert.deepEqual(ambiguous.unlinked, []);
-		const active = deleteRecorded(targetScript, true, { recording: [{ id: 'fixture', recorded: '/fixture.m2ts' }] });
+		const active = await deleteRecorded(targetScript, true, { recording: [{ id: 'fixture', recorded: '/fixture.m2ts' }] });
 		assert.equal(active.status, 409);
 		assert.equal(active.body.code, 'recording-active');
 		assert.deepEqual(active.unlinked, []);
+
+		const locked = await deleteRecorded(targetScript, true, { lockTimeout: true });
+		assert.equal(locked.status, 503);
+		assert.equal(locked.body.code, 'RESERVATION_LOCK_TIMEOUT');
+		assert.equal(locked.body.status, 'failed');
+		assert.deepEqual(locked.unlinked, []);
+		assert.deepEqual(locked.writes, {});
 	}
 });
 
-it('reports recorded ledger failure independently and retains thumbnails after file deletion', () => {
+it('reports recorded ledger failure independently and retains thumbnails after file deletion', async () => {
 	for (const targetScript of [script, recordedProgramScript]) {
-		const ledgerFailed = deleteRecorded(targetScript, true, { recordedSaveFailure: true });
+		const ledgerFailed = await deleteRecorded(targetScript, true, { recordedSaveFailure: true });
 		assert.equal(ledgerFailed.status, 500);
 		assert.equal(ledgerFailed.body.status, 'partial');
 		assert.equal(ledgerFailed.body.fileDeleted, true);
 		assert.equal(ledgerFailed.body.matchUpdated, true);
 		assert.equal(ledgerFailed.body.recordedUpdated, false);
 
-			const thumbnailRetained = deleteRecorded(targetScript, true, { thumbnail: true, thumbnailFailure: true });
+			const thumbnailRetained = await deleteRecorded(targetScript, true, { thumbnail: true, thumbnailFailure: true });
 			assert.equal(thumbnailRetained.status, 200);
 			assert.equal(thumbnailRetained.body.status, 'complete');
 			assert.equal(thumbnailRetained.body.thumbnail.status, 'retained');

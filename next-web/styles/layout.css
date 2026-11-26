@@ -39,6 +39,11 @@
 }
 .header-common-actions { display: flex; align-items: center; flex: 0 0 auto; gap: var(--space-3); }
 .header-common-actions .icon-button { flex: 0 0 38px; }
+.header-common-actions .recorded-deletion-toggle { flex: 0 0 auto; width: auto; padding: 0 8px; font-size: 12px; white-space: nowrap; }
+.header-common-actions .recorded-deletion-toggle[hidden] { display: none; }
+#recorded-deletion-panel ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+#recorded-deletion-panel strong { overflow-wrap: anywhere; }
+#recorded-deletion-panel li > span { white-space: nowrap; }
 .header-auto-ts { position: relative; flex: 0 0 auto; order: -1; }
 .header-auto-ts[hidden] { display: none; }
 .header-auto-ts > summary { list-style: none; padding: 8px 10px; border-radius: 7px; font-size: 12px; white-space: nowrap; cursor: pointer; }

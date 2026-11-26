@@ -108,7 +108,7 @@ function deletionFailure(code, message, statusCode, result) {
 	return error;
 }
 
-function deleteRecordedProgram(id) {
+async function deleteRecordedProgram(id) {
 	var result = {
 		status: 'failed',
 		code: null,
@@ -121,9 +121,18 @@ function deleteRecordedProgram(id) {
 	var matchFile = getMatchDataFile();
 	var recordedPath = '';
 	var storageDestination = null;
+	var lastPhase;
+	function reportProgress(phase) {
+		if (phase === lastPhase || response.destroyed || response.writableEnded) return;
+		lastPhase = phase;
+		if (typeof notifyRecordedDeletion === 'function') notifyRecordedDeletion(phase);
+	}
 
 	try {
-		reservationStore.withLock(recordedFile, function() {
+		await reservationStore.withRecordedDeletionLocks(recordedFile, matchFile, function() {
+			if (response.destroyed || response.writableEnded) return;
+			reportProgress('deleting');
+
 			var pendingFolderId = recordedFolderJobs.pendingId();
 			if (pendingFolderId !== null && programHasId({ id: pendingFolderId }, id)) {
 				throw deletionFailure('folder-recovery-required', '未完了の振り分けを復旧してから削除してください。', 409, result);
@@ -142,7 +151,7 @@ function deleteRecordedProgram(id) {
 			if (!recordedPath || !programHasId(program, id) || !samePath(recordedPath, program && program.recorded)) {
 				throw deletionFailure('invalid-recorded-path', '録画台帳の保存先が不正なため削除を中止しました。', 409, result);
 			}
-			if ((Array.isArray(data.recording) ? data.recording : []).some(function(value) {
+			if (reservationStore.readArray(define.RECORDING_DATA_FILE).some(function(value) {
 				return programHasId(value, id) || samePath(value && value.recorded, recordedPath);
 			})) {
 				throw deletionFailure('recording-active', '現在録画中のファイルは削除できません。', 409, result);
@@ -155,59 +164,61 @@ function deleteRecordedProgram(id) {
 				throw deletionFailure('recorded-path-not-file', '録画保存先が通常ファイルではないため削除を中止しました。', 409, result);
 			}
 
-			reservationStore.withLock(matchFile, function() {
-				var matchItems = reservationStore.readArray(matchFile);
-				var targets = matchDeletionHistory.findTargets(matchItems, {
-					recordedEntries: [current],
-					requestedId: id,
-					path: recordedPath
-				});
-				if (targets.length !== 1) {
-					throw deletionFailure(targets.length > 1 ? 'ambiguous-target' : 'target-not-found',
-						targets.length > 1 ? '対応する録画履歴が複数あるため削除を中止しました。' : '対応する録画履歴がないため削除を中止しました。',
-						409, result);
-				}
-				if (targetAlreadyDeleted(targets[0])) {
-					throw deletionFailure('already-deleted', '録画履歴は既に削除済みです。', 409, result);
-				}
-
-				try {
-					fs.unlinkSync(recordedPath);
-					result.fileDeleted = true;
-				} catch (error) {
-					throw deletionFailure('file-delete-failed', '録画ファイルを削除できませんでした。', 500, result);
-				}
-
-				var outcome = matchDeletionHistory.markDeleted(matchItems, {
-					recordedEntries: [current],
-					requestedId: id,
-					path: recordedPath,
-					deletedAt: Date.now(),
-					reason: 'manual'
-				});
-				if (!outcome.changed) {
-					throw deletionFailure('match-update-conflict', '録画ファイルは削除されましたが、録画履歴を更新できませんでした。', 500, result);
-				}
-				try {
-					reservationStore.writeArrayAtomic(matchFile, matchItems);
-					result.matchUpdated = true;
-				} catch (error) {
-					throw deletionFailure('match-update-failed', '録画ファイルは削除されましたが、録画履歴の保存に失敗しました。再削除しないでください。', 500, result);
-				}
-
-				var remaining = recordedItems.filter(function(value) { return value !== current; });
-				try {
-					reservationStore.writeArrayAtomic(recordedFile, remaining);
-					result.recordedUpdated = true;
-				} catch (error) {
-					throw deletionFailure('recorded-update-failed', '録画ファイルと履歴は削除済みですが、録画台帳の更新に失敗しました。再削除しないでください。', 500, result);
-				}
+			var matchItems = reservationStore.readArray(matchFile);
+			var targets = matchDeletionHistory.findTargets(matchItems, {
+				recordedEntries: [current],
+				requestedId: id,
+				path: recordedPath
 			});
-		});
+			if (targets.length !== 1) {
+				throw deletionFailure(targets.length > 1 ? 'ambiguous-target' : 'target-not-found',
+					targets.length > 1 ? '対応する録画履歴が複数あるため削除を中止しました。' : '対応する録画履歴がないため削除を中止しました。',
+					409, result);
+			}
+			if (targetAlreadyDeleted(targets[0])) {
+				throw deletionFailure('already-deleted', '録画履歴は既に削除済みです。', 409, result);
+			}
+
+			var outcome = matchDeletionHistory.markDeleted(matchItems, {
+				recordedEntries: [current],
+				requestedId: id,
+				path: recordedPath,
+				deletedAt: Date.now(),
+				reason: 'manual'
+			});
+			if (!outcome.changed) {
+				throw deletionFailure('match-update-conflict', '録画履歴を更新できないため削除を中止しました。', 500, result);
+			}
+
+			try {
+				fs.unlinkSync(recordedPath);
+				result.fileDeleted = true;
+			} catch (error) {
+				throw deletionFailure('file-delete-failed', '録画ファイルを削除できませんでした。', 500, result);
+			}
+			try {
+				reservationStore.writeArrayAtomic(matchFile, matchItems);
+				result.matchUpdated = true;
+			} catch (error) {
+				throw deletionFailure('match-update-failed', '録画ファイルは削除されましたが、録画履歴の保存に失敗しました。再削除しないでください。', 500, result);
+			}
+
+			var remaining = recordedItems.filter(function(value) { return value !== current; });
+			try {
+				reservationStore.writeArrayAtomic(recordedFile, remaining);
+				result.recordedUpdated = true;
+			} catch (error) {
+				throw deletionFailure('recorded-update-failed', '録画ファイルと履歴は削除済みですが、録画台帳の更新に失敗しました。再削除しないでください。', 500, result);
+			}
+		}, function() { reportProgress('lock-waiting'); });
 	} catch (error) {
 		result = error.deletionResult || result;
 		result.status = result.fileDeleted ? 'partial' : 'failed';
 		result.code = error.code || 'delete-failed';
+		if (error.code === 'RESERVATION_LOCK_TIMEOUT' && !result.fileDeleted) {
+			result.message = '録画台帳または録画履歴のロックを取得できなかったため、削除を中止しました。';
+			return { statusCode: 503, result: result };
+		}
 		result.message = error.message || '録画を削除できませんでした。';
 		if (result.fileDeleted) {
 			util.log('ERROR: RECORDED DELETE PARTIAL id=' + id + ' fileDeleted=' + result.fileDeleted +
@@ -217,6 +228,7 @@ function deleteRecordedProgram(id) {
 		return { statusCode: error.statusCode || 500, result: result };
 	}
 
+	if (!result.fileDeleted) return null;
 	discardThumbnailGeneration(id);
 	result.status = 'complete';
 	result.code = null;
@@ -246,9 +258,13 @@ function deleteRecordedProgram(id) {
 			return;
 
 		case 'DELETE':
-			var deletion = deleteRecordedProgram(request.param.id);
-			sendDeletionResult(deletion.statusCode, deletion.result);
-			return;
+			return deleteRecordedProgram(request.param.id).then(function(deletion) {
+				if (!deletion || response.destroyed || response.writableEnded) return;
+				sendDeletionResult(deletion.statusCode, deletion.result);
+			}).catch(function(error) {
+				util.log(error);
+				if (!response.destroyed && !response.writableEnded) response.error(500);
+			});
 	}
 
 })();

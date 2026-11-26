@@ -4,7 +4,6 @@ import { appendMobileContextButton } from '../components/mobile-layout.js';
 import { createHomeProgramContextMenu } from '../components/home-program-context-menu.js';
 import { openRuleEditorDialog, programRuleSeed } from '../components/rule-editor-dialog.js';
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
-import { deleteRecordedFromContext } from '../services/recorded-delete-action.js';
 import { ruleAction } from '../services/program-detail-model.js';
 import { buildNextReservationTimelineView, nextReservationDisplayBoundaryDelay } from '../services/reservation-model.js';
 import { subscribeMatchNotifications, subscribeReservationNotifications } from '../services/realtime-client.js';
@@ -843,18 +842,6 @@ export function renderHomePage(container, options = {}) {
       if (action === 'detail' || action === 'rule') {
         return openDetail(item.recordedId || null, item.key || null,
           action === 'rule' ? action : null, item.refresh);
-      }
-      if (action === 'delete') {
-        void deleteRecordedFromContext({ key: item.key, recordedId: item.recordedId })
-          .then(async result => {
-            if (!result) return;
-            await item.refresh?.();
-            if (result.storageRefreshError) {
-              window.alert(`録画ファイルは削除しましたが、容量表示の更新に失敗しました: ${result.storageRefreshError}`);
-            }
-          })
-          .catch(showActionError);
-        return;
       }
       if (action === 'play') {
         return void openRecordedPlaybackOverlay({

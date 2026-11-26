@@ -1,6 +1,7 @@
 const recordingListeners = new Set();
 const reservationListeners = new Set();
 const recordedListeners = new Set();
+const recordedDeletionListeners = new Set();
 const matchListeners = new Set();
 const scheduleListeners = new Set();
 const seriesListeners = new Set();
@@ -16,11 +17,12 @@ function emitConnection(status, reason = null) {
 }
 
 function disconnectIfUnused() {
-  if (recordingListeners.size !== 0 || reservationListeners.size !== 0 || recordedListeners.size !== 0 || matchListeners.size !== 0 || scheduleListeners.size !== 0
+  if (recordingListeners.size !== 0 || reservationListeners.size !== 0 || recordedListeners.size !== 0 || recordedDeletionListeners.size !== 0 || matchListeners.size !== 0 || scheduleListeners.size !== 0
       || seriesListeners.size !== 0 || connectionListeners.size !== 0 || socket === null) return;
   socket.off('notify-recording');
   socket.off('notify-reserves');
   socket.off('notify-recorded');
+  socket.off('notify-recorded-deletion');
   socket.off('notify-match');
   socket.off('notify-schedule');
   socket.off('notify-series');
@@ -50,6 +52,9 @@ function connect() {
     });
     socket.on('notify-recorded', () => {
       recordedListeners.forEach(listener => listener());
+    });
+    socket.on('notify-recorded-deletion', progress => {
+      recordedDeletionListeners.forEach(listener => listener(progress));
     });
     socket.on('notify-match', () => {
       matchListeners.forEach(listener => listener());
@@ -125,6 +130,15 @@ export function subscribeRecordedNotifications(listener) {
   connect();
   return () => {
     recordedListeners.delete(listener);
+    disconnectIfUnused();
+  };
+}
+
+export function subscribeRecordedDeletionProgress(listener) {
+  recordedDeletionListeners.add(listener);
+  connect();
+  return () => {
+    recordedDeletionListeners.delete(listener);
     disconnectIfUnused();
   };
 }

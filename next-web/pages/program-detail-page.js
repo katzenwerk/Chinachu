@@ -1,6 +1,7 @@
 import { applyResultWarningTooltip } from '../components/storage-warning.js';
 import { createChannelLogo } from '../components/channel-logo.js';
-import { deleteRecordedProgram, loadProgramDetail, ProgramDetailError } from '../services/program-detail-client.js';
+import { deleteRecordingFromDetail, isRecordedDeletionPending, subscribeRecordedDeletionResults, subscribeRecordedDeletions } from '../services/recorded-delete-action.js';
+import { loadProgramDetail, ProgramDetailError } from '../services/program-detail-client.js';
 import { buildProgramDetailModel } from '../services/program-detail-model.js';
 import {
   isRecordedCompatPlaybackAvailable,
@@ -165,7 +166,7 @@ function createFacts(model, recordingLayout = false) {
   return facts;
 }
 
-function createHeaderActions(model, onDelete) {
+function createHeaderActions(model) {
   const wrapper = document.createElement('div');
   wrapper.className = 'program-detail-header-actions';
   const seriesAvailable = typeof model.eventKey === 'string' && model.eventKey !== '';
@@ -175,9 +176,8 @@ function createHeaderActions(model, onDelete) {
     <button class="button program-detail-more" type="button" aria-label="番組操作" aria-haspopup="menu" aria-expanded="false">…</button>
     <div class="program-detail-action-menu" role="menu" hidden>
       ${seriesAvailable ? '<button type="button" role="menuitem" data-action="series">シリーズを確認</button>' : ''}
-      ${model.actions.deleteRecording !== null ? '<button type="button" role="menuitem" data-action="delete">録画ファイルを削除</button>' : ''}
+      ${model.actions.deleteRecording !== null ? '<button type="button" role="menuitem" class="button-with-spinner" data-action="delete">録画ファイルを削除</button>' : ''}
     </div>
-    <p class="program-detail-action-feedback" role="status" hidden></p>
     ${model.actions.deleteRecording !== null ? `<dialog class="program-detail-delete-dialog">
       <form method="dialog">
         <h2>録画ファイルを削除</h2>
@@ -199,10 +199,21 @@ function createHeaderActions(model, onDelete) {
   const menu = wrapper.querySelector('.program-detail-action-menu');
   const seriesButton = menu.querySelector('[data-action="series"]');
   const deleteButton = menu.querySelector('[data-action="delete"]');
-  const feedback = wrapper.querySelector('.program-detail-action-feedback');
   const dialog = wrapper.querySelector('dialog');
   const confirmButton = dialog?.querySelector('[value="delete"]');
-  let deleting = false;
+  const recordedId = model.actions.deleteRecording?.recordedId;
+  const syncDeleteButton = () => {
+    if (!deleteButton) return;
+    const pending = isRecordedDeletionPending(recordedId);
+    deleteButton.disabled = pending;
+    confirmButton.disabled = pending;
+    for (const button of [trigger, deleteButton]) {
+      button.classList.toggle('is-running', pending);
+      button.setAttribute('aria-busy', String(pending));
+    }
+  };
+  trigger.classList.add('button-with-spinner');
+  const unsubscribeDeletions = subscribeRecordedDeletions(syncDeleteButton);
 
   function setMenu(open) {
     menu.hidden = !open;
@@ -219,36 +230,16 @@ function createHeaderActions(model, onDelete) {
     dialog.returnValue = '';
     dialog.showModal();
   });
-  dialog?.addEventListener('close', async () => {
-    if (dialog.returnValue !== 'delete' || deleting) return;
-    deleting = true;
-    trigger.disabled = true;
-    confirmButton.disabled = true;
-    feedback.hidden = false;
-    feedback.className = 'program-detail-action-feedback';
-    feedback.textContent = '録画ファイルを削除しています…';
-    try {
-      const result = await onDelete(model.actions.deleteRecording.recordedId);
-      if (result?.thumbnail?.status === 'failed') {
-        feedback.className = 'program-detail-action-feedback is-warning';
-        feedback.textContent = result.message;
-      }
-    } catch (error) {
-      const result = error instanceof ProgramDetailError ? error.details?.result : null;
-      feedback.className = 'program-detail-action-feedback is-error';
-      feedback.textContent = result?.fileDeleted
-        ? `${error.message} 録画ファイルは削除済みのため、削除を再実行しないでください。`
-        : errorMessage(error);
-      if (!result?.fileDeleted) {
-        deleting = false;
-        trigger.disabled = false;
-        confirmButton.disabled = false;
-      }
-    }
+  dialog?.querySelector('form').addEventListener('submit', event => {
+    if (event.submitter !== confirmButton) return;
+    event.preventDefault();
+    dialog.close();
+    void deleteRecordingFromDetail({ recordedId, title: model.title, confirmed: true });
   });
   return {
     element: wrapper,
     dispose() {
+      unsubscribeDeletions();
       if (dialog?.open) dialog.close();
     }
   };
@@ -443,7 +434,7 @@ function renderMedia(model) {
   };
 }
 
-function renderDetail(container, model, onDelete) {
+function renderDetail(container, model) {
   container.replaceChildren();
   container.className = `program-detail-page is-${model.state.key}`;
 
@@ -475,7 +466,7 @@ function renderDetail(container, model, onDelete) {
   channel.append(channelLogo.element, channelText);
   const headerSide = document.createElement('div');
   headerSide.className = 'program-detail-header-side';
-  const headerActions = createHeaderActions(model, onDelete);
+  const headerActions = createHeaderActions(model);
   headerSide.append(channel, headerActions.element);
   header.append(heading, headerSide);
   container.append(header);
@@ -511,6 +502,7 @@ export function renderProgramDetailPage(container, query = new URLSearchParams()
   let disposed = false;
   let disposeView = null;
   let controller = null;
+  let displayedRecordingId = null;
 
   async function load() {
     controller?.abort();
@@ -525,11 +517,9 @@ export function renderProgramDetailPage(container, query = new URLSearchParams()
       });
       if (disposed || controller.signal.aborted) return;
       disposeView?.();
-      disposeView = renderDetail(container, buildProgramDetailModel(detail), async recordedId => {
-        const result = await deleteRecordedProgram(recordedId, { signal: controller.signal });
-        if (!disposed && !controller.signal.aborted) await load();
-        return result;
-      });
+      const model = buildProgramDetailModel(detail);
+      displayedRecordingId = model.actions.deleteRecording?.recordedId ?? null;
+      disposeView = renderDetail(container, model);
     } catch (error) {
       if (disposed || error?.name === 'AbortError') return;
       const message = document.createElement('section');
@@ -541,9 +531,13 @@ export function renderProgramDetailPage(container, query = new URLSearchParams()
     }
   }
 
+  const unsubscribeDeletions = subscribeRecordedDeletionResults(({ recordedId, fileDeleted }) => {
+    if (!disposed && fileDeleted && recordedId === displayedRecordingId) void load();
+  });
   load();
   return () => {
     disposed = true;
+    unsubscribeDeletions();
     controller?.abort();
     disposeView?.();
   };

@@ -150,33 +150,37 @@ export async function stopRecordingProgram(id) {
   }
 }
 
-export async function deleteRecordedProgram(recordedId, { signal } = {}) {
+export async function deleteRecordedProgram(recordedId, token) {
   recordedId = validText(recordedId);
   if (recordedId === null) throw new ProgramDetailError('invalid-request', '録画IDがありません');
   const response = await fetch(`/api/recorded/${encodeURIComponent(recordedId)}.json`, {
     method: 'DELETE',
-    headers: { Accept: 'application/json' },
+    headers: { Accept: 'application/json', 'X-Chinachu-Recorded-Deletion': token },
     cache: 'no-store',
-    credentials: 'same-origin',
-    signal
+    credentials: 'same-origin'
+  }).catch(cause => {
+    throw new ProgramDetailError('delete-response-unknown', '削除結果を受信できませんでした。録画一覧で結果を確認してください。', { cause });
   });
   const result = await readOptionalJson(response);
+  if (!result && response.status === 504) {
+    throw new ProgramDetailError('delete-response-unknown', '削除結果を受信できませんでした。録画一覧で結果を確認してください。', { status: response.status });
+  }
   if (!response.ok) {
+    if (result?.fileDeleted) invalidateResources(['recorded', 'storage']);
     throw new ProgramDetailError(result?.code || 'delete-failed', result?.message || `録画を削除できませんでした (HTTP ${response.status})`, {
       status: response.status,
       result
     });
   }
-  if (!result || result.status !== 'complete' || result.fileDeleted !== true || result.matchUpdated !== true) {
+  if (!result || result.status !== 'complete' || result.fileDeleted !== true ||
+      result.matchUpdated !== true || result.recordedUpdated !== true) {
     throw new ProgramDetailError('invalid-delete-response', '削除結果を確認できませんでした', { result });
   }
   invalidateResources(['recorded', 'storage']);
   if (result.storageRefresh?.targetKnown === true) {
-    try {
-      await refreshStorageCapacity(result.storageRefresh.storageId ?? null);
-    } catch (error) {
-      result.storageRefreshError = String(error?.message || error);
-    }
+    result.storageRefreshPending = refreshStorageCapacity(result.storageRefresh.storageId ?? null)
+      .then(refresh => refresh?.failed > 0 ? refresh.failures?.[0]?.message || '容量を確認できませんでした。' : null)
+      .catch(error => String(error?.message || error));
   }
   return result;
 }

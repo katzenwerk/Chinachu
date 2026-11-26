@@ -21,6 +21,8 @@
   .mobile-menu-toggle { display: grid; place-items: center; }
   .header-common-actions { margin-left: 0; gap: 0; }
   .app-header .header-common-actions .icon-button { width: 34px; flex-basis: 34px; }
+  .app-header .header-common-actions .recorded-deletion-toggle { width: auto; flex-basis: auto; gap: 4px; padding: 0 5px; }
+  .recorded-deletion-label { display: none; }
   .notification-panel > .header-auto-ts { padding: 10px; border-bottom: 1px solid var(--border); }
   .notification-panel .header-auto-ts > summary { padding: 7px 0; font-size: 13px; }
   .notification-panel .header-auto-ts-panel { position: static; width: 100%; padding: 10px 0 0; border: 0; border-radius: 0; box-shadow: none; }

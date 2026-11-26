@@ -1,7 +1,8 @@
 import { applyResultWarningTooltip } from './storage-warning.js';
 import { createChannelLogo } from './channel-logo.js';
 import { openRuleEditorDialog, programRuleSeed } from './rule-editor-dialog.js';
-import { deleteRecordedProgram, loadProgramDetail, ProgramDetailError, stopRecordingProgram } from '../services/program-detail-client.js';
+import { deleteRecordingFromDetail, isRecordedDeletionPending, subscribeRecordedDeletions } from '../services/recorded-delete-action.js';
+import { loadProgramDetail, ProgramDetailError, stopRecordingProgram } from '../services/program-detail-client.js';
 import { buildProgramDetailModel, programSeriesContext, reservationActionLabel, seriesCorrectionActions } from '../services/program-detail-model.js';
 import { reserveProgram, setReserveSkip, unreserveProgram } from '../services/timetable-client.js';
 import { openRecordedPlaybackOverlay, openRecordingLiveOverlay, openChasePlaybackOverlay } from '../services/live-player-adapter.js';
@@ -321,6 +322,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
   let controller = null;
   let logo = null;
   let busy = false;
+  let deleteRecordingId = null;
   let stopRequested = false;
   let lastFooterSignature = null;
   let latestDetail = null;
@@ -556,9 +558,19 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     return loaded;
   }
 
+  function syncDeleteButton() {
+    const button = dialog.querySelector('[data-delete-recording]');
+    if (!button) return;
+    const pending = isRecordedDeletionPending(deleteRecordingId);
+    button.disabled = busy || pending;
+    button.classList.toggle('is-running', pending);
+    button.setAttribute('aria-busy', String(pending));
+  }
+
   function setMutationControlsDisabled(disabled) {
     dialog.querySelectorAll('footer button').forEach(button => {
       if (disabled) {
+        if ('busyDisabled' in button.dataset) return;
         button.dataset.busyDisabled = button.disabled ? '1' : '0';
         button.disabled = true;
       } else {
@@ -567,6 +579,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
         delete button.dataset.busyDisabled;
       }
     });
+    syncDeleteButton();
   }
 
   function scheduleBoundary(model) {
@@ -848,26 +861,16 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
       stop.addEventListener('click', () => stopRecording(model));
       danger.append(stop);
     }
+    deleteRecordingId = model.actions.deleteRecording?.recordedId ?? null;
     if (model.actions.deleteRecording) {
       const remove = document.createElement('button');
-      remove.className = 'button is-danger';
+      remove.className = 'button is-danger button-with-spinner';
       remove.type = 'button';
       remove.dataset.deleteRecording = '';
       remove.textContent = '削除';
-      remove.addEventListener('click', async () => {
-        if (busy || !window.confirm(`${model.title}\n\n録画ファイルを削除します。録画履歴・元の保存先・保存済みサムネイルは台帳整理まで保持されます。この操作は元に戻せません。`)) return;
-        busy = true;
-        setMutationControlsDisabled(true);
-        feedback.textContent = '録画ファイルを削除しています…';
-        try {
-          const result = await deleteRecordedProgram(model.actions.deleteRecording.recordedId, { signal: controller?.signal });
-          feedback.textContent = result.message || '削除しました';
-          await refreshAfterMutation();
-          if (result.storageRefreshError) showFeedback(`録画ファイルは削除しました。容量表示の更新に失敗しました: ${result.storageRefreshError}`, true);
-        } catch (cause) {
-          feedback.textContent = errorText(cause);
-          feedback.classList.add('is-error');
-        } finally { busy = false; setMutationControlsDisabled(false); }
+      remove.addEventListener('click', () => {
+        if (busy || disposed) return;
+        void deleteRecordingFromDetail({ title: model.title, recordedId: model.actions.deleteRecording.recordedId });
       });
       danger.append(remove);
     }
@@ -923,6 +926,7 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     lastHeaderSignature = headerSignature;
     lastRenderSignature = renderSignature;
     if (busy) setMutationControlsDisabled(true);
+    else syncDeleteButton();
     scheduleBoundary(model);
   }
 
@@ -1005,6 +1009,11 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     if (backdropPointerDown && event.target === dialog) close();
     backdropPointerDown = false;
   });
+  const unsubscribeDeletions = subscribeRecordedDeletions(syncDeleteButton);
+  const closeOnRouteChange = () => {
+    if (isRecordedDeletionPending(deleteRecordingId)) close();
+  };
+  window.addEventListener('hashchange', closeOnRouteChange);
   function dispose() {
     if (disposed) return;
     disposed = true;
@@ -1022,6 +1031,8 @@ export function openProgramDetailDialog({ key = null, id = null, onChanged, init
     unsubscribeRecorded();
     unsubscribeMatch();
     unsubscribeSeries();
+    unsubscribeDeletions();
+    window.removeEventListener('hashchange', closeOnRouteChange);
     logo?.dispose();
     dialog.remove();
     if (activeDialog?.dialog === dialog) activeDialog = null;

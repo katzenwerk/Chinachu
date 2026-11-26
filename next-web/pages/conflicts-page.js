@@ -6,7 +6,6 @@ import { reservationTags } from '../services/reservation-model.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
 import { loadProgramActionContext, copyProgramTitle, programSearchUrl } from '../services/program-actions.js';
-import { deleteRecordedFromContext } from '../services/recorded-delete-action.js';
 import { openRecordedPlaybackOverlay } from '../services/live-player-adapter.js';
 import { seriesEventHref } from '../services/series-event-model.js';
 import { programDetailUrl } from '../services/program-detail-client.js';
@@ -666,12 +665,6 @@ export function renderConflictsPage(container, { setHeaderActions = () => {} } =
         anchor.href = `/api/recorded/${encodeURIComponent(item.recordedId)}/file.m2ts`;
         anchor.download = ''; anchor.hidden = true;
         document.body.append(anchor); anchor.click(); anchor.remove();
-      } else if (action === 'delete') {
-        void deleteRecordedFromContext({ key: item.key, recordedId: item.recordedId }).then(result => {
-          if (!result || !active) return;
-          void changedHistory();
-          if (result.storageRefreshError) menuError(`録画ファイルは削除しました。容量表示の更新に失敗しました: ${result.storageRefreshError}`);
-        }).catch(menuError);
       } else if (action === 'series-view') {
         const href = seriesEventHref(item.seriesContext);
         if (href) location.hash = href;

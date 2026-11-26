@@ -3,7 +3,6 @@ import { createChannelLogo } from '../components/channel-logo.js';
 import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
 import { headerCompactMedia, MOBILE_QUERY } from '../components/mobile-layout.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
-import { deleteRecordedFromContext } from '../services/recorded-delete-action.js';
 import { openSeriesBulkCorrectionDialog, openSeriesCorrectionDialog } from '../components/series-correction-dialog.js';
 import { createSeriesContextMenu } from '../components/series-context-menu.js';
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
@@ -1185,15 +1184,7 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
   const recordedContextMenu = createRecordedContextMenu({
     onAction(action, item) {
       if (action.startsWith('series-')) return handleSeriesAction(action, item.seriesContext);
-      if (action === 'delete') {
-        void deleteRecordedFromContext({ key: item.key, recordedId: item.recordedId }).then(result => {
-          if (!result || controller.signal.aborted) return;
-          scheduleRefresh(0);
-          if (result.storageRefreshError) {
-            showMenuError(`録画ファイルは削除しました。容量表示の更新に失敗しました: ${result.storageRefreshError}`);
-          }
-        }).catch(showMenuError);
-      } else if (action === 'detail' || action === 'rule') {
+      if (action === 'detail' || action === 'rule') {
         openProgramDetailDialog({ key: item.key, id: item.recordedId,
           initialAction: action === 'detail' ? null : action, onChanged: () => scheduleRefresh(0) });
       } else if (action === 'play') {
