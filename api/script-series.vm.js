@@ -13,7 +13,7 @@
 			command = 'view';
 			input = Object.assign({}, input, { mode: views[route] });
 		} else if (route === '/api/series/status.json') command = 'status';
-		else if (route === '/api/series/dictionary.json') command = 'dictionary';
+		else if (route === '/api/series/dictionary.json') command = input.browse === '1' ? 'browseDictionary' : 'dictionary';
 		else if (route === '/api/series/search.json') {
 			if (typeof input.q !== 'string') return response.error(400);
 			command = 'searchTitles';

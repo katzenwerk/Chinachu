@@ -23,6 +23,7 @@
 			
 			try {
 				if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return response.error(400);
+				if (typeof validateDramaDictionarySettings === 'function' && !validateDramaDictionarySettings(obj)) return response.error(400);
 				// Refuse to replace a config that became invalid after the page was loaded.
 				JSON.parse(fs.readFileSync(define.CONFIG_FILE, 'utf8'));
 				delete obj.externalNotifications;
@@ -33,6 +34,7 @@
 					var savedNotifications = externalNotification.saveSettings(define.REPOSITORY_ROOT, settings, persistConfig);
 					obj.externalNotifications = savedNotifications;
 				} else persistConfig();
+				if (typeof applyDramaDictionarySettings === 'function') applyDramaDictionarySettings(obj);
 				response.head(200);
 				response.end(JSON.stringify(obj));
 			} catch (error) {

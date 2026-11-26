@@ -144,9 +144,9 @@ export async function searchSeriesTitles(query, { signal, kind } = {}) {
   return result.results;
 }
 
-export async function previewSeriesSelection({ eventKey, tid, seriesId, episode = null, generation, contextToken }, { signal } = {}) {
+export async function previewSeriesSelection({ eventKey, tid, seriesId, episode = null, episodeKeys, generation, contextToken }, { signal } = {}) {
   const result = await requestJson('/api/series/preview.json', {
-    method: 'POST', signal, body: JSON.stringify({ eventKey, tid, seriesId, episode, generation, contextToken })
+    method: 'POST', signal, body: JSON.stringify({ eventKey, tid, seriesId, episode, episodeKeys, generation, contextToken })
   });
   if (!result || result.schemaVersion !== 1 || !result.result) {
     throw new Error('シリーズ補正プレビューAPIの応答形式が不正です');
@@ -154,9 +154,9 @@ export async function previewSeriesSelection({ eventKey, tid, seriesId, episode 
   return result.result;
 }
 
-export async function saveSeriesOverride({ eventKey, tid, seriesId, episode, generation, validationToken }, { signal } = {}) {
+export async function saveSeriesOverride({ eventKey, tid, seriesId, episode, episodeKeys, generation, validationToken }, { signal } = {}) {
   return requestJson('/api/series/override.json', {
-    method: 'POST', signal, body: JSON.stringify({ eventKey, tid, seriesId, episode, generation, validationToken })
+    method: 'POST', signal, body: JSON.stringify({ eventKey, tid, seriesId, episode, episodeKeys, generation, validationToken })
   });
 }
 
@@ -199,8 +199,24 @@ export function deleteLocalSeries(ids, manualGeneration, { signal } = {}) {
   return requestJson('/api/series/local.json', { method: 'DELETE', body: JSON.stringify({ ids, manualGeneration }), signal });
 }
 
-export function loadSeriesDictionary({ q = '', page = 1, tid, dictionaryGeneration, signal } = {}) {
-  const query = tid === undefined ? new URLSearchParams({ q, page }) : new URLSearchParams({ tid });
+export async function loadSeriesDictionary({ q = '', page = 1, tid, id, browse, source, dictionaryGeneration, signal } = {}) {
+  const query = id !== undefined ? new URLSearchParams({ id }) :
+    tid === undefined ? new URLSearchParams({ q, page }) : new URLSearchParams({ tid });
+  if (browse) query.set('browse', '1');
+  if (source) query.set('source', source);
   if (dictionaryGeneration) query.set('dictionaryGeneration', dictionaryGeneration);
-  return requestJson('/api/series/dictionary.json?' + query, { method: 'GET', signal });
+  const request = () => requestJson('/api/series/dictionary.json?' + query, { method: 'GET', signal });
+  let data;
+  try {
+    data = await request();
+  } catch (error) {
+    // Static assets can reach the browser before the existing Worker is restarted.
+    if (!browse || id !== undefined || source === 'drama' || error.status !== 400 || error.message !== 'Unknown series command') throw error;
+    query.delete('browse'); query.delete('source');
+    data = await request();
+  }
+  if (browse && data.results) {
+    data.results = data.results.map(item => item.id ? item : { ...item, id: 'syobocal:' + item.tid, source: 'syobocal' });
+  }
+  return data;
 }

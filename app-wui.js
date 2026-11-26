@@ -99,6 +99,10 @@ const recordingHistoryCsv = require('./lib/recording-history-csv');
 const matchDetailResolver = require('./lib/match-detail-resolver');
 const seriesServiceModule = require('./lib/series-background-service');
 const dictionaryManagerModule = require('./lib/syobocal-dictionary-manager');
+const { DEFAULT_PATH: DRAMA_DICTIONARY_FILE, settings: dramaDictionarySettings, validateSettings: validateDramaDictionarySettings } = require('./lib/drama-dictionary');
+const { createDramaDictionaryManager } = require('./lib/drama-dictionary-manager');
+const dramaSettings = dramaDictionarySettings(config);
+const dramaDictionary = createDramaDictionaryManager({ config: dramaSettings, log: util.log });
 const syobocalChannelCatalogModule = require('./lib/syobocal-channel-catalog');
 const syobocalChannelMapManagerModule = require('./lib/syobocal-channel-map-manager');
 const progLookupStoreModule = require('./lib/proglookup-store');
@@ -246,16 +250,20 @@ function publishOrganizerIndex(generation, identities) {
 	}).catch(error => util.log('WARNING: recorded organizer series IPC: ' + error.message));
 }
 const seriesService = seriesServiceModule.createSeriesService({
-	enabled: seriesUseSyobocal,
+	useSyobocal: seriesUseSyobocal,
+	dramaSources: { bangumi: dramaSettings.bangumiEnabled, wikipedia: dramaSettings.wikipediaEnabled },
 	recordedFolderOrganizeEnabled: config.recordedFolderOrganizeEnabled === true,
 	dictionaryPath: SERIES_DICTIONARY_FILE,
+	dramaPath: DRAMA_DICTIONARY_FILE,
 	getDictionaryStatus: () => dictionaryManager && dictionaryManager.getStatus(),
 	channelMapPath: SERIES_CHANNEL_MAP_FILE,
 	progLookupPath: SERIES_PROGLOOKUP_CACHE_FILE,
 	onPublished: (generation, identities) => {
-		recordedFolderSeries = { generation, entries: identities };
 		ios.emit('notify-series', { generation });
-		publishOrganizerIndex(generation, identities);
+		if (seriesUseSyobocal) {
+			recordedFolderSeries = { generation, entries: identities };
+			publishOrganizerIndex(generation, identities);
+		}
 	},
 	onStatus: () => ios.emit('notify-series-status'),
 	log: util.log,
@@ -564,6 +572,7 @@ function shutdownWui(signal) {
 	mediaDelivery.close();
 	progLookupUpdater.stop();
 	dictionaryManager.stop();
+	const dramaDictionaryStopped = dramaDictionary.stop();
 	syobocalChannelMapManager.stop();
 	seriesService.close();
 
@@ -578,8 +587,10 @@ function shutdownWui(signal) {
 	}, 10000);
 
 	const complete = () => {
-		clearTimeout(timeout);
-		process.exit(0);
+		dramaDictionaryStopped.finally(() => {
+			clearTimeout(timeout);
+			process.exit(0);
+		});
 	};
 
 	if (socketServer) {
@@ -792,7 +803,7 @@ function httpServerMain(req, res, query) {
 	var log = function (statusCode) {
 		// Successful status polling is quiet; explicit queries, operations and errors remain logged.
 		if (statusCode === 200 && transportMethod === 'GET' && req.method === 'GET' && [
-			'/api/diagnostics.json', '/api/service-control.json', '/api/storage.json', '/api/clock.json'
+			'/api/diagnostics.json', '/api/service-control.json', '/api/storage.json', '/api/clock.json', '/api/drama-dictionary.json'
 		].includes(req.url)) return;
 		util.log([
 			statusCode,
@@ -1210,6 +1221,11 @@ function httpServerMain(req, res, query) {
 					ledgerCleanerJobs: ledgerCleanerJobs,
 					recordedFolderJobs: recordedFolderJobs,
 					wuiConfigStore: wuiConfigStore,
+					validateDramaDictionarySettings: validateDramaDictionarySettings,
+					applyDramaDictionarySettings: next => dramaDictionary.configure({
+						...dramaSettings, wikipediaStartYear: next.wikipediaStartYear
+					}),
+					getDramaDictionaryStatus: dramaDictionary.getStatus,
 					externalNotification: externalNotification,
 				define: {
 					REPOSITORY_ROOT   : __dirname,
@@ -1575,4 +1591,5 @@ if (seriesUseSyobocal) {
 	progLookupUpdater.start();
 	dictionaryManager.start();
 }
+dramaDictionary.start();
 processChecker();

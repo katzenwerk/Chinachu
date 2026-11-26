@@ -18,7 +18,7 @@ const KNOWN_KEYS = new Set([
   'excludeServices', 'serviceOrder',
   'wuiOpenServer', 'wuiOpenHost', 'wuiOpenPort', 'wuiBlockGlobalAccess',
   'broadcastClockEnabled', 'broadcastClockIntervalHours', 'broadcastClockGrChannel',
-  'seriesUseSyobocal'
+  'seriesUseSyobocal', 'bangumiEnabled', 'wikipediaEnabled', 'wikipediaStartYear'
 ]);
 
 export function cloneConfig(value) {
@@ -124,6 +124,9 @@ const CONFIG_APPLICATION = {
   broadcastClockIntervalHours: application(['operator'], value => [3, 6, 12, 24].includes(Number(value)) ? Number(value) : 3),
   broadcastClockGrChannel: application(['operator'], value => typeof value === 'string' && value.trim() || null),
   seriesUseSyobocal: application(['wui'], defaultOn),
+  bangumiEnabled: application(['wui'], enabled),
+  wikipediaEnabled: application(['wui'], enabled),
+  wikipediaStartYear: application(['immediate'], value => Number.isInteger(value) ? value : 2000),
   externalNotifications: application(['immediate'])
 };
 
@@ -176,6 +179,7 @@ export function parseFieldValue(raw, definition) {
     if (!Number.isFinite(number)) return { error: `${definition.label}は数値で指定してください。` };
     if (definition.integer && !Number.isInteger(number)) return { error: `${definition.label}は整数で指定してください。` };
     if (definition.min !== undefined && number < definition.min) return { error: `${definition.label}は${definition.min}以上で指定してください。` };
+    if (definition.max !== undefined && number > definition.max) return { error: definition.label + 'は' + definition.max + '以下で指定してください。' };
     if (definition.exclusiveMin !== undefined && number <= definition.exclusiveMin) return { error: `${definition.label}は${definition.exclusiveMin}より大きい値で指定してください。` };
     return { value: number };
   }
@@ -273,6 +277,13 @@ export function validateConfig(config) {
   }
   if (config.seriesUseSyobocal !== undefined && typeof config.seriesUseSyobocal !== 'boolean') {
     errors.push('seriesUseSyobocalは真偽値で指定してください。');
+  }
+  for (const key of ['bangumiEnabled', 'wikipediaEnabled']) {
+    if (config[key] !== undefined && typeof config[key] !== 'boolean') errors.push(key + 'は真偽値で指定してください。');
+  }
+  if (config.wikipediaStartYear !== undefined && (!Number.isInteger(config.wikipediaStartYear) ||
+      config.wikipediaStartYear < 1 || config.wikipediaStartYear > 9999)) {
+    errors.push('Wikipediaの取得開始年は1〜9999の整数で指定してください。');
   }
   if (config.recordedCommandSerial !== undefined && typeof config.recordedCommandSerial !== 'boolean') {
     errors.push('録画後コマンドの直列実行は真偽値で指定してください。');

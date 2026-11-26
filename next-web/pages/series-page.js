@@ -1,4 +1,4 @@
-import { openOriginalSeriesDialog, createSeriesRegistryView } from '../components/series-registry-dialog.js';
+import { openOriginalSeriesDialog, createSeriesRegistryView, additionalSeason } from '../components/series-registry-dialog.js';
 import { createChannelLogo } from '../components/channel-logo.js';
 import { createProgramHover, programHoverInfo, setProgramHover } from '../components/program-hover.js';
 import { headerCompactMedia, MOBILE_QUERY } from '../components/mobile-layout.js';
@@ -22,6 +22,24 @@ const COLUMNS_KEY = 'chinachu.next.series.columns';
 const MOBILE_COLUMNS_KEY = 'chinachu.next.series.mobileColumns';
 const VIEW_KEY = 'chinachu.next.series.view';
 const TABS = new Set(['all', 'attention']);
+const dramaSourceLabels = { bangumi: 'Bangumi', 'bangumi-wikipedia': 'Bangumi / Wikipedia', wikipedia: 'Wikipedia' };
+
+function dramaSeriesMeta(series) {
+  const source = dramaSourceLabels[series.source];
+  return source && [source, series.firstYear && `${series.firstYear}年`,
+    additionalSeason(series.title, series.season)].filter(Boolean).join(' · ');
+}
+
+function seriesSourceMeta(series, detail = false) {
+  const year = Number(series.firstYear);
+  const yearLabel = Number.isInteger(year) && year > 0 ? `${year}年` : '';
+  if (series.tid != null) {
+    return ['しょぼいカレンダー', detail && `TID ${series.tid}`, yearLabel].filter(Boolean).join(' · ');
+  }
+  if (detail) return dramaSeriesMeta(series) || 'ローカルシリーズ';
+  const source = dramaSourceLabels[series.source];
+  return source ? [source, yearLabel].filter(Boolean).join(' · ') : 'オリジナル登録';
+}
 
 const dateTimeFormatter = new Intl.DateTimeFormat('ja-JP', {
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
@@ -52,7 +70,7 @@ function createAvailabilityDialog(availability) {
   purpose.textContent = 'しょぼいカレンダーの作品・話数・副題などを参照し、番組情報を補完します。取得済みの情報は、インターネットに接続できない場合も利用できます。';
   const message = document.createElement('p');
   message.className = `series-availability is-${availability?.status || 'unknown'}`;
-  message.textContent = availability?.message || '放送情報は利用可能です。';
+  message.textContent = availability?.message || (availability?.dictionary === 'disabled' ? 'しょぼいカレンダーの利用は無効です。' : '放送情報は利用可能です。');
   const technical = availability?.technical;
   const coverage = Array.isArray(technical?.coverage) ? technical.coverage : [];
   const starts = coverage.map(item => Number(item.startMs)).filter(Number.isFinite);
@@ -300,7 +318,7 @@ function knownEpisodeCount(item) {
 }
 
 function seriesEpisodeSummary(item) {
-  const latest = Number.isInteger(item.latestAvailableEpisode) ? `${item.latestAvailableEpisode}話` : '—';
+  const latest = Number.isFinite(item.latestAvailableEpisode) ? `${item.latestAvailableEpisode}話` : '—';
   return `EP${knownEpisodeCount(item)}話　最新${latest}`;
 }
 
@@ -433,7 +451,7 @@ function createSeriesListEntry(cardMode, tab) {
   if (tab === 'attention') entry.classList.add('is-attention');
   const link = document.createElement('a');
   link.className = cardMode ? 'series-list-card' : 'series-list-row';
-  const state = { item: null, context: null, link, title: null, summary: null, menuButton: null, media: null, tid: null, thumbnailUrl: undefined, selection: null };
+  const state = { item: null, context: null, link, title: null, summary: null, menuButton: null, media: null, source: null, thumbnailUrl: undefined, selection: null };
   seriesListStates.set(entry, state);
   if (cardMode) {
     attachSeriesOperations(link, state);
@@ -444,7 +462,7 @@ function createSeriesListEntry(cardMode, tab) {
     const primary = document.createElement('div');
     primary.className = 'series-list-card-primary';
     state.title = document.createElement('strong');
-    state.tid = document.createElement('span');
+    state.source = document.createElement('span');
     state.summary = document.createElement('div');
     state.summary.className = 'series-list-card-summary';
     state.episodeSummary = document.createElement('span');
@@ -453,7 +471,7 @@ function createSeriesListEntry(cardMode, tab) {
     separator.textContent = ' · ';
     state.countSummary = document.createElement('span');
     state.summary.append(state.episodeSummary, separator, state.countSummary);
-    primary.append(state.title, state.tid);
+    primary.append(state.title, state.source);
     body.append(primary, state.summary);
     link.append(media, body);
     entry.append(link);
@@ -481,10 +499,12 @@ function updateSeriesListEntry(entry, item, data, tab, context) {
   if (state.link.getAttribute('href') !== href) state.link.setAttribute('href', href);
   const title = text(item.title, '作品名未取得');
   setContent(state.title, title);
+  const source = tab === 'attention' ? '' : seriesSourceMeta(item);
   if (state.media) {
+    setContent(state.source, source);
     setContent(state.episodeSummary, seriesEpisodeSummary(item));
     setContent(state.countSummary, `録画 ${item.counts.currentRecordings}件${item.counts.missingRecordings ? ` · 行方不明 ${item.counts.missingRecordings}件` : ''} · 予約 ${item.counts.reservations}件`);
-  } else setContent(state.summary, seriesListMeta(item, tab));
+  } else setContent(state.summary, [source, seriesListMeta(item, tab)].filter(Boolean).join(' · '));
   if (state.menuButton) {
     const label = `${title}の操作`;
     state.menuButton.title = label;
@@ -493,9 +513,6 @@ function updateSeriesListEntry(entry, item, data, tab, context) {
   if (tab === 'attention') updateAttentionSelection(state, item);
   if (!state.media) return;
   state.title.title = title;
-  const tid = item.tid === null ? '—' : String(item.tid);
-  setContent(state.tid, tid);
-  state.tid.setAttribute('aria-label', item.tid === null ? 'ローカルシリーズ' : `TID ${item.tid}`);
   const thumbnail = item.representativeThumbnailUrl || null;
   if (thumbnail === state.thumbnailUrl) return;
   state.thumbnailUrl = thumbnail;
@@ -560,10 +577,9 @@ function renderSeriesList(host, data, tab, search, viewMode = 'list', context = 
   }
   host.className = cardMode ? 'series-card-grid' : 'series-list';
   if (!rows.length) {
-    const message = data.availability?.reason === 'syobocal-disabled'
-      ? 'しょぼいカレンダーの情報利用がOFFのため、シリーズは表示されません。'
-      : data.availability?.dictionaryStatus?.usable === false ? data.availability.dictionaryStatus.message
-        : search ? '検索条件に一致する項目はありません。' : '表示できる項目はありません。';
+    const dictionary = data.availability?.dictionaryStatus;
+    const message = dictionary?.enabled && !dictionary.usable ? dictionary.message
+      : search ? '検索条件に一致する項目はありません。' : '表示できる項目はありません。';
     let empty = host.querySelector('.series-empty');
     if (!empty) { empty = document.createElement('p'); empty.className = 'series-empty'; host.replaceChildren(empty); }
     setContent(empty, message);
@@ -787,16 +803,17 @@ function createEpisodeCard(episode, size, context) {
   heading.textContent = episode.label;
   const subtitle = document.createElement('span');
   subtitle.className = 'series-episode-subtitle';
+  const displaySubtitle = text(episode.displaySubtitle, text(episode.dictionaryDetails?.subtitleCandidate?.value));
   if (episode.virtual) {
     const subtitleText = document.createElement('span');
     subtitleText.className = 'series-episode-subtitle-text';
-    subtitleText.textContent = text(episode.displaySubtitle);
+    subtitleText.textContent = displaySubtitle;
     const absence = document.createElement('span');
     absence.className = 'series-episode-absence';
     absence.textContent = '録画・予約の記録なし';
     subtitle.append(subtitleText, absence);
   } else {
-    subtitle.textContent = text(episode.displaySubtitle, episode.confirmed ? '副題未取得' : episode.status || '判定保留');
+    subtitle.textContent = displaySubtitle || (episode.confirmed ? '副題未取得' : episode.status || '判定保留');
   }
   body.append(heading, subtitle);
   if (!episode.virtual) {
@@ -887,7 +904,7 @@ function renderSeriesDetail(host, series, tab, context) {
     if (currentSeries.hidden === true) {
       if (!hiddenBadge.isConnected) titleLine.append(hiddenBadge);
     } else hiddenBadge.remove();
-    setContent(tid, currentSeries.tid === null ? 'ローカルシリーズ' : `TID ${currentSeries.tid}`);
+    setContent(tid, seriesSourceMeta(currentSeries, true));
     const labels = [
       `録画 ${currentSeries.counts.currentRecordings}件`,
       `予約 ${currentSeries.counts.reservations}件`
@@ -1021,7 +1038,7 @@ function renderAttentionDetail(host, group, context) {
     setContent(heading, nextGroup.title);
     setContent(description, `${nextGroup.label} · ${nextGroup.events.length}件${nextGroup.progLookupLabel ? ` · ${nextGroup.progLookupLabel}` : ''}`);
     setContent(candidates, nextGroup.candidates?.length
-      ? `紐づけ候補: ${nextGroup.candidates.map(item => `${item.title} (TID ${item.tid})`).join(' / ')}`
+      ? `紐づけ候補: ${nextGroup.candidates.map(item => `${item.title} (${dramaSeriesMeta(item) || 'TID ' + item.tid})`).join(' / ')}`
       : '既存候補なし。作品辞書検索から指定できます。');
     const nextCards = new Map();
     const cards = nextGroup.events.map((event, index) => {
@@ -1397,7 +1414,7 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
       }
       const candidates = new Map();
       for (const group of data.attention) {
-        for (const candidate of group.candidates || []) candidates.set(candidate.tid, candidate);
+        for (const candidate of group.candidates || []) candidates.set(candidate.id || candidate.tid, candidate);
       }
       openBulk({
         id: null, title: '選択した番組', events: eventKeys.map(key => events.get(key)),

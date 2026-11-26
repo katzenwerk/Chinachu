@@ -63,6 +63,17 @@ Compatibility with older configurations is not guaranteed. Some settings and rec
 
 For advanced runtime management, see [Node.js 26 migration and technical details](docs/node26-performance.md).
 
+## Series dictionaries
+
+Use **Settings → Series** to choose [しょぼいカレンダー](https://cal.syoboi.jp/) (`seriesUseSyobocal`, on by default), Bangumi (`bangumiEnabled`, off), and Wikipedia (`wikipediaEnabled`, off). Changes to these switches take effect after restarting the WUI. The Wikipedia collection start year (`wikipediaStartYear`, default 2000) takes effect in the acquisition worker after saving.
+
+Turning off a dictionary stops its acquisition, automatic matching, supplementation, and searches for new manual links. Turning it back on resumes from the saved dictionary and progress, and the saved dictionary is also available offline. Bangumi and Wikipedia supplement each other when both are enabled. Existing manual corrections and original series remain available independently of these switches. Recording, reservations, and recording rules are unaffected.
+
+- **Bangumi**. Work and episode data come from [Bangumi Archive](https://github.com/bangumi/Archive) and are used under Bangumi's [copyright statement and developer platform terms](https://bgm.tv/about/copyright). Entry data are covered by [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.ja).
+- **Japanese Wikipedia**. The dictionary uses the official Action and REST APIs of [Japanese Wikipedia](https://ja.wikipedia.org/). Its text is generally available under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/deed.ja), subject to the [Wikimedia Terms of Use](https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use/ja). The work dictionary links to the source article revision. When reusing, adapting, or redistributing copyrighted content, follow the applicable attribution, change-notice, and share-alike requirements.
+
+Chinachu fetches and builds the dictionary locally. Chinachu Releases exclude the generated database, downloaded Archive, and HTML cache. External data licenses are separate from [Chinachu's MIT software license](LICENSE).
+
 ## Network access and authentication
 
 Chinachu is intended for private or access-controlled networks. Direct Internet exposure is not recommended.

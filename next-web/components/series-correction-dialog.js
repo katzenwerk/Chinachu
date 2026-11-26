@@ -1,7 +1,8 @@
 import {
   previewSeriesSelection, removeSeriesOverride, removeSeriesWorkRule, saveSeriesOverride,
-  saveSeriesOverridesBulk, searchSeriesTitles, loadSeriesProjection
+  saveSeriesOverridesBulk, searchSeriesTitles, loadSeriesDictionary, loadSeriesProjection
 } from '../services/series-client.js';
+import { additionalSeason } from './series-registry-dialog.js';
 
 const dateTimeFormatter = new Intl.DateTimeFormat('ja-JP', {
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
@@ -17,10 +18,29 @@ function dateTime(value) {
 }
 
 function selectionValue(value) {
-  return /^local:[a-f0-9]{24}$/u.test(String(value)) ? String(value) : positiveInteger(value);
+  return /^local:[a-f0-9]{24}$/u.test(String(value)) || isDramaId(value) ? String(value) : positiveInteger(value);
 }
+function isDramaId(value) { return typeof value === 'string' && /^(?:bangumi|wikipedia):.+$/u.test(value); }
 function selectionInput(value) { return typeof value === 'string' ? { seriesId: value } : { tid: value }; }
-function candidateId(item) { return item.id?.startsWith('local:') ? item.id : Number(item.tid); }
+function candidateId(item) { return item.id?.startsWith('local:') || isDramaId(item.id) ? item.id : Number(item.tid); }
+function candidateSource(item) {
+  if (item.id?.startsWith('local:')) return 'オリジナル';
+  if (item.source === 'bangumi-wikipedia') return 'Bangumi / Wikipedia';
+  if (isDramaId(item.id)) return item.id.startsWith('wikipedia:') ? 'Wikipedia' : 'Bangumi';
+  return 'TID ' + item.tid;
+}
+function manualEpisodeNumbers(value) {
+  if (!value.trim()) return [];
+  const numbers = new Set();
+  for (const part of value.normalize('NFKC').split(/[,、\s]+/u).filter(Boolean)) {
+    const match = /^(\d+)(?:[-–〜～](\d+))?$/u.exec(part);
+    const first = Number(match?.[1]), last = Number(match?.[2] ?? match?.[1]);
+    if (!match || first < 1 || last < first || last > 100000 || last - first >= 100) throw new Error('話数は整数で指定してください（例 1, 3-4）。');
+    for (let n = first; n <= last; n++) numbers.add('normal:' + n);
+    if (numbers.size > 100) throw new Error('一度に指定できる話数は100件までです。');
+  }
+  return [...numbers];
+}
 function positiveInteger(value) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : null;
@@ -50,16 +70,16 @@ function candidateOptions(event, candidates) {
     const number = Number(tid);
     if (Number.isInteger(number) && !values.has(number)) values.set(number, { tid: number, title: `TID ${number}`, firstYear: null });
   }
-  if (event.resolution?.manual?.seriesId?.startsWith('local:')) {
-    const manual = event.resolution.manual; values.set(manual.seriesId, { id: manual.seriesId, tid: null, title: manual.title || 'オリジナルシリーズ' });
+  if (event.resolution?.manual?.seriesId && (isDramaId(event.resolution.manual.seriesId) || event.resolution.manual.seriesId.startsWith('local:'))) {
+    const manual = event.resolution.manual; values.set(manual.seriesId, { id: manual.seriesId, tid: null, title: manual.title || manual.seriesId });
   }
-  for (const item of candidates || []) if (item.id?.startsWith('local:')) values.set(item.id, item);
+  for (const item of candidates || []) if (item.id?.startsWith('local:') || isDramaId(item.id)) values.set(item.id, item);
   return Array.from(values.values());
 }
 
 function createTitlePicker({ initialCandidates = [], currentTid = null, initialQuery = '', onSelection = () => {} }) {
   const searchLabel = document.createElement('label');
-  searchLabel.textContent = '作品名・TIDで検索';
+  searchLabel.textContent = '作品名・別名・TIDで検索';
   const search = document.createElement('input');
   search.type = 'search';
   search.placeholder = '作品名またはTIDを入力';
@@ -96,7 +116,8 @@ function createTitlePicker({ initialCandidates = [], currentTid = null, initialQ
     tidSelect.replaceChildren(new Option('作品を選択してください', ''));
     for (const item of current) {
       const suffix = item.firstYear ? ` (${item.firstYear})` : '';
-      tidSelect.add(new Option(`${item.title}${suffix} · ${item.id?.startsWith('local:') ? 'オリジナル' : 'TID ' + item.tid}`, String(candidateId(item))));
+      tidSelect.add(new Option([`${item.title}${suffix}`, additionalSeason(item.title, item.season),
+        candidateSource(item)].filter(Boolean).join(' · '), String(candidateId(item))));
     }
     tidSelect.value = selectedTid === null ? '' : String(selectedTid);
   }
@@ -112,7 +133,9 @@ function createTitlePicker({ initialCandidates = [], currentTid = null, initialQ
     }
     searchStatus.textContent = '検索中…';
     try {
-      const results = await searchSeriesTitles(query);
+      const [existing, drama] = await Promise.all([searchSeriesTitles(query),
+        loadSeriesDictionary({ q: query, source: 'drama', browse: true }).catch(() => null)]);
+      const results = [...existing, ...(drama?.dramaManualSelection ? drama.results : [])];
       if (sequence !== searchSequence || !search.isConnected) return;
       replaceCandidates(results);
       searchStatus.textContent = results.length ? `${results.length}件の候補を表示しています。` : '一致する作品はありません。';
@@ -185,7 +208,10 @@ export function openSeriesCorrectionDialog({
     evidence.append(dt, dd);
   }
 
-  const currentTid = event.resolution?.manual?.seriesId?.startsWith('local:') ? event.resolution.manual.seriesId : event.resolution?.manual?.tid ?? autoTid;
+  const manualId = event.resolution?.manual?.seriesId;
+  const automaticId = event.resolution?.automatic?.seriesId;
+  const currentTid = isDramaId(manualId) || manualId?.startsWith('local:') ? manualId :
+    event.resolution?.manual?.tid ?? (isDramaId(automaticId) ? automaticId : autoTid);
   const picker = createTitlePicker({
     initialCandidates: candidateOptions(event, candidates),
     currentTid,
@@ -208,6 +234,24 @@ export function openSeriesCorrectionDialog({
     seriesContext?.episodeConfirmed ? positiveInteger(seriesContext.episode) : autoEpisode;
   episode.value = manualEpisode || currentAutomaticEpisode || '';
   episodeLabel.append(episode);
+  const dramaFields = document.createElement('div');
+  const dramaEpisodeLabel = document.createElement('label');
+  dramaEpisodeLabel.textContent = '辞書の各話（複数選択可）';
+  const dramaEpisodes = document.createElement('select');
+  dramaEpisodes.multiple = true; dramaEpisodes.size = 5;
+  dramaEpisodeLabel.append(dramaEpisodes);
+  const dramaNumberLabel = document.createElement('label');
+  dramaNumberLabel.textContent = '辞書にない通常話（未指定可）';
+  const dramaNumbers = document.createElement('input');
+  dramaNumbers.type = 'text'; dramaNumbers.placeholder = '例 1, 3-4';
+  dramaNumberLabel.append(dramaNumbers);
+  dramaFields.append(dramaEpisodeLabel, dramaNumberLabel);
+  dramaFields.hidden = !isDramaId(currentTid);
+  episodeLabel.hidden = isDramaId(currentTid);
+  let dramaKeys = (event.resolution?.manual?.episodes || []).map(row => row.key);
+  const selectionEpisodes = tid => isDramaId(tid) ?
+    { episodeKeys: [...new Set([...dramaKeys, ...manualEpisodeNumbers(dramaNumbers.value)])].sort() } :
+    { episode: typeof tid !== 'string' && episodeExplicit && episode.value ? Number(episode.value) : null };
   const episodeStatus = document.createElement('p');
   episodeStatus.className = 'series-correction-episode-status';
   const subtitlePreview = document.createElement('p');
@@ -216,7 +260,7 @@ export function openSeriesCorrectionDialog({
   workRuleStatus.className = 'series-correction-work-rule-status';
   const activeWorkRule = seriesContext?.workRule || event.resolution?.workRule || null;
   workRuleStatus.textContent = activeWorkRule?.active ?
-    `${activeWorkRule.serviceName || '同一放送局'}の同じ作品系統へTID ${activeWorkRule.tid}を適用中です。` : '';
+    `${activeWorkRule.serviceName || '同一放送局'}の同じ作品系統へ${activeWorkRule.seriesId || 'TID ' + activeWorkRule.tid}を適用中です。` : '';
   let episodeExplicit = manualEpisode !== null;
   let previewSequence = 0;
   let contextToken = event.correctionToken || null;
@@ -234,11 +278,15 @@ export function openSeriesCorrectionDialog({
   episodeStatus.textContent = initialEpisodeStatus();
 
   async function refreshPreview({ tidChanged = false, episodeChanged = false } = {}) {
+    const sequence = ++previewSequence;
     validationToken = null;
     save.disabled = true;
     remove.disabled = true;
     removeWorkRule.disabled = true;
     const tid = selectionValue(tidSelect.value);
+    const isDrama = isDramaId(tid);
+    dramaFields.hidden = !isDrama;
+    episodeLabel.hidden = isDrama;
     if (tid === null) {
       subtitlePreview.textContent = '';
       return;
@@ -246,21 +294,34 @@ export function openSeriesCorrectionDialog({
     if (tidChanged) {
       episodeExplicit = false;
       episode.value = '';
+      dramaKeys = [];
+      dramaNumbers.value = '';
+      dramaEpisodes.replaceChildren();
+      delete dramaEpisodes.dataset.choices;
       episodeStatus.textContent = '選択した作品についてEPを確認しています…';
     } else if (episodeChanged) {
       episodeExplicit = true;
       episodeStatus.textContent = episode.value ? '入力したEPを手動指定として保存します。' : 'EPを未指定として保存します。';
     }
-    const sequence = ++previewSequence;
     try {
       const preview = await previewSeriesSelection({
         eventKey: event.key,
         generation: event.generation,
         contextToken,
         ...selectionInput(tid),
-        episode: episodeExplicit && episode.value ? Number(episode.value) : null
+        ...selectionEpisodes(tid)
       });
       if (sequence !== previewSequence || !dialog.isConnected) return;
+      if (isDrama) {
+        const key = JSON.stringify([tid, preview.dramaEpisodes]);
+        if (key !== dramaEpisodes.dataset.choices) {
+          dramaEpisodes.dataset.choices = key;
+          dramaEpisodes.replaceChildren(...preview.dramaEpisodes.map(item => {
+            const subtitle = item.subtitle || (item.subtitleCandidate ? '副題候補 ' + item.subtitleCandidate : '');
+            return new Option([item.label, subtitle].filter(Boolean).join(' · '), item.key, false, dramaKeys.includes(item.key));
+          }));
+        }
+      }
       episode.disabled = typeof tid === 'string';
       if (typeof tid === 'string') episodeExplicit = false;
       if (!episodeExplicit && !preview.episodeConfirmed) episode.value = '';
@@ -280,6 +341,7 @@ export function openSeriesCorrectionDialog({
           preview.multipleEpisode ? '複数話情報のため、単一EPには補完しません。' :
           preview.episodeHint ? `EPG話数 #${preview.episodeHint} は候補です。確定EPではありません。` : 'EPは未確定です。';
       }
+      if (isDrama) episodeStatus.textContent = '選択した各話を保存します。話数を未指定のまま作品に登録することもできます。';
       const dictionarySubtitle = episodeExplicit ? preview.requestedSubtitle : preview.dictionarySubtitle;
       subtitlePreview.textContent = dictionarySubtitle ? `辞書副題: ${dictionarySubtitle}` : '';
       workRuleStatus.textContent = preview.workRuleProposal?.reason || '';
@@ -300,13 +362,19 @@ export function openSeriesCorrectionDialog({
         remove.disabled = true;
         removeWorkRule.disabled = true;
         if (error.currentContext) {
-          message.textContent = `最新: ${text(error.currentContext.fullTitle, error.currentContext.title || '')} · ${error.currentContext.manual ? `手動 TID ${error.currentContext.manual.tid}` : '個別補正なし'}。入力は保持しています。`;
+          const manual = error.currentContext.manual;
+          message.textContent = `最新: ${text(error.currentContext.fullTitle, error.currentContext.title || '')} · ${manual ? `手動 ${manual.title || manual.seriesId || 'TID ' + manual.tid}` : '個別補正なし'}。入力は保持しています。`;
         }
       }
     }
   }
 
   episode.addEventListener('input', () => refreshPreview({ episodeChanged: true }));
+  dramaEpisodes.addEventListener('change', () => {
+    dramaKeys = Array.from(dramaEpisodes.selectedOptions, option => option.value);
+    refreshPreview();
+  });
+  dramaNumbers.addEventListener('input', () => refreshPreview());
 
   const message = document.createElement('p');
   message.className = 'series-correction-message';
@@ -350,7 +418,7 @@ export function openSeriesCorrectionDialog({
       if (!rule && activeWorkRule) removeWorkRule.hidden = true;
       if (rule) {
         ruleToken = rule.token;
-        workRuleStatus.textContent = `最新の作品ルール: TID ${rule.tid}`;
+        workRuleStatus.textContent = `最新の作品ルール: ${rule.seriesId || 'TID ' + rule.tid}`;
       }
     }
     changedContext = null;
@@ -362,7 +430,7 @@ export function openSeriesCorrectionDialog({
   actions.append(removeWorkRule, remove, reconfirm, cancel, save);
   form.append(
     heading, target, evidence, picker.searchLabel, picker.searchStatus, picker.tidLabel,
-    episodeLabel, episodeStatus, subtitlePreview, workRuleStatus, message, actions
+    episodeLabel, dramaFields, episodeStatus, subtitlePreview, workRuleStatus, message, actions
   );
   dialog.append(form);
   document.body.append(dialog);
@@ -401,12 +469,12 @@ export function openSeriesCorrectionDialog({
       generation: event.generation,
       validationToken,
       ...selectionInput(selectionValue(tidSelect.value)),
-      episode: typeof selectionValue(tidSelect.value) !== 'string' && episodeExplicit && episode.value !== '' ? Number(episode.value) : null
+      ...selectionEpisodes(selectionValue(tidSelect.value))
     }));
   });
   remove.addEventListener('click', () => run(() => removeSeriesOverride(event.key, { generation: event.generation, contextToken })));
   removeWorkRule.addEventListener('click', () => {
-    if (!window.confirm('この放送局・同作品系統へのTID対応を解除し、通常の自動判定へ戻します。\n個別の手動補正は維持されます。')) return;
+    if (!window.confirm('この放送局・同作品系統への作品ルールを解除し、通常の自動判定へ戻します。\n個別の手動補正は維持されます。')) return;
     run(() => removeSeriesWorkRule(activeWorkRule.id, { generation: event.generation, eventKey: event.key, contextToken, ruleToken }));
   });
   dialog.addEventListener('close', () => {
@@ -416,7 +484,7 @@ export function openSeriesCorrectionDialog({
   dialog.showModal();
   picker.runInitial();
   if (tidSelect.value) refreshPreview();
-  if (focusEpisode) window.requestAnimationFrame(() => episode.focus());
+  if (focusEpisode) window.requestAnimationFrame(() => (isDramaId(currentTid) ? dramaEpisodes : episode).focus());
   return dialog;
 }
 
@@ -432,7 +500,7 @@ export function openSeriesBulkCorrectionDialog({ group, onChanged = () => {} }) 
   heading.textContent = group.id ? '要確認グループをまとめて紐づけ' : '選択した番組をまとめて紐づけ';
   const target = document.createElement('p');
   target.className = 'series-correction-target';
-  target.textContent = `${text(group.title, 'タイトル未取得')} · ${events.length}件へ共通のTIDだけを指定します。`;
+  target.textContent = `${text(group.title, 'タイトル未取得')} · ${events.length}件へ共通の作品を指定します。`;
   let picker;
 
   const confirmation = document.createElement('p');
@@ -441,7 +509,7 @@ export function openSeriesBulkCorrectionDialog({ group, onChanged = () => {} }) 
     const selected = picker.selectedCandidate();
     const tid = selected && candidateId(selected);
     confirmation.textContent = selected ?
-      `${events.length}件を「${text(selected.title, `TID ${tid}`)}」（${typeof tid === 'string' ? 'オリジナル' : 'TID ' + tid}）へ紐づけます。${typeof tid === 'string' ? 'EP指定は不要です。' : 'EPはイベントごとに再評価します。'}` :
+      `${events.length}件を「${text(selected.title, `TID ${tid}`)}」（${candidateSource(selected)}）へ紐づけます。${typeof tid === 'string' ? '話数は未指定で保存します。' : 'EPはイベントごとに再評価します。'}` :
       '一括指定する作品を選択してください。';
   }
   picker = createTitlePicker({

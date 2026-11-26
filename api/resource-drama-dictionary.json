@@ -1,0 +1,7 @@
+{
+  "/": {
+    "script": "drama-dictionary",
+    "methods": ["get"],
+    "types": ["json"]
+  }
+}

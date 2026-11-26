@@ -44,13 +44,16 @@ export function buildSeriesEventIndex(snapshot) {
             episodeSource,
             manual: event.resolution?.manual?.active === true,
             workRule: event.resolution?.workRule?.active === true ? event.resolution.workRule : null,
-            candidates: tid === null ? [] : [{ tid, title: text(series.title, `TID ${tid}`) }],
-            _episodeNumbers: new Set()
+            candidates: series.source ? [{ id: series.id, source: series.source, title: series.title, firstYear: series.firstYear, season: series.season }] :
+              tid === null ? [] : [{ tid, title: text(series.title, `TID ${tid}`) }],
+            _episodeNumbers: new Set(),
+            _externalLabels: new Set()
           };
           index.set(eventKey, context);
         }
-        const number = episode.confirmed === true ? positiveInteger(episode.number) : null;
+        const number = episode.confirmed && Number.isFinite(episode.number) && episode.number > 0 ? episode.number : null;
         if (number !== null) context._episodeNumbers.add(number);
+        if (series.source && episode.confirmed && episode.label) context._externalLabels.add(episode.label);
       }
     }
   }
@@ -61,7 +64,14 @@ export function buildSeriesEventIndex(snapshot) {
     context.episode = context.episodes.length === 1 ? context.episodes[0] : null;
     context.episodeLabel = context.episodes.length === 0 ? 'EP未確定' :
       context.episodes.length === 1 ? `第${context.episodes[0]}話` : `第${context.episodes.join('・')}話`;
+    if (context._externalLabels.size) {
+      context.episodeLabel = [...context._externalLabels].join('・');
+      context.episodeConfirmed = true;
+      context.multipleEpisodeConfirmed = context._externalLabels.size > 1;
+      if (context.multipleEpisodeConfirmed) context.episode = null;
+    }
     delete context._episodeNumbers;
+    delete context._externalLabels;
   }
   for (const group of Array.isArray(snapshot?.attention) ? snapshot.attention : []) {
     for (const event of Array.isArray(group.events) ? group.events : []) {

@@ -242,6 +242,7 @@
 .series-registry-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .series-registry-dialog label,.series-registry-view label { display: grid; gap: 6px; min-width: 0; }
 .series-registry-dialog input[type="search"],.series-registry-view input[type="search"] { width: 100%; box-sizing: border-box; min-height: 38px; padding: 8px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.series-registry-view select { min-height: 38px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); color: var(--text); }
 .series-registry-results { max-height: calc(var(--wui-viewport-height) * 0.32); overflow: auto; padding: 8px 0; margin: 8px 0; list-style: none; }
 .series-registry-results > li,.series-registry-local-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; overflow-wrap: anywhere; border-bottom: 1px solid var(--border); }
 

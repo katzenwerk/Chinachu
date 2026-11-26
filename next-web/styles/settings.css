@@ -74,6 +74,37 @@ textarea.settings-input { min-height: 86px; resize: vertical; font-family: ui-mo
 :is(.settings-recording,.settings-wui-column) .settings-field-title { flex-wrap: wrap; }
 :is(.settings-recording,.settings-wui-column) .settings-field-title code { min-width: 0; overflow-wrap: anywhere; }
 :is(.settings-recording,.settings-wui-column) .settings-field-control { min-width: 0; }
+.settings-series-dictionary { grid-column: 1/-1; display: grid; grid-template-columns: subgrid; }
+.settings-series-dictionary h3 { margin: 12px 0 0; font-size: 13px; }
+.settings-series-dictionary > .settings-field { border-bottom: 1px solid var(--border); }
+.settings-series-dictionary > .settings-series-wikipedia { border-bottom: 0; }
+.settings-series-status {
+  margin: 0; min-width: 0; display: flex; flex-direction: column;
+  color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere;
+}
+.settings-series-status :is(dl,dd) { margin: 0; }
+.settings-series-sources { display: grid; gap: 6px; }
+.settings-series-sources > dl { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0 8px; }
+.settings-series-sources dt { color: var(--text); font-weight: var(--font-title-weight); }
+.settings-series-source-detail,.settings-series-source-error { grid-column: 1/-1; }
+.settings-series-source-detail { display: flex; flex-wrap: wrap; column-gap: 12px; }
+.settings-series-progress { margin-top: 7px; }
+.settings-series-progress progress:not([hidden]) { display: block; width: 100%; height: 8px; accent-color: var(--brand); }
+@media (min-width:901px) {
+  .settings-series-dictionary {
+    grid-template-areas: "usage acquisition" "syobocal year" "bangumi status" "wikipedia status";
+  }
+  .settings-series-usage { grid-area: usage; }
+  .settings-series-acquisition { grid-area: acquisition; }
+  .settings-series-syobocal { grid-area: syobocal; }
+  .settings-series-bangumi { grid-area: bangumi; }
+  .settings-series-wikipedia { grid-area: wikipedia; }
+  .settings-series-start-year { grid-area: year; }
+  .settings-series-status { grid-area: status; }
+}
+@media (max-width:900px) {
+  .settings-series-dictionary > .settings-series-start-year { border-bottom: 0; }
+}
 .settings-access-warning { min-width: 0; margin: 10px 0 0; padding: 10px 12px; border: 1px solid color-mix(in srgb,var(--warning) 45%,var(--border)); border-radius: var(--radius-sm); background: color-mix(in srgb,var(--warning) 7%,var(--panel)); color: var(--text); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .settings-access-warning strong { font-size: 12px; }
 .settings-access-warning strong span { color: var(--warning); }

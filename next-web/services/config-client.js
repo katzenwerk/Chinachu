@@ -21,6 +21,11 @@ export async function loadClockRuntime(signal) {
   return value.runtime && typeof value.runtime === 'object' ? value.runtime : {};
 }
 
+export async function loadDramaDictionaryStatus(signal) {
+  const response = await fetch('/api/drama-dictionary.json', { headers: { Accept: 'application/json' }, cache: 'no-store', signal });
+  return parseJsonResponse(response);
+}
+
 export async function saveConfig(config, signal, original) {
   const { externalNotifications, ...mainConfig } = config;
   const json = JSON.stringify(mainConfig, null, '\t');

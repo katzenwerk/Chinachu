@@ -1,6 +1,7 @@
 import { createChannelLogo } from '../components/channel-logo.js';
 import { createNotificationSettings } from '../components/notification-settings.js';
-import { loadClockRuntime, loadConfig, loadMirakurunServices, loadRuntimeMode, saveConfig } from '../services/config-client.js';
+import { loadClockRuntime, loadConfig, loadDramaDictionaryStatus, loadMirakurunServices, loadRuntimeMode, saveConfig } from '../services/config-client.js';
+import { loadSeriesStatus } from '../services/series-client.js';
 import {
   beginTotpSetup,
   changeAdminPassword,
@@ -178,6 +179,16 @@ export function sortSettingsServices(services) {
   return services.slice().sort((a, b) => (rank(a) - rank(b) || a.stableIndex - b.stableIndex));
 }
 
+function wikipediaCompletedRanges(years) {
+  const ranges = [];
+  for (const year of years.filter(row => row.completedAt).map(row => row.year).sort((a, b) => a - b)) {
+    const last = ranges.at(-1);
+    if (last && year === last.end + 1) last.end = year;
+    else ranges.push({ start: year, end: year });
+  }
+  return ranges.map(({ start, end }) => start === end ? start + '年' : start + '年〜' + end + '年').join('、');
+}
+
 // Keep each pair in one layout row so its item separators share a baseline.
 function arrangeSettingRows(root) {
   for (const parent of root.querySelectorAll('.settings-card-body, .settings-fields, .settings-field-group, .settings-wui-column')) {
@@ -202,6 +213,8 @@ function arrangeSettingRows(root) {
 export function renderSettingsPage(container) {
   let disposed = false;
   const controller = new AbortController();
+  let seriesDictionaryStatusTimer;
+  let seriesDictionaryStatusLoading = false;
   let original = null;
   let draft = null;
   let applicationBaseline = null;
@@ -284,6 +297,7 @@ export function renderSettingsPage(container) {
     if (!options.multiline && !definition.select) input.type = definition.type === 'number' ? 'number' : 'text';
     if (definition.type === 'number') {
       if (definition.min !== undefined) input.min = String(definition.min);
+      if (definition.max !== undefined) input.max = String(definition.max);
       input.step = definition.integer ? '1' : 'any';
     }
     if (definition.select) {
@@ -294,7 +308,7 @@ export function renderSettingsPage(container) {
         input.append(item);
       });
     }
-    input.value = valueText(draft[key]);
+    input.value = valueText(draft[key] ?? options.defaultValue);
     if (options.placeholder) input.placeholder = options.placeholder;
     const update = () => {
       const parsed = parseFieldValue(input.value, definition);
@@ -835,30 +849,116 @@ export function renderSettingsPage(container) {
 
   function createSeriesTab() {
     const tab = sectionFor('series');
-    const information = card('しょぼいカレンダー連携（Beta）',
-      'しょぼいカレンダーの作品・話数・副題情報を利用し、番組情報を補完します。利用しない場合はシリーズ一覧が表示されません。');
-    const enabled = bindBoolean('seriesUseSyobocal', 'しょぼいカレンダーの情報を利用する',
-      'ONでは外部取得と保存済み情報を利用します。インターネットに接続できない場合も、取得済みの情報があれば利用できます。OFFでは外部取得を行わず、保存済みの辞書・放送情報もシリーズ判定に利用しません。',
-      { defaultTrue: true, wide: true });
+    const info = card('シリーズ辞書',
+      'シリーズの作品名・話数・サブタイトルの判定に利用する外部辞書を設定します。無効にした辞書は、取得・更新およびシリーズ判定への利用を停止します。取得済みのデータは保持されます。');
+    const grid = document.createElement('div');
+    grid.className = 'settings-series-dictionary';
+    const usageHeading = document.createElement('h3');
+    usageHeading.textContent = '辞書の利用設定';
+    usageHeading.className = 'settings-series-usage';
+    const acquisitionHeading = document.createElement('h3');
+    acquisitionHeading.textContent = '取得設定・取得状況';
+    acquisitionHeading.className = 'settings-series-acquisition';
+    const syobocal = bindBoolean('seriesUseSyobocal', 'しょぼいカレンダーを利用する',
+      '主にアニメの作品・話数・サブタイトル・放送情報を補完します。', { defaultTrue: true }).wrap;
+    const bangumi = bindBoolean('bangumiEnabled', 'Bangumiを利用する',
+      '主に国内の実写作品・各話情報を補完します。Bangumi Archiveから辞書を取得します。').wrap;
+    const wikipedia = bindBoolean('wikipediaEnabled', 'Wikipediaを利用する',
+      '日本語Wikipediaから実写作品の放送版・各話・サブタイトル等の情報を取得し、補完します。').wrap;
+    syobocal.classList.add('settings-series-syobocal');
+    bangumi.classList.add('settings-series-bangumi');
+    wikipedia.classList.add('settings-series-wikipedia');
+    const startYear = bindValueField('wikipediaStartYear', '現在年から指定した年まで遡って作品情報を収集します。取得済みのデータは、開始年を変更しても保持されます。', {
+      label: 'Wikipediaの取得開始年', type: 'number', integer: true, min: 1, max: 9999, required: true, defaultValue: 2000
+    }).wrap;
+    startYear.classList.add('settings-series-start-year');
     const status = document.createElement('div');
-    status.className = 'settings-runtime-status';
-    const heading = document.createElement('strong');
-    const offline = document.createElement('p');
-    const limitation = document.createElement('p');
-    status.append(heading, offline, limitation);
-    dependentUpdates.push(() => {
-      const usesSyobocal = draft.seriesUseSyobocal !== false;
-      heading.textContent = usesSyobocal ? 'しょぼいカレンダーの情報を利用します' : 'しょぼいカレンダーの情報を利用しません';
-      offline.textContent = usesSyobocal ?
-        'インターネットに接続できない場合でも、取得済みの情報があれば利用できます。' :
-        'ProgLookupの外部取得は開始せず、取得済みの辞書・放送情報も参照しません。';
-      limitation.textContent = usesSyobocal ? '' :
-        'OFFではシリーズ一覧に作品が表示されません。録画・予約・ルール管理には影響しません。';
-      limitation.hidden = usesSyobocal;
-    });
-    information.body.append(enabled.wrap, status);
-    tab.append(information.section);
+    status.className = 'settings-runtime-status settings-series-status';
+    status.innerHTML = '<div class="settings-series-sources" data-series-dictionary-status>取得状況を読み込んでいます…</div>' +
+      '<section class="settings-series-progress" hidden aria-label="Wikipediaの初回収集状況">' +
+      '<div data-wikipedia-completed></div><div data-wikipedia-active></div>' +
+      '<progress hidden aria-label="処理中の年度の候補処理進捗"></progress></section>';
+    grid.append(usageHeading, syobocal, bangumi, wikipedia, acquisitionHeading, startYear, status);
+    info.body.append(grid);
+    tab.append(info.section);
     return tab;
+  }
+
+  async function updateSeriesDictionaryStatus() {
+    const target = container.querySelector('[data-series-dictionary-status]');
+    if (disposed || activeTab !== 'series' || !target || seriesDictionaryStatusLoading) return;
+    seriesDictionaryStatusLoading = true;
+    try {
+      const [series, drama] = await Promise.allSettled([
+        loadSeriesStatus({ signal: controller.signal }), loadDramaDictionaryStatus(controller.signal)
+      ]);
+      const syobocal = series.value?.availability?.dictionaryStatus;
+      const result = drama.value;
+      const sources = {
+        syobocal: syobocal && {
+          phase: syobocal.phase, enabled: syobocal.enabled, publishedAt: syobocal.published?.lastSuccessAt,
+          works: syobocal.published?.counts?.titles, episodes: syobocal.published?.counts?.episodes, error: syobocal.lastError?.message
+        },
+        ...result?.sources
+      };
+      if (disposed || !target.isConnected) return;
+      const formatter = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', dateStyle: 'short', timeStyle: 'short' });
+      const phases = { disabled: '無効', waiting: '取得待ち', preparing: '準備中', updating: '取得・更新中', ready: '取得済み', failed: '更新に失敗', paused: '一時停止' };
+      const lines = [];
+      for (const [key, label] of [['syobocal', 'しょぼいカレンダー'], ['bangumi', 'Bangumi'], ['wikipedia', 'Wikipedia']]) {
+        const value = sources[key];
+        const row = document.createElement('dl');
+        const name = document.createElement('dt');
+        const phase = document.createElement('dd');
+        name.textContent = label;
+        phase.textContent = value ? phases[value.phase] || '取得待ち' : '取得状況を確認できません';
+        row.append(name, phase);
+        if (value) {
+          const detail = document.createElement('dd');
+          detail.className = 'settings-series-source-detail';
+          const counts = document.createElement('span');
+          const updated = document.createElement('span');
+          counts.textContent = (value.works || 0).toLocaleString() + '作品・' + (value.episodes || 0).toLocaleString() + '各話';
+          updated.textContent = '最終更新 ' + (value.publishedAt ? formatter.format(value.publishedAt) : '未更新');
+          detail.append(counts, updated);
+          row.append(detail);
+          if (value.enabled && value.error) {
+            const error = document.createElement('dd');
+            error.className = 'settings-series-source-error';
+            error.textContent = value.error;
+            row.append(error);
+          }
+        }
+        lines.push(row);
+      }
+      target.replaceChildren(...lines);
+      const progress = target.nextElementSibling;
+      const years = result?.years || [];
+      const currentYear = Number(formatter.formatToParts().find(part => part.type === 'year')?.value);
+      const firstYear = Math.min(currentYear, result?.startYear ?? currentYear);
+      // Status is source-wide. Only infer the active year when one initial collection has outstanding candidates.
+      const pending = sources.wikipedia?.phase === 'updating' ? years.filter(row =>
+        row.year >= firstYear && row.year <= currentYear + 1 && !row.completedAt && row.completed < row.total) : [];
+      const active = pending.length === 1 ? pending[0] : null;
+      const completed = wikipediaCompletedRanges(years);
+      progress.hidden = !result;
+      progress.querySelector('[data-wikipedia-completed]').textContent = '初回収集済み ' + (completed || 'なし');
+      progress.querySelector('[data-wikipedia-active]').textContent = active ?
+        '処理中の年度（推定） ' + active.year + '年 · ' +
+          active.completed.toLocaleString() + ' / ' + active.total.toLocaleString() + '件処理済み' :
+        pending.length > 1 ? '処理中の年度を特定できません' : '';
+      const bar = progress.querySelector('progress');
+      bar.hidden = !active;
+      if (active) {
+        bar.max = active.total;
+        bar.value = active.completed;
+        bar.setAttribute('aria-label', active.year + '年の候補処理進捗（推定）');
+      }
+    } catch (error) {
+      if (!disposed && target.isConnected && error.name !== 'AbortError') target.textContent = error.message;
+    } finally {
+      seriesDictionaryStatusLoading = false;
+    }
   }
 
   function normalizeBroadcastClockChannels(raw) {
@@ -1497,6 +1597,8 @@ export function renderSettingsPage(container) {
         activeTab = key;
         tabs.querySelectorAll('[role="tab"]').forEach(item => item.setAttribute('aria-selected', String(item === button)));
         content.querySelectorAll('.settings-tab-panel').forEach(panel => { panel.hidden = panel.dataset.tab !== key; });
+        container.querySelector('.settings-help-link').hash = key === 'series' ? 'help?section=help-topic-34' : 'help';
+        if (key === 'series') updateSeriesDictionaryStatus();
         if (key === 'clock' && draft.broadcastClockEnabled === true && broadcastClockChannels === null) {
           const select = content.querySelector('[data-broadcast-clock-channel]');
           const loadButton = select?.parentElement?.querySelector('button');
@@ -1512,6 +1614,9 @@ export function renderSettingsPage(container) {
     notificationView.hidden = activeTab !== 'notification';
     content.append(createBasicTab(), createRecordingTab(), createStorageTab(), createHistoryTab(), createServicesTab(), createSeriesTab(), createAuthTab(), createClockTab(), notificationView, createAdvancedTab());
     arrangeSettingRows(content);
+    if (activeTab === 'series') container.querySelector('.settings-help-link').hash = 'help?section=help-topic-34';
+    updateSeriesDictionaryStatus();
+    if (!seriesDictionaryStatusTimer) seriesDictionaryStatusTimer = setInterval(updateSeriesDictionaryStatus, 5000);
     if (activeTab === 'clock' && draft.broadcastClockEnabled === true) {
       const select = content.querySelector('[data-broadcast-clock-channel]');
       const button = select?.parentElement?.querySelector('button');
@@ -1527,6 +1632,7 @@ export function renderSettingsPage(container) {
 
   return () => {
     disposed = true;
+    clearInterval(seriesDictionaryStatusTimer);
     unsubscribeAutoTs();
     unsubscribeRestart();
     controller.abort();
