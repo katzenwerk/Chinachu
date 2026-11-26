@@ -169,10 +169,10 @@ html:has(.rules-page) { min-width: 0; }
 .rule-editor-form > .rule-form-feedback.is-progress { display: flex; align-items: center; gap: 9px; border-color: var(--border); background: var(--panel-subtle); color: var(--text); }
 .rule-editor-form > .rule-form-feedback.is-progress::before { content: ''; flex: 0 0 auto; width: 14px; height: 14px; box-sizing: border-box; border: 2px solid var(--border); border-top-color: var(--brand); border-radius: 50%; animation: rules-rule-actions-spin .7s linear infinite; }
 .rule-editor-form > .rule-form-feedback[hidden] { display: none; }
-.rule-editor-form footer .button.is-running { display: inline-flex; align-items: center; gap: 8px; }
-.rule-editor-form footer .button.is-running::before { content: ''; flex: 0 0 auto; width: 13px; height: 13px; box-sizing: border-box; border: 2px solid currentColor; border-left-color: transparent; border-radius: 50%; animation: rules-rule-actions-spin .7s linear infinite; }
+:is(.rule-editor-form footer .button,.button-with-spinner).is-running { display: inline-flex; align-items: center; gap: 8px; }
+:is(.rule-editor-form footer .button,.button-with-spinner).is-running::before { content: ''; flex: 0 0 auto; width: 13px; height: 13px; box-sizing: border-box; border: 2px solid currentColor; border-left-color: transparent; border-radius: 50%; animation: rules-rule-actions-spin .7s linear infinite; }
 .rule-editor-form footer [hidden] { display: none; }
-@media (prefers-reduced-motion: reduce) { .rule-editor-form .rule-form-feedback.is-progress::before,.rule-editor-form footer .button.is-running::before { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .rule-editor-form .rule-form-feedback.is-progress::before,:is(.rule-editor-form footer .button,.button-with-spinner).is-running::before { animation: none; } }
 .rule-editor-form > footer { margin: 0; padding: 12px 18px; flex-wrap: wrap; }
 .rule-action-spacer { flex: 1; }
 .rule-match-panel { align-content: start; }
