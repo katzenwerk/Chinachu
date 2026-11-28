@@ -1,6 +1,6 @@
 let currentDialog = null;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-const ACTIONS = { move: 'ファイル移動', repair: '録画履歴のパス修正' };
+const ACTIONS = { move: 'ファイル移動', repair: '録画履歴のパス修正', rename: 'ファイル名整理の復旧' };
 
 export function openRecordedFolderDialog() {
   if (currentDialog?.isConnected) { currentDialog.focus(); return currentDialog; }
@@ -56,12 +56,13 @@ export function openRecordedFolderDialog() {
     const rows = state?.result?.results || [];
     // These are the planned changes, in the same execution order as apply().
     // A recovery stops execution; subsequent unapplied rows were never attempted.
-    const actions = rows.filter(row => row.action === 'move' || row.action === 'repair')
+    const actions = rows.filter(row => Object.hasOwn(ACTIONS, row.action))
       .sort((a, b) => Number(b.action === 'move') - Number(a.action === 'move'));
     const recoveryIndex = actions.findIndex(row => row.status === 'recovery');
     const groups = [
       ['ファイル移動', actions.filter(row => row.status === 'complete' && row.action === 'move')],
       ['録画履歴のパス修正', actions.filter(row => row.status === 'complete' && row.action === 'repair')],
+      ['ファイル名整理の復旧', actions.filter(row => row.status === 'complete' && row.action === 'rename')],
       ['処理エラー', actions.filter((row, index) => ['failed', 'recovery'].includes(row.status) ||
         row.status === 'unapplied' && (recoveryIndex < 0 || index < recoveryIndex))]
     ];

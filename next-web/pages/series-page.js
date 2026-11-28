@@ -4,6 +4,7 @@ import { createProgramHover, programHoverInfo, setProgramHover } from '../compon
 import { headerCompactMedia, MOBILE_QUERY } from '../components/mobile-layout.js';
 import { openProgramDetailDialog } from '../components/program-detail-dialog.js';
 import { openSeriesBulkCorrectionDialog, openSeriesCorrectionDialog } from '../components/series-correction-dialog.js';
+import { openSeriesRenameDialog } from '../components/series-rename-dialog.js';
 import { createSeriesContextMenu } from '../components/series-context-menu.js';
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
 import { createHomeProgramContextMenu } from '../components/home-program-context-menu.js';
@@ -900,6 +901,11 @@ function renderSeriesDetail(host, series, tab, context) {
   mobileColumnSelect.add(new Option('表示: 2列', '2'));
   mobileColumnSelect.add(new Option('表示: 1列', '1'));
   mobileColumnSelect.value = mobileColumns;
+  const renameButton = document.createElement('button');
+  renameButton.type = 'button';
+  renameButton.className = 'button series-data-button button-with-spinner';
+  renameButton.textContent = 'ファイル名整理';
+  renameButton.addEventListener('click', () => openSeriesRenameDialog(currentSeries, renameButton));
   const hiddenButton = document.createElement('button');
   hiddenButton.type = 'button';
   hiddenButton.className = 'button series-data-button';
@@ -942,6 +948,7 @@ function renderSeriesDetail(host, series, tab, context) {
     }
     hiddenButton.textContent = currentSeries.hidden ? 'シリーズを再表示' : 'シリーズを非表示';
     hiddenButton.hidden = !Number.isInteger(Number(currentSeries.tid)) || Number(currentSeries.tid) <= 0;
+    renameButton.hidden = currentSeries.counts.currentRecordings === 0;
   }
 
   function renderGrid(firstRender = false, previousAnchor = null) {
@@ -1002,7 +1009,7 @@ function renderSeriesDetail(host, series, tab, context) {
   renderGrid(true);
   host.append(back, header, grid);
   return {
-    root: grid, seriesId: series.id, sizeSelect, columnSelect, mobileColumnSelect, hiddenButton,
+    root: grid, seriesId: series.id, sizeSelect, columnSelect, mobileColumnSelect, renameButton, hiddenButton,
     update(nextSeries, nextContext) {
       const anchor = seriesScrollAnchor(grid);
       currentSeries = nextSeries;
@@ -1588,7 +1595,7 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
           detailView = renderSeriesDetail(container, selected, tab, eventContext);
           installHeader(data, {
             showTabs: false,
-            detailControls: [detailView.sizeSelect, detailView.columnSelect, detailView.mobileColumnSelect, detailView.hiddenButton]
+            detailControls: [detailView.sizeSelect, detailView.columnSelect, detailView.mobileColumnSelect, detailView.renameButton, detailView.hiddenButton]
           });
         }
         return;

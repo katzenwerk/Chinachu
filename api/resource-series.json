@@ -39,6 +39,11 @@
     "methods": ["post"],
     "types": ["json"]
   },
+  "/rename": {
+    "script": "series",
+    "methods": ["post"],
+    "types": ["json"]
+  },
   "/overview": {
     "script": "series",
     "methods": ["get"],

@@ -118,7 +118,8 @@ async function assertRecordedCommandBehavior(source, serialSetting) {
 	const context = vm.createContext({
 		Promise, Date: { now: () => now },
 		config: { recordedCommand: '/fixture/hook', ...(serialSetting === undefined ? {} : { recordedCommandSerial: serialSetting }) }, shutdownStarted: false,
-		recordedCommandQueue: queued, recordedCommandRunning: false, recordedCommandTimer: null,
+		recordedCommandQueue: queued, recordedCommandRunning: false, recordedCommandsInFlight: 0, recordedCommandTimer: null,
+		isSeriesRenaming: () => false,
 		lastRecordingTransitionAt: now, reserves: [], recording: [], isRecordedForReserve: () => false,
 		setTimeout(callback, delay) { const timer = { callback, delay }; timers.push(timer); return timer; },
 		operatorLog: line => logs.push(line), printProgram: row => row.id,
@@ -137,10 +138,12 @@ async function assertRecordedCommandBehavior(source, serialSetting) {
 		},
 		writeRecordingData() {}, removeManualReserve: async () => {}, finishPendingRecording() {},
 		scheduleMatchLedgerUpdate() {}, wakePostProcessing() {}, completeOperatorShutdown() {},
+		requestCompletedRecordingCsv() {},
 		externalNotifier: { notify() {}, finish() {}, recordingResult() {} }, reportRecordingSaveFailure() {}
 	});
 	vm.runInContext(source.slice(source.indexOf('function postProcessingDelay()'), source.indexOf('// The automatic queue')) +
-		source.slice(source.indexOf('function wakeRecordedCommandQueue()'), source.indexOf('function discardRecordingAfterManualRemoval(')) +
+		source.slice(source.indexOf('function wakeRecordedCommandQueue()'), source.indexOf('async function requestCompletedRecordingCsv(')) +
+		source.slice(source.indexOf('function saveCompletedRecording('), source.indexOf('function discardRecordingAfterManualRemoval(')) +
 		source.slice(source.indexOf('function queueRecordedLedgerUpdate('), source.indexOf('function finishPendingRecording(')), context);
 	const tick = () => { assert.ok(timers.length); timers.shift().callback(); };
 	const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
@@ -148,7 +151,8 @@ async function assertRecordedCommandBehavior(source, serialSetting) {
 	let closeOutput;
 	const closed = new Promise(resolve => { closeOutput = resolve; });
 	const first = row('normal');
-	assert.strictEqual(await context.saveCompletedRecording(first, false, first.recorded, closed), true);
+	const historySave = context.saveCompletedRecording(first, false, first.recorded, closed);
+	await context.recordedLedgerWrites;
 	assert.strictEqual(written.length, 1); // History committed while the file is still open.
 	assert.strictEqual(queued.length, 0);
 	// Use the actual close handler: closing the output releases the hook gate.
@@ -156,9 +160,11 @@ async function assertRecordedCommandBehavior(source, serialSetting) {
 	Object.assign(context, { recFile: output, activeRecordingOutputs: new Set([output]),
 		resolveOutputClosed: closeOutput, outputFailed: false, onOutputError() {},
 		checkStorageAfterRecordingClose() {}, finalizeFilenameAfterClose: false,
-		program: first, historySave: Promise.resolve(false), probeDurationAfterClose: false });
+		program: first, historySave, probeDurationAfterClose: false });
 	vm.runInContext(source.slice(source.indexOf("\trecFile.once('close', () => {"), source.indexOf('\n\t// 内部用', source.indexOf("\trecFile.once('close', () => {"))), context);
-	output.emit('close'); await flush();
+	output.emit('close');
+	assert.strictEqual(await historySave, true);
+	await flush();
 	assert.strictEqual(context.activeRecordingOutputs.size, 0);
 	assert.strictEqual(queued.length, 1);
 	// Ten simultaneous completions include both forms of successful short recording.
@@ -181,7 +187,7 @@ async function assertRecordedCommandBehavior(source, serialSetting) {
 	assert.strictEqual(timers.length, serial ? 0 : 1);
 	if (!serial) {
 		// All ten children can start before any child closes.
-		while (timers.length) tick();
+		for (let index = 1; index < 10; index++) tick();
 		assert.strictEqual(launches.length, 10);
 	}
 	assert.strictEqual(launches[0].command, '/fixture/hook');
@@ -383,7 +389,7 @@ describe('Operator low-storage handling', function() {
 		assert.match(health.detail, /root filesystem protection/);
 	});
 
-	it('keeps recording-start safety, tuner identification, and capacity transition handling', async function() {
+	it('keeps recording-start safety, tuner identification, and capacity transition handling', { timeout: 5000 }, async function() {
 		const source = fs.readFileSync(path.join(__dirname, '..', 'app-operator.js'), 'utf8');
 		await assertHandoffBehavior(source);
 		for (const serial of [undefined, true, false]) await assertRecordedCommandBehavior(source, serial);
@@ -491,6 +497,7 @@ describe('Operator low-storage handling', function() {
 			},
 			writeRecordingData() {}, operatorLog() {}, printProgram: program => program.id,
 			removeManualReserve: async () => {}, finishPendingRecording() {}, scheduleMatchLedgerUpdate() {},
+			requestCompletedRecordingCsv() {},
 			externalNotifier: { notify() {}, finish() {}, recordingResult() {} },
 			config: {}, wakePostProcessing() {}, completeOperatorShutdown() {},
 			recordedThumbnailGenerator: { resume() {} },

@@ -315,19 +315,28 @@ exports.replaceEnclosingCharacters = function (value, map) {
 	return text;
 };
 
+var TECHNICAL_ATTRIBUTES = new Set('解 HV SD P W MV S SS B N 3D 2ndScr 2K 4K 8K 5.1 7.1 22.2 60P 120P d HC HDR Hi-Res Lossless SHV UHD'.split(' '));
+var PROGRAMME_ATTRIBUTES = new Set('新 終 字 吹 前 後 再 初 生 映 二 多 手 声 無 料 双 デ サ 天 交'.split(' '));
+var WORK_ATTRIBUTES = new Set('新 終 前 後'.split(' '));
+var CONTENT_ATTRIBUTES = new Set('字 吹 二 多 手 解'.split(' '));
+
+function enclosingLabel(mark) {
+	return DEFAULT_ENCLOSING_CHARACTER_MAP[mark]?.slice(1, -1);
+}
+
 // Only recognized edge attributes are removed from bracketed text. A lone
 // attached label may be part of a work name, so preserve it without evidence
 // from another programme attribute or a whitespace boundary.
 function compactFullTitle(value) {
-	var technical = new Set('解 HV SD P W MV S SS B N 3D 2ndScr 2K 4K 8K 5.1 7.1 22.2 60P 120P d HC HDR Hi-Res Lossless SHV UHD'.split(' '));
-	var programme = new Set('新 終 字 吹 前 後 再 初 生 映 二 多 手 声 無 料 双 デ サ 天 交'.split(' '));
+	var technical = TECHNICAL_ATTRIBUTES;
+	var programme = PROGRAMME_ATTRIBUTES;
 	var text = String(value || '');
 	Object.keys(DEFAULT_ENCLOSING_CHARACTER_MAP).forEach(function (mark) {
-		var label = DEFAULT_ENCLOSING_CHARACTER_MAP[mark].slice(1, -1);
+		var label = enclosingLabel(mark);
 		if (technical.has(label)) text = text.split(mark).join('');
 	});
 	var programmeMarks = Object.keys(DEFAULT_ENCLOSING_CHARACTER_MAP).filter(function (mark) {
-		return programme.has(DEFAULT_ENCLOSING_CHARACTER_MAP[mark].slice(1, -1));
+		return programme.has(enclosingLabel(mark));
 	});
 	var token = '(?:\\[[^\\]]+\\]|' + programmeMarks.join('|') + ')';
 	function labelName(label) { return (DEFAULT_ENCLOSING_CHARACTER_MAP[label] || label).slice(1, -1); }
@@ -352,8 +361,65 @@ function compactFullTitle(value) {
 	return text.trim();
 }
 
+var FLAG_TOKEN_SOURCE = '\\[[^\\[\\]]+\\]|［[^［］]+］|【[^【】]+】|\\([^()]+\\)|（[^（）]+）|' +
+	Object.keys(DEFAULT_ENCLOSING_CHARACTER_MAP).filter(mark => {
+		var label = enclosingLabel(mark);
+		return PROGRAMME_ATTRIBUTES.has(label) || TECHNICAL_ATTRIBUTES.has(label);
+	}).join('|');
+
+function filenameFlags(program, workOnly) {
+	var title = String(program.fullTitle || '').trim();
+	var originalTitle = String(program.title || '').trim();
+	var subtitle = String(program.subTitle || '').trim();
+	var protectedParts = [originalTitle, subtitle].filter(Boolean).map(part => {
+		var start = title.indexOf(part);
+		return [start, start + part.length];
+	}).filter(([start]) => start >= 0);
+	var labelOf = token => enclosingLabel(token) || token.slice(1, -1).normalize('NFKC').trim();
+	var byEdge = new RegExp('^(?:(?:' + FLAG_TOKEN_SOURCE + ')\\s*)+|(?:\\s*(?:' + FLAG_TOKEN_SOURCE + '))+$', 'gu');
+	var flags = new Set();
+	for (var cluster of title.matchAll(byEdge)) {
+		if (cluster[0].trim() === title) continue;
+		for (var token of cluster[0].matchAll(new RegExp(FLAG_TOKEN_SOURCE, 'gu'))) {
+			var label = labelOf(token[0]);
+			if (!(WORK_ATTRIBUTES.has(label) || !workOnly && CONTENT_ATTRIBUTES.has(label))) continue;
+			var index = cluster.index + token.index;
+			if (protectedParts.some(([start, end]) => index >= start && index < end)) continue;
+			// Parentheses can enclose a title or subtitle at the edge as well as a mark.
+			if (['前', '後'].includes(label) && /^[(（【]/u.test(token[0]) && !/\s/u.test(title[index - 1] || '') &&
+				!(/\s/u.test(title[index + token[0].length] || '')) &&
+				!originalTitle && !enclosingLabel(token[0])) continue;
+			flags.add(label);
+		}
+	}
+	return [...flags].map(label => '[' + label + ']').join('');
+}
+
+function seriesFullTitle(series, flags) {
+	if (!series?.title || !Array.isArray(series.episodes) || !series.episodes.length) return null;
+	var numbers = series.episodes.map(episode => episode.number);
+	var numeric = numbers.every(number => Number.isSafeInteger(number) && number > 0);
+	var format = number => String(number).padStart(2, '0');
+	var labels = series.episodes.map(episode => Number.isSafeInteger(episode.number) && episode.number > 0 ?
+		format(episode.number) : typeof episode.label === 'string' ? episode.label.trim() : '');
+	if (labels.some(label => !label)) return null;
+	var episodeText = numeric && numbers.length > 1 && numbers.every((number, index) => number === numbers[0] + index) ?
+		labels[0] + '-' + labels[labels.length - 1] : labels.join('+');
+	var subtitles = series.episodes.map(episode => episode.subtitle);
+	var subtitle = subtitles.every(Boolean) ? [...new Set(subtitles)].join('／') : series.epgSubtitle;
+	var first = series.episodes.some(episode => episode.first === true);
+	var last = series.episodes.some(episode => episode.last === true);
+	if (first || last) {
+		var markers = new Set(flags.match(/\[[^\]]+\]/gu) || []);
+		var boundaries = ['[新]', '[終]'].filter(mark => (mark === '[新]' ? first : last) || markers.has(mark));
+		flags = boundaries.concat([...markers].filter(mark => !boundaries.includes(mark))).join('');
+	}
+	return series.title + ' #' + episodeText + (subtitle ? '「' + subtitle + '」' : '') + flags;
+}
+
 exports.formatRecordedName = function (program, name, options) {
 	options = options || {};
+	var flagsOnly = name === '<flags2>';
 
 	name = name.replace(/<([^>]+)>/g, function (z, a) {
 
@@ -397,6 +463,11 @@ exports.formatRecordedName = function (program, name, options) {
 		if (a.match(/^fulltitle$/) !== null) { return exports.stripFilename(program.fullTitle || ''); }
 
 		if (a === 'fulltitle2') { return exports.stripFilename(compactFullTitle(program.fullTitle)); }
+		if (a === 'flags2') { return filenameFlags(program, options.seriesFlagsWorkOnly === true); }
+		if (a === 'fulltitle3') {
+			return exports.stripFilename(seriesFullTitle(options.series, filenameFlags(program, options.seriesFlagsWorkOnly === true)) ??
+				compactFullTitle(program.fullTitle));
+		}
 
 		// subtitle
 		if (a.match(/^subtitle$/) !== null) { return exports.stripFilename(program.subTitle || ''); }
@@ -420,8 +491,11 @@ exports.formatRecordedName = function (program, name, options) {
 	if (options.replaceEnclosingCharacters === true || options.needToReplaceEnclosingCharacters === true) {
 		name = exports.replaceEnclosingCharacters(name, options.enclosingCharacterMap);
 	}
+	if (flagsOnly && !name && typeof options.originalExtension !== 'string') return '';
 
-	var info = path.parse(name);
+	var info = typeof options.originalExtension === 'string' ?
+		{ dir: '', name: exports.stripFilename(name).replace(/[\u0000-\u001f\u007f]/gu, ' ').trim(), ext: options.originalExtension } :
+		path.parse(name);
 	var limit = 255 - Buffer.byteLength(info.ext);
 	var basename = info.name;
 	while (Buffer.byteLength(basename) > limit) {

@@ -46,6 +46,7 @@ const FIELD = {
   vaapiDevice: { label: 'VA-APIデバイス', type: 'text', empty: 'string', inputSize: 'medium' },
   recordedDir: { label: 'デフォルト録画先', type: 'text', required: true },
   recordedFormat: { label: '録画ファイル名フォーマット', type: 'text', required: true },
+  seriesRenameFormat: { label: 'シリーズ整理時のファイル名形式', type: 'text' },
   recordedFolderOrganizeOrder: { label: '振り分け判定の優先順位', type: 'text', select: [
     { value: 'filename', label: 'ファイル名 → 作品名 → 過去実績' },
     { value: 'title', label: '作品名 → ファイル名 → 過去実績' },
@@ -492,9 +493,12 @@ export function renderSettingsPage(container) {
 
     const naming = card('録画ファイル名', '録画ファイルの名前と、放送属性を表す囲み文字の扱いを設定します。');
     const format = bindValueField('recordedFormat', '録画ファイルの名前を決める設定です。番組名、放送日時、チャンネル名などを組み合わせて指定できます。', { wide: true });
+    const seriesFormat = bindValueField('seriesRenameFormat', 'シリーズ詳細の「ファイル名整理」で使用します。元の拡張子が付くため、形式には拡張子を含めません。', {
+      wide: true, placeholder: '<fulltitle3> <channel-code>[<date:yyyy-mm-dd HHMM>]'
+    });
     const prefix = bindBoolean('recordingFilenamePrefixEnabled', '録画中ファイル名に【録画中】を付与', '録画中だけファイル名の先頭に付け、終了後に除去します。録画後コマンドで同様の処理をしている場合は併用しないでください。');
     const replace = bindBoolean('recordedNameReplaceEnclosingCharacters', '囲み文字の置換', '録画ファイル名に含まれる「🈟」「🈞」「🈑」などを「[新]」「[再]」「[字]」へ置き換えます。番組表の表示は変更されません。');
-    naming.body.append(format.wrap, prefix.wrap, replace.wrap);
+    naming.body.append(format.wrap, seriesFormat.wrap, prefix.wrap, replace.wrap);
 
     const organizing = card('録画フォルダ振り分け', '録画終了後に既存サブフォルダへ振り分けます。変更内容の反映条件は保存確認画面に表示されます。');
     const organizeEnabled = bindBoolean('recordedFolderOrganizeEnabled', '録画終了後に自動振り分け', '録画先直下の既存フォルダだけを使用します。別の録画先への移動やフォルダ作成はしません。');

@@ -401,6 +401,7 @@ let storageRefreshServer = null;
 let recordedThumbnailServer = null;
 let recordedFolderApply = null;
 function isFolderOrganizing() { return recordedFolderApply?.isBusy() === true; }
+function isSeriesRenaming() { return isFolderOrganizing() && recordedFolderApply.get()?.action === 'rename'; }
 function folderPendingId() {
 	try { return require('./lib/recorded-folder-maintenance').pendingId(__dirname); }
 	catch (error) { operatorLog('WARNING: folder organize recovery record: ' + error.message); return '*'; }
@@ -427,6 +428,7 @@ const activeDurationProbeJobs = new Map();
 const durationProbeQueue = [];
 const recordedCommandQueue = [];
 let recordedCommandRunning = false;
+let recordedCommandsInFlight = 0;
 let recordedCommandTimer = null;
 let recordedLedgerWrites = Promise.resolve();
 let pendingRecordedLedgerWrites = 0;
@@ -526,17 +528,21 @@ recordedMaintenance = recordedMaintenanceModule.createMaintenance({
 
 recordedFolderApply = require('./lib/recorded-folder-jobs').createJobs({
 	root: __dirname, compact: true,
-	canStart: () => {
+	canStart: action => {
 		if (shutdownStarted || recordedMaintenance.isBusy() || (recordedThumbnailGenerator.getState().active || recordedThumbnailGenerator.getState().pending) ||
 			durationProbeQueue.length || activeDurationProbes.size || pendingRecordedLedgerWrites || matchLedgerProcess ||
 			Number.isFinite(recordedMaintenance.nextRequestedAt())) {
 			throw recordedThumbnailRequestError('postprocessing_busy', 409, '録画後処理・録画保守の処理中です。完了後に再実行してください。');
+		}
+		if (action === 'rename' && (recordedCommandsInFlight || recordedCommandQueue.length)) {
+			throw recordedThumbnailRequestError('recorded_command_busy', 409, '録画後コマンドの完了後に再実行してください。');
 		}
 	},
 	onDone: () => {
 		try { recorded = reservationStore.readArray(RECORDED_DATA_FILE); }
 		catch (error) { operatorLog('WARNING: folder organize ledger reload failed: ' + error.message); }
 		wakePostProcessing();
+		wakeRecordedCommandQueue();
 		if (shutdownStarted) completeOperatorShutdown();
 	}
 });
@@ -1216,7 +1222,7 @@ function reportRecordingSaveFailure(program, error) {
 // launches wait for the existing recording-transition window; running hooks stay.
 // Serial execution is the default; parallel mode shares all launch conditions.
 function wakeRecordedCommandQueue() {
-	if (shutdownStarted || (config.recordedCommandSerial !== false && recordedCommandRunning) ||
+	if (shutdownStarted || isSeriesRenaming() || (config.recordedCommandSerial !== false && recordedCommandRunning) ||
 		recordedCommandTimer !== null || !recordedCommandQueue.length) return;
 	recordedCommandTimer = setTimeout(() => {
 		recordedCommandTimer = null;
@@ -1226,7 +1232,7 @@ function wakeRecordedCommandQueue() {
 
 function runRecordedCommandQueue() {
 	const serial = config.recordedCommandSerial !== false;
-	if (shutdownStarted || (serial && recordedCommandRunning) || !recordedCommandQueue.length) return;
+	if (shutdownStarted || isSeriesRenaming() || (serial && recordedCommandRunning) || !recordedCommandQueue.length) return;
 	const delay = postProcessingDelay();
 	if (delay > 0) {
 		recordedCommandTimer = setTimeout(() => {
@@ -1237,10 +1243,12 @@ function runRecordedCommandQueue() {
 	}
 	const job = recordedCommandQueue.shift();
 	recordedCommandRunning = serial;
+	recordedCommandsInFlight++;
 	let finished = false;
 	const finish = () => {
 		if (finished) return;
 		finished = true;
+		recordedCommandsInFlight--;
 		if (serial) recordedCommandRunning = false;
 		wakeRecordedCommandQueue();
 	};
@@ -4424,9 +4432,10 @@ function handleRecordedThumbnailRequest(request) {
 		return { accepted: true, status: 'stopping' };
 	}
 	if (request && request.folderOrganize === true) {
-		if (request.action === 'state') return { version: 1, busy: isFolderOrganizing(), job: recordedFolderApply.get(), pending: recordedFolderApply.pending() };
-		if (request.action !== 'run') throw recordedThumbnailRequestError('invalid_request', 400, '振り分け操作が不正です。');
-		return { version: 1, job: recordedFolderApply.start('run', { requestId: request.requestId }) };
+		if (request.action === 'state') return { version: 1, seriesRename: true, busy: isFolderOrganizing(),
+			job: recordedFolderApply.get(), pending: recordedFolderApply.pending() };
+		if (!['run', 'rename'].includes(request.action)) throw recordedThumbnailRequestError('invalid_request', 400, '振り分け操作が不正です。');
+		return { version: 1, job: recordedFolderApply.start(request.action, { requestId: request.requestId }) };
 	}
 	if (isFolderOrganizing() && !request?.organizerIndex && !(request?.maintenance === true ?
 		['state', 'monitor-status'].includes(request.maintenanceAction) : request?.action === 'status')) {

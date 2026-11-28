@@ -84,6 +84,25 @@ describe("formatRecordedName", function() {
 		assert.strictEqual(chinachu.formatRecordedName({ channel: { type: 'CS', sid: '' } }, 'x<channel-code>.ts'), 'x.ts');
 		assert.strictEqual(chinachu.formatRecordedName({}, 'x<channel-code>.ts'), 'x.ts');
 
+		const seriesProgram = { ...program, title: '作品[字]', fullTitle: '🈟[HV]作品[字] #7「（前）」［字］（解）🈞🈑', subTitle: '（前）' };
+		const series = { title: '作品 第2期', episodes: [{ number: 7, subtitle: '副題' }] };
+		assert.strictEqual(chinachu.formatRecordedName(seriesProgram, '<flags2>.ts'), '[新][字][解].ts');
+		assert.strictEqual(chinachu.formatRecordedName(seriesProgram, '<fulltitle3>.ts', { series }), '作品 第2期 #07「副題」[新][字][解].ts');
+		const first = { ...series, episodes: [{ ...series.episodes[0], first: true }] };
+		assert.strictEqual(chinachu.formatRecordedName(seriesProgram, '<fulltitle3>.ts', { series: first }), '作品 第2期 #07「副題」[新][字][解].ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...seriesProgram, fullTitle: '作品🈑' },
+			'<fulltitle3>|<flags2>', { series: first }), '作品 第2期 #07「副題」[新][字]|[字]');
+		assert.strictEqual(chinachu.formatRecordedName(seriesProgram, '<flags2>.ts', { seriesFlagsWorkOnly: true }), '[新].ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...seriesProgram, fullTitle: '作品[字]' }, '<flags2>x'), 'x');
+		assert.strictEqual(chinachu.formatRecordedName({ ...seriesProgram, fullTitle: '作品[字]' }, '<flags2>'), '');
+		assert.strictEqual(chinachu.formatRecordedName(seriesProgram, '<fulltitle3>.ts'), chinachu.formatRecordedName(seriesProgram, '<fulltitle2>.ts'));
+		assert.strictEqual(chinachu.formatRecordedName({ ...seriesProgram, fullTitle: '作品' }, '<fulltitle3>.ts', {
+			series: { title: '作品', episodes: [{ number: 99, first: true }, { number: 100, last: true }] }
+		}), '作品 #99-100[新][終].ts');
+		assert.strictEqual(chinachu.formatRecordedName({ ...seriesProgram, fullTitle: '作品' }, '<fulltitle3>.ts', {
+			series: { title: '作品', epgSubtitle: 'EPG副題', episodes: [{ number: 7 }, { number: 101 }] }
+		}), '作品 #07+101「EPG副題」.ts');
+
 		assert.strictEqual(JSON.stringify(program), before);
 		var expanded = "[2ndScr]".repeat(80);
 		var limited = chinachu.formatRecordedName({ start: 0, channel: {}, title: "🆜".repeat(80) }, "<title>.m2ts", { replaceEnclosingCharacters: true });

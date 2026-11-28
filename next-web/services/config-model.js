@@ -13,7 +13,7 @@ const STORAGE_THRESHOLD_KEYS = new Set([...STORAGE_THRESHOLD_GB_KEYS, ...STORAGE
 
 const KNOWN_KEYS = new Set([
   'externalNotifications', 'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs',
-  'recordedFormat', 'recordedCommand', 'recordedCommandSerial', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
+  'recordedFormat', 'seriesRenameFormat', 'recordedCommand', 'recordedCommandSerial', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
   'recordedThumbnailAutoEnabled', 'recordingFilenamePrefixEnabled', 'recordedFolderOrganizeEnabled', 'recordedFolderOrganizeOrder',
   'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm', 'epgTitleHalfWidthEnabled',
   'vaapiEnabled', 'vaapiDevice', 'recordingBoundaryPolicy', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode', 'autoTsMaxRecordings',
@@ -89,6 +89,7 @@ const CONFIG_APPLICATION = {
   recordedStorage: application(['operator', 'wui', 'history'], storageSettings),
   recordedDirs: application(['operator', 'wui', 'scheduler', 'history'], value => (value || []).map(item => ({ ...item, storage: storageSettings(item.storage) }))),
   recordedFormat: application(['operator', 'history']),
+  seriesRenameFormat: application(['seriesRename'], value => typeof value === 'string' && value.trim() || ''),
   recordedCommand: application(['operator'], value => value || ''),
   recordedCommandSerial: application(['operator'], defaultOn),
   ffprobeCommand: application(['operator'], value => typeof value === 'string' && value.trim() || 'ffprobe'),
@@ -168,6 +169,7 @@ export function configApplicationMessages(effects) {
   if (effects.scheduler) messages.push(`${prefix}次回Scheduler実行時に反映されます。`);
   if (effects.epg) messages.push(`${prefix}次回EPG取得時に反映されます。`);
   if (effects.history) messages.push(`${prefix}次回履歴・照合処理時に反映されます。`);
+  if (effects.seriesRename) messages.push(`${prefix}次回のシリーズファイル名整理から反映されます。`);
   if (effects.connectionChanged) messages.push('待受IP・ポート・アクセス制限の変更により、WUI再起動後は現在のURLで接続できなくなる可能性があります。');
   if (effects.unknown.length) messages.push(`反映条件を確認できない設定：${effects.unknown.join(', ')}`);
   return messages;
@@ -268,6 +270,10 @@ export function normalizeRecordedDirs(rows) {
 
 export function validateConfig(config) {
   const errors = [];
+  if (config.seriesRenameFormat !== undefined && (typeof config.seriesRenameFormat !== 'string' ||
+      config.seriesRenameFormat.length > 1024 || /[\u0000-\u001f\u007f]/u.test(config.seriesRenameFormat))) {
+    errors.push('シリーズ整理時のファイル名形式を確認してください。');
+  }
   if (typeof config.recordedDir !== 'string' || config.recordedDir.trim() === '') errors.push('デフォルト録画先は必須です。');
   if (config.recordingBoundaryPolicy !== undefined && !['start', 'end'].includes(config.recordingBoundaryPolicy)) {
     errors.push('録画境界の優先方針が不正です。');

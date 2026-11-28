@@ -27,6 +27,8 @@
 				if (Object.keys(storageLow.STORAGE_THRESHOLD_LEGACY_KEYS).some(key =>
 					Object.hasOwn(obj, key) && !storageLow.isStorageThresholdGB(key, obj[key]))) return response.error(400);
 				if (typeof validateDramaDictionarySettings === 'function' && !validateDramaDictionarySettings(obj)) return response.error(400);
+				if (typeof recordedFolderJobs !== 'undefined' && recordedFolderJobs.validRenameFormat &&
+					!recordedFolderJobs.validRenameFormat(obj.seriesRenameFormat)) return response.error(400);
 				// Refuse to replace a config that became invalid after the page was loaded.
 				JSON.parse(fs.readFileSync(define.CONFIG_FILE, 'utf8'));
 				delete obj.externalNotifications;

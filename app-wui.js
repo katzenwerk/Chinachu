@@ -258,6 +258,7 @@ const seriesService = seriesServiceModule.createSeriesService({
 	getDictionaryStatus: () => dictionaryManager && dictionaryManager.getStatus(),
 	channelMapPath: SERIES_CHANNEL_MAP_FILE,
 	progLookupPath: SERIES_PROGLOOKUP_CACHE_FILE,
+	schedulePath: SCHEDULE_DATA_FILE,
 	onPublished: (generation, identities) => {
 		ios.emit('notify-series', { generation });
 		if (seriesUseSyobocal) {
@@ -364,6 +365,7 @@ const recordedFolderJobs = require('./lib/recorded-folder-service').createServic
 		const snapshot = seriesService.getSnapshot();
 		return !snapshot.building && !snapshot.manualPending && recordedFolderSeries?.generation === snapshot.generation ? recordedFolderSeries : null;
 	},
+	getSeriesDetail: id => seriesService.getCurrentSeries(id),
 	cleanerBusy: () => ledgerCleanerJobs.get()?.status === 'running',
 	onChanged: () => { seriesService.invalidate({ retain: true }); ios.emit('notify-recorded'); ios.emit('notify-match'); }
 });
@@ -1495,6 +1497,7 @@ chinachu.jsonWatcher(
 
 		schedule = data;
 		if (seriesUseSyobocal) {
+			seriesService.invalidate({ retain: true });
 			syobocalChannelMapManager.rebuild({ refreshCatalog: true }).then(result => {
 				if (result && result.created) progLookupUpdater.requestTick();
 			});

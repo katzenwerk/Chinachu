@@ -4,6 +4,16 @@
 	try {
 		var route = request.url.split('?')[0];
 		var input = request.query || {};
+		if (route === '/api/series/rename.json') {
+			if (request.method !== 'POST') return response.error(405);
+			if (!['rename-preview', 'rename-run', 'rename-state'].includes(input.action)) return response.error(400);
+			if (typeof recordedFolderJobs === 'undefined' || typeof recordedFolderJobs.validRenameFormat !== 'function') {
+				throw Object.assign(new Error('ファイル名整理を利用するにはWUIの更新が必要です。'), { statusCode: 503 });
+			}
+			var result = await recordedFolderJobs.request(input);
+			response.head(200);
+			return response.end(JSON.stringify(result));
+		}
 		var command;
 		var views = { '/api/series.json': 'full', '/api/series/overview.json': 'overview',
 			'/api/series/detail.json': 'series', '/api/series/attention.json': 'attention',

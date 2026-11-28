@@ -196,6 +196,10 @@ export async function setSeriesHidden(tid, hidden, { signal, generation } = {}) 
   return response.result;
 }
 
+export function requestSeriesRename(input) {
+  return requestJson('/api/series/rename.json', { method: 'POST', body: JSON.stringify(input) });
+}
+
 export function listLocalSeries(q = '', { signal } = {}) {
   return requestJson('/api/series/local.json?q=' + encodeURIComponent(q), { method: 'GET', signal });
 }
