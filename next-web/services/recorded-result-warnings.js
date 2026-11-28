@@ -254,6 +254,50 @@ export function recordedResultWarnings(item) {
     : warnings;
 }
 
+const postProcessingNames = { ffprobe: 'ffprobe', thumbnail: 'サムネイル', ts: 'TS解析' };
+
+export function recordingPostProcessingStates(snapshot) {
+  const recordings = new Map();
+  for (const [state, jobs] of [['waiting', snapshot?.waiting], ['running', snapshot?.running]]) {
+    for (const { id, type } of jobs || []) {
+      if (id == null || !Object.hasOwn(postProcessingNames, type)) continue;
+      const key = String(id);
+      if (!recordings.has(key)) recordings.set(key, {});
+      recordings.get(key)[type] = state;
+    }
+  }
+  return recordings;
+}
+
+export function seriesRecordingStatuses(item, tasks, autoTsEnabled = false, sourceMissing = false) {
+  const available = item.current === true && recordedStatus(item) && recordedFileState(item) === 'normal' &&
+    !item.deleted && !item.recordingPathMissing && !item.operatorResumePending && !sourceMissing;
+  const statuses = recordedResultWarnings(item)
+    .filter(value => !['deleted', 'recorded-unknown', 'path-unknown'].includes(value.key))
+    .filter(value => value.key !== 'ts-drop-incomplete' || available)
+    .map(value => value.key === 'ts-drop-incomplete' ? { ...value, kind: 'post-processing', tone: 'muted' } : value);
+  if (!available) return statuses;
+
+  const result = item.savedTsAnalysis?.result;
+  if (result?.status === 'ERROR') {
+    statuses.push(warning('ts-analysis-error', 'TS解析失敗', result.error, 'processing-error'));
+  } else if (!tasks?.ts && (result ? result.completed !== true : autoTsEnabled)) {
+    statuses.push(warning('ts-analysis-incomplete', 'TS解析未完了', result?.stopReason, 'post-processing', 'muted'));
+  }
+
+  for (const [type, name] of Object.entries(postProcessingNames)) {
+    if (!tasks?.[type]) continue;
+    statuses.push(warning(`${type}-${tasks[type]}`, `${name}${tasks[type] === 'running' ? '実行中' : '待ち'}`,
+      null, 'post-processing', 'muted'));
+  }
+  return statuses;
+}
+
+export function seriesRecordingIndicator(statuses) {
+  if (statuses.some(status => status.kind !== 'post-processing')) return 'warning';
+  return statuses.length ? 'muted' : null;
+}
+
 export function hasRecordedResultWarnings(item) {
   if (recordedFileState(item) === 'deleted') return false;
   return recordedResultWarnings(item).some(value =>

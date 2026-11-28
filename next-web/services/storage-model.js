@@ -1,3 +1,5 @@
+import { formatStorageGB } from './storage-thresholds.js';
+
 const UNAVAILABLE_LABELS = {
   'not-mounted': '未マウント',
   'wrong-storage': 'ストレージ不一致',
@@ -42,8 +44,7 @@ function formatCapacityPair(used, total) {
 
 export function formatThreshold(value) {
   if (!finite(value) || value <= 0) return '未設定';
-  if (value >= 1024) return `${Math.round(value / 1024 * 10) / 10} GB`;
-  return `${value} MB`;
+  return formatStorageGB(value);
 }
 
 function thresholdPosition(thresholdMB, total) {

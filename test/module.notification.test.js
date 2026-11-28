@@ -19,7 +19,9 @@ function prepareSettings(root) {
 	for (const [route, values] of Object.entries(routes)) external.update(root, { route, values });
 	return routes;
 }
-async function drain() { await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve)); }
+async function drain() {
+	for (let turn = 0; turn < 3; turn++) await new Promise(resolve => setImmediate(resolve));
+}
 
 const workerPath = path.join(__dirname, 'fixtures', 'notification-worker.js');
 
@@ -67,6 +69,7 @@ describe('notification behavior contracts', function() {
 		assert.deepStrictEqual(JSON.parse(fs.readFileSync(outputPath, 'utf8')), payload);
 		assert.strictEqual(payload.event, 'storage-low');
 		assert.strictEqual(payload.severity, 'critical');
+		assert.match(payload.message, /^Current Free Space is 0\.00 GB\.\nThreshold is 2\.9296875 GB\./);
 		assert.strictEqual(payload.metadata.recordedDir, '/録画 data/$HOME `command` "quoted" $(touch ' + injectedMarker + ')');
 		assert.deepStrictEqual(payload.metadata, {
 			availableBytes: 1048576,
@@ -89,6 +92,7 @@ describe('notification behavior contracts', function() {
 		});
 		assert.strictEqual(warning.event, 'storage-low');
 		assert.strictEqual(warning.severity, 'warning');
+		assert.strictEqual(warning.message, 'Current Free Space is 0.00 GB.\nThreshold is 9.765625 GB.');
 		assert.strictEqual(warning.metadata.phase, 'warning');
 		assert.strictEqual(warning.metadata.action, 'remove');
 
@@ -304,14 +308,28 @@ describe('notification behavior contracts', function() {
 		assert.strictEqual(delivered.length, 1);
 		notifier.conflicts([]); notifier.conflicts([program]); await drain();
 		assert.strictEqual(delivered.length, 2);
-		const low = { filesystemKey: 'fixture-disk', phase: 'cleanup', availableBytes: 1024, destinations: ['/fixture'] };
-		notifier.storage(low); notifier.storage(low); await drain();
+		const low = { filesystemKey: 'fixture-disk', phase: 'cleanup', availableBytes: 512 * 1024 ** 2, destinations: ['/fixture'] };
+		notifier.storage(low, { cleanupThresholdMB: 30720 }); notifier.storage(low); await drain();
 		assert.strictEqual(delivered.length, 3);
+		assert.match(delivered.at(-1), /空き容量: 0\.50 GB\n容量不足閾値: 30 GB/);
 		notifier.storage({ ...low, phase: null }); notifier.storage(low); await drain();
 		assert.strictEqual(delivered.length, 4);
 		const resolver = require('../lib/match-detail-resolver');
 		const key = resolver.makeCanonicalKey(program);
-		notifier.outcomes([{ schemaVersion: 2, key, status: 'RESERVED', start: 1000 }]); await drain();
+		const recordingFile = path.join(temporaryDir, 'data/recording.json');
+		const recordedFile = path.join(temporaryDir, 'data/recorded.json');
+		const matchFile = path.join(temporaryDir, 'data/match.json');
+		const stateFile = path.join(temporaryDir, 'data/external-notification-state.json');
+		const writeRows = (file, rows) => fs.writeFileSync(file, JSON.stringify(rows));
+		const readOutcomes = () => JSON.parse(fs.readFileSync(stateFile, 'utf8')).outcomes;
+		const missedRow = entry => ({ schemaVersion: 2, key: resolver.makeCanonicalKey(entry), status: 'MISSED', fullTitle: entry.title });
+		const historical = missedRow({ ...program, start: 500 });
+		writeRows(recordingFile, []);
+		writeRows(recordedFile, []);
+		writeRows(matchFile, [historical]);
+		notifier.refreshOutcomes(); await drain();
+		assert.strictEqual(delivered.length, 4);
+		assert.strictEqual(readOutcomes()[historical.key], 'failure');
 		notifier.finish('failure', program, 'NG RECORDING');
 		notifier.finish('failure', program, 'NG RECORDING'); await drain();
 		notifier.outcomes([{ schemaVersion: 2, key, status: 'MISSED', start: 1000 }]); await drain();
@@ -349,12 +367,12 @@ describe('notification behavior contracts', function() {
 		// Warning reminders share the existing storage transition contract, without changing critical deduplication.
 		let warningNow = 1000;
 		notifier = external.createNotifier(temporaryDir, log, { ...dependencies, now: () => warningNow });
-		const warning = { ...low, phase: 'warning' };
-		const warningOptions = { warningIntervalMs: 60000, warningThresholdMB: 50000 };
+		const warning = { ...low, phase: 'warning', availableBytes: Math.round(284.52 * 1024 ** 3) };
+		const warningOptions = { warningIntervalMs: 60000, warningThresholdMB: 300 * 1024 };
 		notifier.storage(warning, warningOptions); notifier.storage(warning, warningOptions); await drain();
 		assert.strictEqual(delivered.length, 9);
 		assert.match(delivered.at(-1), /ストレージ容量低下/);
-		assert.match(delivered.at(-1), /警告閾値: 50000 MB/);
+		assert.match(delivered.at(-1), /空き容量: 284\.52 GB\n警告閾値: 300 GB/);
 		notifier = external.createNotifier(temporaryDir, log, { ...dependencies, now: () => warningNow });
 		warningNow += 59999;
 		notifier.storage(warning, warningOptions); await drain();
@@ -371,12 +389,52 @@ describe('notification behavior contracts', function() {
 		warningNow += 60000;
 		notifier.storage(warning, warningOptions); await drain();
 		assert.strictEqual(delivered.length, 12);
-		fs.writeFileSync(path.join(temporaryDir, 'data/external-notification-state.json'), '{invalid');
+
+		const finalizing = { ...program, start: missedStart + 60000, title: 'Recovery pending',
+			operatorRecordingEnd: missedStart + 120000, _operatorHistoryPending: true };
+		const saved = { ...program, start: missedStart + 120000, title: 'Saved before post-processing',
+			operatorRecordingEnd: missedStart + 180000 };
+		const offline = { ...program, start: missedStart + 180000, title: 'Missed while offline' };
+		const aborted = { ...program, start: missedStart + 240000, title: 'Aborted' };
+		const recoveryRows = [finalizing, saved, offline, aborted].map(missedRow);
+		writeRows(recordingFile, [finalizing, aborted]);
+		writeRows(recordedFile, [{ ...saved, id: 'saved-history-id' }]);
+		writeRows(matchFile, recoveryRows);
+		// Startup notification uses persisted MATCH and fresh ledgers while recovery is in progress.
+		notifier = external.createNotifier(temporaryDir, log, dependencies);
+		notifier.refreshOutcomes(); await drain();
+		assert.deepStrictEqual(readOutcomes(), { [recoveryRows[2].key]: 'failure' });
+		assert.strictEqual(delivered.length, 13);
+		assert.match(delivered.at(-1), /Missed while offline/);
+
+		notifier.finish('abort', aborted, 'ABORT RECORDING');
+		notifier.finish('abort', aborted, 'ABORT RECORDING'); await drain();
+		assert.strictEqual(delivered.length, 14);
+		assert.match(delivered.at(-1), /録画中止/);
+		assert.strictEqual(readOutcomes()[recoveryRows[3].key], 'abort');
+
+		writeRows(recordingFile, []);
+		fs.unlinkSync(recordedFile);
+		const ledgerLogs = [];
+		const beforeRetry = readOutcomes();
+		external.createNotifier(temporaryDir, line => ledgerLogs.push(line), dependencies).refreshOutcomes(); await drain();
+		assert.deepStrictEqual(readOutcomes(), beforeRetry);
+		assert.strictEqual(delivered.length, 14);
+		assert.match(ledgerLogs[0], /recording ledger read failed/);
+
+		writeRows(recordedFile, [saved]);
+		notifier.refreshOutcomes(); notifier.refreshOutcomes(); await drain();
+		assert.strictEqual(delivered.length, 15);
+		assert.match(delivered.at(-1), /Recovery pending/);
+		assert.strictEqual(readOutcomes()[recoveryRows[1].key], undefined);
+		assert.strictEqual(readOutcomes()[recoveryRows[0].key], 'failure');
+
+		fs.writeFileSync(stateFile, '{invalid');
 		const stateLogs = [];
 		external.createNotifier(temporaryDir, line => stateLogs.push(line), dependencies).conflicts([program]); await drain();
-		assert.strictEqual(delivered.length, 12);
+		assert.strictEqual(delivered.length, 15);
 		assert.strictEqual(stateLogs.length, 1);
-		assert.strictEqual(fs.readFileSync(path.join(temporaryDir, 'data/external-notification-state.json'), 'utf8'), '{invalid');
+		assert.strictEqual(fs.readFileSync(stateFile, 'utf8'), '{invalid');
 	});
 
 });

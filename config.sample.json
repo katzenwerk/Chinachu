@@ -6,9 +6,9 @@
   "recordedDir": "./recorded/",
   "recordedDirs": [],
 
-  "storageLowSpaceWarningThresholdMB": 512000,
+  "storageLowSpaceWarningThresholdGB": 500,
   "storageLowSpaceWarningIntervalMinutes": 1440,
-  "storageLowSpaceThresholdMB": 30720,
+  "storageLowSpaceThresholdGB": 30,
   "storageLowSpaceAction": "stop-new",
   "storageLowSpaceCriticalNotifyIntervalMinutes": 60,
 

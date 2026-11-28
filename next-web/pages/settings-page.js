@@ -17,6 +17,7 @@ import { getPendingRestart, subscribePendingRestart } from '../services/service-
 import {
   DROP_DETECTION_MODES,
   cloneConfig,
+  configDraft,
   configForSave,
   configPreview,
   configChanges,
@@ -61,9 +62,9 @@ const FIELD = {
   dropDetectionMode: { label: 'DROP検出方式', type: 'text', select: DROP_DETECTION_MODES },
   autoTsMaxRecordings: { label: '解析を許可する同時録画数', type: 'number', integer: true, min: 0 },
   recordedStorageWakeupBeforeSec: { label: '録画先HDDの事前起動', type: 'number', integer: true, min: 0 },
-  storageLowSpaceWarningThresholdMB: { label: '警告する空き容量', type: 'number', min: 0 },
+  storageLowSpaceWarningThresholdGB: { label: '警告する空き容量（GB）', type: 'number', min: 0, step: 0.1 },
   storageLowSpaceWarningIntervalMinutes: { label: '再通知間隔', type: 'number', exclusiveMin: 0 },
-  storageLowSpaceThresholdMB: { label: '容量不足と判定する空き容量', type: 'number', exclusiveMin: 0 },
+  storageLowSpaceThresholdGB: { label: '容量不足と判定する空き容量（GB）', type: 'number', min: 0.1, step: 0.1 },
   storageLowSpaceCriticalNotifyIntervalMinutes: { label: '再通知間隔', type: 'number', exclusiveMin: 0 },
   storageLowSpaceAction: { label: '容量不足時の動作', type: 'text', select: [
     { value: 'stop-new', label: '新規録画のみ停止' },
@@ -261,7 +262,7 @@ export function renderSettingsPage(container) {
     original = cloneConfig(config);
     applicationBaseline = cloneConfig(config);
     wuiApplicationBaseline = cloneConfig(config);
-    draft = cloneConfig(config);
+    draft = configDraft(config);
     runtimeMode = mode;
     clockRuntime = clock;
     authSettings = authentication.value || { loadError: authentication.error?.message || '認証状態を取得できませんでした。' };
@@ -298,7 +299,7 @@ export function renderSettingsPage(container) {
     if (definition.type === 'number') {
       if (definition.min !== undefined) input.min = String(definition.min);
       if (definition.max !== undefined) input.max = String(definition.max);
-      input.step = definition.integer ? '1' : 'any';
+      input.step = definition.integer ? '1' : String(definition.step ?? 'any');
     }
     if (definition.select) {
       definition.select.forEach(option => {
@@ -610,7 +611,7 @@ export function renderSettingsPage(container) {
     warningNote.className = 'settings-muted is-wide';
     warningNote.textContent = '警告する空き容量が容量不足の閾値以下の場合、警告は無効です。';
     warningGroup.append(warningHeading, warningNote,
-      bindValueField('storageLowSpaceWarningThresholdMB', '空き容量がこの値を下回ると警告します。単位はMB（1 GB = 1024 MB）で、512000なら500 GBです。0または空欄で無効です。', { compact: true }).wrap,
+      bindValueField('storageLowSpaceWarningThresholdGB', '空き容量がこの値を下回ると警告します。0または空欄で無効です。', { compact: true }).wrap,
       bindValueField('storageLowSpaceWarningIntervalMinutes', '容量警告が解消しない場合の再通知間隔です。単位は分で、1440なら24時間です。', { compact: true }).wrap
     );
     capacity.body.append(warningGroup);
@@ -621,7 +622,7 @@ export function renderSettingsPage(container) {
     lowHeading.className = 'settings-subsection-title';
     lowHeading.textContent = '容量不足';
     lowGroup.append(lowHeading,
-      bindValueField('storageLowSpaceThresholdMB', '空き容量がこの値を下回ると、選択した容量不足対策を実行します。単位はMB（1 GB = 1024 MB）で、30720なら30 GBです。', { compact: true }).wrap,
+      bindValueField('storageLowSpaceThresholdGB', '空き容量がこの値を下回ると、選択した容量不足対策を実行します。空欄の場合は3 GBです。', { compact: true }).wrap,
       bindValueField('storageLowSpaceCriticalNotifyIntervalMinutes', '容量不足が解消しない場合の再通知間隔です。単位は分です。', { compact: true }).wrap
     );
     const action = bindValueField('storageLowSpaceAction', '「新規録画のみ停止」は録画中の番組を継続しますが、容量枯渇によって完走できない場合があります。「録画中を含めて停止」は対象filesystemの新規録画と録画中番組を停止します。「古い録画ファイルを削除」は対象filesystemの録画先サブフォルダも含めてTS/M2TSを古い順に削除し、削除不能時は録画中も停止します。symlinkや別mountは対象外です。');
@@ -1567,7 +1568,7 @@ export function renderSettingsPage(container) {
     dialog.className = 'settings-save-dialog settings-discard-dialog';
     dialog.innerHTML = '<form method="dialog"><header><h2>未保存の変更を破棄</h2><button value="cancel" aria-label="閉じる">×</button></header><p>最後に保存された設定値へ戻します。保存済みの設定は変更しません。</p><footer><button class="button" value="cancel">キャンセル</button><button class="button is-danger" value="default" type="button" data-discard>変更を破棄</button></footer></form>';
     dialog.querySelector('[data-discard]').addEventListener('click', () => {
-      draft = cloneConfig(original);
+      draft = configDraft(original);
       fieldErrors.clear();
       services = null;
       broadcastClockChannels = null;

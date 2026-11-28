@@ -1,6 +1,8 @@
 (function() {
   if (request.type !== 'json') return response.error(415);
-  var action = request.method === 'GET' && String(request.query && request.query.monitor || '') === '1'
+  var monitor = request.method === 'GET' && String(request.query && request.query.monitor || '');
+  var recordingJobsOnly = monitor === 'series';
+  var action = (monitor === '1' || recordingJobsOnly)
     ? 'monitor-status' : 'auto-status';
   if (request.method === 'POST') {
     action = request.query && request.query.action;
@@ -10,9 +12,9 @@
   }
   // Uses the authenticated WUI API and the existing private Operator IPC.
   storageRefreshIpc.request({ socketPath: define.RECORDED_THUMBNAIL_SOCKET, timeoutMs: 5000 },
-    { maintenance: true, action: 'status', maintenanceAction: action })
+    { maintenance: true, action: 'status', maintenanceAction: action, recordingJobsOnly: recordingJobsOnly })
     .then(function(result) {
-      if (!result || (action === 'monitor-status' ? result.monitorVersion !== 1 :
+      if (!result || (recordingJobsOnly ? result.recordingJobsVersion !== 1 : action === 'monitor-status' ? result.monitorVersion !== 1 :
           action.indexOf('thumbnail-auto-') === 0 ? result.autoThumbnailVersion !== 1 : result.autoAnalysisVersion !== 1)) {
         response.head(503);
         response.end(JSON.stringify({ message: 'Operatorは自動TS解析に未対応です。' }));

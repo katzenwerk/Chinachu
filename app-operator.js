@@ -70,6 +70,7 @@ process.on('uncaughtException', (err) => {
 const dateFormat = require('dateformat').default;
 // Node.js 18.15.0 以降の fs.statfs() を使用するため diskusage は不要
 const notification = require('./lib/notification');
+const recordingHistoryCsv = require('./lib/recording-history-csv');
 const externalNotifier = require('./lib/external-notification').createNotifier(__dirname, operatorLog);
 const recordingAttempt = require('./lib/recording-attempt');
 const storageLow = require('./lib/storage-low');
@@ -299,15 +300,15 @@ mirakurun.priority = recordingPriority;
 console.info(mirakurun);
 
 notificationSettings.warnings.forEach(message => operatorLog('WARNING: ' + message));
-if (typeof config.storageLowSpaceThresholdMB !== 'undefined' && config.storageLowSpaceThresholdMB !== storageLowSpaceThresholdMB) {
-	operatorLog('WARNING: storageLowSpaceThresholdMB is invalid; using ' + storageLowSpaceThresholdMB + ' MB.');
+if (storageThresholds.invalidCleanupKey) {
+	operatorLog(`WARNING: ${storageThresholds.invalidCleanupKey} is invalid; using ${storageLow.formatStorageGB(storageLowSpaceThresholdMB)}.`);
 }
-if (typeof config.storageLowSpaceWarningThresholdMB !== 'undefined' && storageLowSpaceWarningThresholdMB === null) {
-	operatorLog('WARNING: storageLowSpaceWarningThresholdMB is not a positive number; capacity warning is disabled.');
+if (storageThresholds.invalidWarningKey) {
+	operatorLog(`WARNING: ${storageThresholds.invalidWarningKey} is invalid; capacity warning is disabled.`);
 } else if (storageThresholds.legacyWarningDisabled) {
 	operatorLog('WARNING: capacity warning is disabled by legacy storageLowSpaceWarningEnabled=false.');
 } else if (storageLowSpaceWarningThresholdMB !== null && !storageLowSpaceWarningEnabled) {
-	operatorLog('WARNING: storageLowSpaceWarningThresholdMB is not greater than storageLowSpaceThresholdMB; capacity warning is disabled.');
+	operatorLog(`WARNING: Capacity warning is disabled (${storageLow.formatStorageGB(storageLowSpaceWarningThresholdMB)} <= ${storageLow.formatStorageGB(storageLowSpaceThresholdMB)}).`);
 }
 if (typeof config.storageLowSpaceWarningIntervalMinutes !== 'undefined' && config.storageLowSpaceWarningIntervalMinutes !== storageLowSpaceWarningIntervalMinutes) {
 	operatorLog('WARNING: storageLowSpaceWarningIntervalMinutes is invalid; using ' + storageLowSpaceWarningIntervalMinutes + ' minutes.');
@@ -1194,7 +1195,7 @@ function queueRecordedLedgerUpdate(reason, update, afterSave, retryLock, ready) 
 	return result;
 }
 
-function finishPendingRecording(program) {
+function finishPendingRecording(program, historySaved = false) {
 	const remaining = recording.filter(entry => entry !== program);
 	// Remove the durable recovery row before dropping its in-memory reference.
 	reservationStore.withLock(RECORDING_DATA_FILE, () => reservationStore.writeArrayAtomic(RECORDING_DATA_FILE, remaining));
@@ -1202,6 +1203,7 @@ function finishPendingRecording(program) {
 	operatorLog('WRITE: ' + RECORDING_DATA_FILE);
 	delete mirakurunDropSnapshots[program.id];
 	failedRecordingSaves.delete(program);
+	if (!historySaved) scheduleMatchAfterRecordingRemoval(program);
 }
 
 function reportRecordingSaveFailure(program, error) {
@@ -1269,6 +1271,22 @@ function enqueueRecordedCommand(recordedPath, completedProgram) {
 	wakeRecordedCommandQueue();
 }
 
+async function requestCompletedRecordingCsv(program) {
+	const warn = message => operatorLog('WARNING: recording history CSV save failed #' + program.id + ': ' + message);
+	// The setting takes effect on the next history operation, even if Operator was
+	// already running. The short-lived writer takes only the CSV locks.
+	try {
+		const text = await fs.promises.readFile(CONFIG_FILE, 'utf8');
+		if (JSON.parse(text.replace(/^\uFEFF/, '')).recordingResultCsvEnabled !== true) return;
+		const entry = recordingHistoryCsv.completedRecordingEntry(program);
+		if (!entry) return;
+		child_process.execFile(process.execPath, [require.resolve('./lib/recording-history-csv'), __dirname, JSON.stringify(entry)],
+			{ timeout: 30000, killSignal: 'SIGKILL' }, (error, _stdout, stderr) => {
+				if (error) warn(stderr.trim() || error.code || error.message);
+			});
+	} catch (error) { warn(error.message); }
+}
+
 function saveCompletedRecording(program, recovering, originalRecordedPath = program.recorded, outputClosed = Promise.resolve(true)) {
 	const replayingPendingSave = recovering && program._operatorHistoryPending === true;
 	program._operatorHistoryPending = true;
@@ -1305,14 +1323,19 @@ function saveCompletedRecording(program, recovering, originalRecordedPath = prog
 		}
 		return current.filter(entry => entry.id !== completedProgram.id).concat(completedProgram);
 	}, async () => {
+		// The recorded ledger already contains the result. Probes, MATCH,
+		// thumbnails and TS analysis track their progress independently.
 		const isResumePending = completedProgram.operatorResumePending === true &&
 			completedProgram.operatorAbort !== true && completedProgram.operatorEndLack !== true;
 		if (!isResumePending) {
 			await removeManualReserve(program);
 		}
+		// In the no-rename path the history commit can precede close. Keep the
+		// recovery row visible to MATCH/CSV readers until both sides are finished.
+		await outputClosed;
 		// Keep recovery data until both history and manual-reservation removal
 		// have succeeded. A hook never runs against an uncommitted history.
-		finishPendingRecording(program);
+		finishPendingRecording(program, true);
 		if (!isResumePending) {
 			scheduleMatchLedgerUpdate('recorded finalize', completedProgram.operatorRecordingEnd);
 		}
@@ -1330,6 +1353,7 @@ function saveCompletedRecording(program, recovering, originalRecordedPath = prog
 	}, true, program._operatorTunerInfoPromise).then(saved => {
 		const isResumePending = completedProgram.operatorResumePending === true &&
 			completedProgram.operatorAbort !== true && completedProgram.operatorEndLack !== true;
+		if (saved && !isResumePending) void requestCompletedRecordingCsv(completedProgram);
 		if (saved && !isResumePending && config.recordedCommand) {
 			const recordedPath = program.recorded;
 			// Do not hold the history transaction (or shutdown) for file closure
@@ -1663,6 +1687,11 @@ function scheduleMatchLedgerUpdate(reason, sourceAt) {
 	}
 	matchLedgerUpdateReason = reason || matchLedgerUpdateReason || 'scheduled';
 	wakePostProcessing();
+}
+
+function scheduleMatchAfterRecordingRemoval(program) {
+	// An ended reservation may still be RESERVED from the last MATCH build.
+	if (program.end < Date.now()) scheduleMatchLedgerUpdate('unrecorded finalize');
 }
 
 function compactMatchOutput(stdout) {
@@ -2194,7 +2223,7 @@ function markRecordingNg(program, reason) {
 
 // 録画中リストから削除する
 function removeRecording(programId, reason) {
-	let changed = false;
+	let removed;
 
 	for (let i = recording.length - 1; i >= 0; i--) {
 		if (recording[i].id !== programId) {
@@ -2202,12 +2231,12 @@ function removeRecording(programId, reason) {
 		}
 
 		operatorLog((reason || 'REMOVE RECORDING') + ': ' + printProgram(recording[i]));
-		recording.splice(i, 1);
-		changed = true;
+		[removed] = recording.splice(i, 1);
 	}
 
-	if (changed) {
+	if (removed) {
 		writeRecordingData();
+		scheduleMatchAfterRecordingRemoval(removed);
 	}
 }
 
@@ -3273,6 +3302,7 @@ function prepRecord(program) {
 						if (recordingIndex !== -1) {
 							recording.splice(recordingIndex, 1);
 							writeRecordingData();
+							scheduleMatchAfterRecordingRemoval(program);
 						}
 
 						// 旧録画をLACKで閉じた直後だけ、次番組のstream取得を即再試行する。
@@ -3314,6 +3344,7 @@ function prepRecord(program) {
 
 				if (recordingAttempt.remove(recording, program, attempt)) {
 					writeRecordingData();
+					scheduleMatchAfterRecordingRemoval(program);
 				}
 			}, 5000);
 		});
@@ -4035,14 +4066,14 @@ function logStorageGroup(group, recordingEvent) {
 	const phase = group.phase || null;
 	storageLoggedPhases.set(group.filesystemKey, phase);
 	if (previous === phase && !recordingEvent) return;
-	const freeMB = group.availableBytes / 1024 / 1024;
+	const free = storageLow.formatStorageGB(group.availableBytes / 1024 / 1024, 2);
 	const context = ' filesystem=' + group.filesystemKey + (recordingEvent ? ' event=' + recordingEvent : '');
 	if (phase === 'cleanup') {
-		operatorLog(`ALERT: Storage Low Space! (${freeMB} MB < ${storageLowSpaceThresholdMB} MB)` + context);
+		operatorLog(`ALERT: Storage Low Space! (${free} < ${storageLow.formatStorageGB(storageLowSpaceThresholdMB)})` + context);
 	} else if (phase === 'warning') {
-		operatorLog(`WARNING: Storage Low Space! (${freeMB} MB < ${storageLowSpaceWarningThresholdMB} MB)` + context);
+		operatorLog(`WARNING: Storage Low Space! (${free} < ${storageLow.formatStorageGB(storageLowSpaceWarningThresholdMB)})` + context);
 	} else if (previous) {
-		operatorLog(`INFO: Storage Capacity Recovered! (${freeMB} MB)` + context);
+		operatorLog(`INFO: Storage Capacity Recovered! (${free})` + context);
 	}
 }
 
@@ -4061,7 +4092,8 @@ function handleStorageGroup(group, recordingEvent) {
 	});
 	externalNotifier.storage(group, {
 		warningIntervalMs: storageLowSpaceWarningIntervalTime,
-		warningThresholdMB: storageLowSpaceWarningThresholdMB
+		warningThresholdMB: storageLowSpaceWarningThresholdMB,
+		cleanupThresholdMB: storageLowSpaceThresholdMB
 	});
 	notifyStorageGroup(group);
 	if (group.phase !== 'cleanup') {
@@ -4263,12 +4295,29 @@ function getRecordedThumbnailDuration(entry) {
 }
 
 // Read-only snapshot. All queue data are already in Operator memory; do not stat TS files.
-function postProcessingMonitorStatus() {
+function postProcessingMonitorStatus(recordingJobsOnly = false) {
+	const manual = recordedMaintenance.monitorState(recordingJobsOnly ? { pendingLimit: Infinity } : undefined);
+	const thumbnail = recordedThumbnailGenerator.getState();
+	const thumbnailPending = recordedThumbnailGenerator.getPendingJobs(recordingJobsOnly ? Infinity : undefined);
+	if (recordingJobsOnly) {
+		const waiting = manual.pendingJobs.map(({ id, type }) => ({ id, type }));
+		const running = [];
+		const add = (jobs, type, id) => { if (id !== null && id !== undefined) jobs.push({ type, id: String(id) }); };
+		for (const job of durationProbeQueue) add(waiting, 'ffprobe', recordedForPath(job.filePath)?.id);
+		for (const job of activeDurationProbeJobs.values()) add(running, 'ffprobe', recordedForPath(job.filePath)?.id);
+		for (const job of thumbnailPending) add(waiting, 'thumbnail', job.id);
+		add(running, 'thumbnail', thumbnail.active);
+		if (!thumbnailPending.some(job => String(job.id) === manual.autoThumbnailId)) add(running, 'thumbnail', manual.autoThumbnailId);
+		if (manual.activeTask && manual.activeTask.type !== 'thumbnail') {
+			add(running, manual.activeTask.type, manual.activeTask.id);
+		}
+		add(running, 'ts', manual.autoTsId);
+		if (autoTsAnalysisEnabled && !manual.autoTsPaused) add(waiting, 'ts', nextAutoTsCandidate()?.id);
+		return { recordingJobsVersion: 1, waiting, running, autoTsEnabled: autoTsAnalysisEnabled,
+			sourceMissing: recordedThumbnailGenerator.getSourceMissingIds() };
+	}
 	const auto = recordedMaintenance.request({ action: 'auto-status' });
 	const autoThumbnail = recordedMaintenance.autoThumbnailStatus();
-	const manual = recordedMaintenance.monitorState();
-	const thumbnail = recordedThumbnailGenerator.getState();
-	const thumbnailPending = recordedThumbnailGenerator.getPendingJobs();
 	const matchPending = Boolean(matchLedgerUpdateReason);
 	const queued = [];
 	if (matchPending) queued.push({ type: 'match', title: matchLedgerUpdateReason,
@@ -4388,7 +4437,7 @@ function handleRecordedThumbnailRequest(request) {
 		if (pendingId === '*' || String(request.id) === pendingId) throw recordedThumbnailRequestError('folder_recovery_required', 409, '未完了の振り分けを復旧してから操作してください。');
 	}
 	if (request && request.organizerIndex === true) return updateRecordedSeriesIndex(request);
-	if (request && request.maintenance === true && request.maintenanceAction === 'monitor-status') return postProcessingMonitorStatus();
+	if (request?.maintenance === true && request.maintenanceAction === 'monitor-status') return postProcessingMonitorStatus(request.recordingJobsOnly === true);
 	if (request && request.maintenance === true) return recordedMaintenance.request(Object.assign({}, request, { action: request.maintenanceAction }));
 	const id = request && String(request.id || '');
 	const outputPath = recordedThumbnail.resolveOutputPath(RECORDED_THUMBNAIL_DIR, id);
@@ -4527,8 +4576,12 @@ chinachu.jsonWatcher(
 	{ create: [], now: false }
 );
 
+const recordingRecovery = recoverRecordingHistory();
+// The synchronous recovery setup has retained the rows still being recovered.
+// Recheck persisted MISSED candidates now, even while history saves are pending.
 externalNotifier.refreshOutcomes();
-recoverRecordingHistory().then(() => externalNotifier.conflicts(reserves));
+recordingRecovery.then(() => externalNotifier.conflicts(reserves));
+scheduleMatchLedgerUpdate('operator startup');
 reserveCheckLoop();
 startBroadcastClockMonitor();
 scheduleAutoPostProcessingReview();

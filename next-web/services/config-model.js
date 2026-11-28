@@ -1,3 +1,5 @@
+import { STORAGE_THRESHOLD_LEGACY_KEYS, formatStorageGB, isStorageThresholdGB, migrateStorageThresholds, resolveStorageThresholds } from './storage-thresholds.js';
+
 export const DROP_DETECTION_MODES = [
   { value: 'mirakurun', label: 'Mirakurun監視（標準）', description: 'MirakurunからDROP情報を取得する。' },
   { value: 'file', label: 'TSファイル解析', description: '録画完了後に保存TSを低優先度で自動解析する。' },
@@ -5,14 +7,18 @@ export const DROP_DETECTION_MODES = [
   { value: 'off', label: '無効', description: 'DROP検出を行わない。' }
 ];
 
+const STORAGE_THRESHOLD_GB_KEYS = Object.keys(STORAGE_THRESHOLD_LEGACY_KEYS);
+const STORAGE_THRESHOLD_MB_KEYS = Object.values(STORAGE_THRESHOLD_LEGACY_KEYS);
+const STORAGE_THRESHOLD_KEYS = new Set([...STORAGE_THRESHOLD_GB_KEYS, ...STORAGE_THRESHOLD_MB_KEYS]);
+
 const KNOWN_KEYS = new Set([
   'externalNotifications', 'uid', 'gid', 'mirakurunPath', 'recordedDir', 'recordedStorage', 'recordedDirs',
   'recordedFormat', 'recordedCommand', 'recordedCommandSerial', 'ffprobeCommand', 'recordedDurationProbeTimeoutMs',
   'recordedThumbnailAutoEnabled', 'recordingFilenamePrefixEnabled', 'recordedFolderOrganizeEnabled', 'recordedFolderOrganizeOrder',
   'recordedNameReplaceEnclosingCharacters', 'recordedNameEnclosingCharacterMap', 'normalizationForm', 'epgTitleHalfWidthEnabled',
   'vaapiEnabled', 'vaapiDevice', 'recordingBoundaryPolicy', 'recordingPriority', 'conflictedPriority', 'handoffPrepSeconds', 'dropDetectionMode', 'autoTsMaxRecordings',
-  'recordedStorageWakeupBeforeSec', 'storageLowSpaceWarningThresholdMB',
-  'storageLowSpaceWarningIntervalMinutes', 'storageLowSpaceThresholdMB', 'storageLowSpaceAction',
+  'recordedStorageWakeupBeforeSec', ...STORAGE_THRESHOLD_KEYS,
+  'storageLowSpaceWarningIntervalMinutes', 'storageLowSpaceAction',
   'storageLowSpaceCriticalNotifyIntervalMinutes', 'notificationCommand', 'matchRetentionDays',
   'reserves2RetentionDays', 'recordedHistoryRetentionDays', 'recordingResultCsvEnabled',
   'excludeServices', 'serviceOrder',
@@ -23,6 +29,10 @@ const KNOWN_KEYS = new Set([
 
 export function cloneConfig(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+export function configDraft(config) {
+  return migrateStorageThresholds(cloneConfig(config));
 }
 
 const HISTORY_RETENTION_KEYS = ['matchRetentionDays', 'reserves2RetentionDays', 'recordedHistoryRetentionDays'];
@@ -41,7 +51,7 @@ export function setHistoryRetentionDays(config, days) {
 }
 
 export function configForSave(config) {
-  const result = cloneConfig(config);
+  const result = configDraft(config);
   delete result.endLackMaxSeconds;
   if (!Object.prototype.hasOwnProperty.call(result, 'wuiBlockGlobalAccess')) result.wuiBlockGlobalAccess = true;
   if (!Object.prototype.hasOwnProperty.call(result, 'recordedCommandSerial')) result.recordedCommandSerial = true;
@@ -103,8 +113,6 @@ const CONFIG_APPLICATION = {
   }),
   autoTsMaxRecordings: application(['operator'], value => Number.isInteger(value) && value >= 0 ? value : 0),
   recordedStorageWakeupBeforeSec: application(['operator'], value => Number.isFinite(Number(value)) && Number(value) > 0 ? Math.floor(Number(value)) : 0),
-  storageLowSpaceThresholdMB: application(['operator', 'wui'], positive(3000)),
-  storageLowSpaceWarningThresholdMB: application(['operator', 'wui'], positive(null)),
   storageLowSpaceWarningIntervalMinutes: application(['operator', 'wui'], positive(180)),
   storageLowSpaceCriticalNotifyIntervalMinutes: application(['operator', 'wui'], positive(180)),
   storageLowSpaceAction: application(['operator', 'wui'], value => ['remove', 'stop-new'].includes(value) ? value : 'stop'),
@@ -132,8 +140,16 @@ const CONFIG_APPLICATION = {
 
 export function configApplicationEffects(before, after) {
   const effects = { operator: false, wui: false, scheduler: false, epg: false, history: false, immediate: false, connectionChanged: false, unknown: [] };
+  const previousThresholds = resolveStorageThresholds(before);
+  const nextThresholds = resolveStorageThresholds(after);
+  if (previousThresholds.cleanupThresholdMB !== nextThresholds.cleanupThresholdMB ||
+      previousThresholds.warningThresholdMB !== nextThresholds.warningThresholdMB ||
+      previousThresholds.warningEnabled !== nextThresholds.warningEnabled) {
+    effects.operator = effects.wui = true;
+  }
   for (const change of configChanges(before, after)) {
     if (change.key === 'endLackMaxSeconds') continue; // Removing the retired key has no runtime effect.
+    if (STORAGE_THRESHOLD_KEYS.has(change.key)) continue;
     const entry = CONFIG_APPLICATION[change.key];
     if (!entry) { effects.unknown.push(change.key); continue; }
     if (sameValue(entry.effective(change.before, before), entry.effective(change.after, after))) continue;
@@ -181,6 +197,7 @@ export function parseFieldValue(raw, definition) {
     if (definition.min !== undefined && number < definition.min) return { error: `${definition.label}は${definition.min}以上で指定してください。` };
     if (definition.max !== undefined && number > definition.max) return { error: definition.label + 'は' + definition.max + '以下で指定してください。' };
     if (definition.exclusiveMin !== undefined && number <= definition.exclusiveMin) return { error: `${definition.label}は${definition.exclusiveMin}より大きい値で指定してください。` };
+    if (definition.step === 0.1 && !Number.isInteger(number * 10)) return { error: `${definition.label}は小数点以下1桁までで指定してください。` };
     return { value: number };
   }
   if (definition.type === 'json') {
@@ -308,13 +325,14 @@ export function validateConfig(config) {
   nonNegativeIntegers.forEach(key => {
     if (config[key] !== undefined && (!Number.isInteger(config[key]) || config[key] < 0)) errors.push(`${key}は0以上の整数で指定してください。`);
   });
-  ['storageLowSpaceThresholdMB', 'storageLowSpaceWarningIntervalMinutes', 'storageLowSpaceCriticalNotifyIntervalMinutes'].forEach(key => {
+  ['storageLowSpaceWarningIntervalMinutes', 'storageLowSpaceCriticalNotifyIntervalMinutes'].forEach(key => {
     if (config[key] !== undefined && (!Number.isFinite(config[key]) || config[key] <= 0)) errors.push(`${key}は0より大きい数値で指定してください。`);
   });
-  if (config.storageLowSpaceWarningThresholdMB !== undefined &&
-      (!Number.isFinite(config.storageLowSpaceWarningThresholdMB) || config.storageLowSpaceWarningThresholdMB < 0)) {
-    errors.push('storageLowSpaceWarningThresholdMBは0以上の数値で指定してください。');
-  }
+  STORAGE_THRESHOLD_GB_KEYS.forEach(key => {
+    if (config[key] === undefined || isStorageThresholdGB(key, config[key])) return;
+    const minimum = key === 'storageLowSpaceWarningThresholdGB' ? '0以上' : '0より大きい';
+    errors.push(`${key}は${minimum}数値で、小数点以下1桁までで指定してください。`);
+  });
   if (Array.isArray(config.recordedDirs)) {
     const normalized = normalizeRecordedDirs(config.recordedDirs.map(item => ({
       original: item, id: item?.id, name: item?.name, path: item?.path,
@@ -335,6 +353,9 @@ export function validateConfig(config) {
 export function formatChangeValue(value, removed = false, key) {
   if (removed) return '（未指定へ変更）';
   if (value === undefined) return '（未指定）';
+  if (Number.isFinite(value) && STORAGE_THRESHOLD_KEYS.has(key)) {
+    return STORAGE_THRESHOLD_MB_KEYS.includes(key) ? formatStorageGB(value) : `${value} GB`;
+  }
   if (key === 'externalNotifications') {
     const publicValue = configPreview({ externalNotifications: value }).externalNotifications;
     const hasSecrets = Object.values(value.routes).some(route => ['webhook', 'token', 'user', 'password'].some(key => route[key]));

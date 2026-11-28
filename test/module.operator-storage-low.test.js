@@ -32,6 +32,7 @@ async function assertHandoffBehavior(source) {
 		ensureRecordingDestinationHealthy: () => true, getResumableInterruptedRecording: () => null,
 		isRecordedForReserve: () => false, isRecording: row => context.recording.includes(row),
 		operatorLog() {}, printProgram: row => row.id, writeRecordingData() {}, stopAutoIfRecordingLimitExceeded() {},
+		scheduleMatchLedgerUpdate() { assert.fail('A future handoff reservation must not request a MATCH rebuild'); },
 		safeAbortStream() { throw new Error('Expected the formal recording finalizer'); },
 		getMirakurunJson: async () => { tunerRequests++; return { ok: true, data: tuners }; },
 		doRecord: () => { started++; settle(); },
@@ -39,6 +40,7 @@ async function assertHandoffBehavior(source) {
 		mirakurun: { getProgramStream: async () => ({}) }
 	});
 	vm.runInContext(source.slice(source.indexOf('function boundaryOverride('), source.indexOf('function getMirakurunJson(')) +
+		source.slice(source.indexOf('function scheduleMatchAfterRecordingRemoval('), source.indexOf('function compactMatchOutput(')) +
 		source.slice(source.indexOf('function finishRecordingForEndLack('), source.indexOf('// 録画中のまま固着した番組を掃除する')) +
 		source.slice(source.indexOf('function prepRecord('), source.indexOf('// 録画実行')), context);
 	for (const legacy of [{ allowEndLack: true }, { recordingBoundaryPolicy: 'start' }, { recordingBoundaryPolicy: 'end' }]) {
@@ -444,6 +446,7 @@ describe('Operator low-storage handling', function() {
 		context.handleStorageGroup(group('warning', 2));
 		context.handleStorageGroup(group('warning', 3));
 		assert.strictEqual(logs.length, 1);
+		assert.match(logs[0], /WARNING: Storage Low Space! \(1\.95 GB < 9\.765625 GB\)/);
 		const cached = group('warning', 4);
 		context.handleStorageGroup(cached);
 		const notifiedBeforeEvents = notifications;
@@ -458,7 +461,7 @@ describe('Operator low-storage handling', function() {
 		context.handleStorageGroup(group('cleanup', 5));
 		context.handleStorageGroup(group('cleanup', 6));
 		assert.strictEqual(logs.length, 5);
-		assert.match(logs[4], /ALERT: Storage Low Space!/);
+		assert.match(logs[4], /ALERT: Storage Low Space! \(1\.95 GB < 2\.9296875 GB\)/);
 		assert.strictEqual(stops, 2); // Repeated Low checks still enforce recording protection.
 		context.handleStorageGroup(group(null, 7));
 		context.handleStorageGroup(group(null, 8));
@@ -785,6 +788,17 @@ describe('Operator low-storage handling', function() {
 		assert.strictEqual(first.storages[0].capacityCheckedAt, checkedAt);
 		assert.strictEqual(second.storages[0].capacityCheckedAt, checkedAt);
 		assert.strictEqual(first.recorded, null);
+		assert.strictEqual(first.thresholds.warningMB, 10000);
+		assert.strictEqual(first.thresholds.cleanupMB, 3000);
+		context.config.storageLowSpaceThresholdGB = 3;
+		context.config.storageLowSpaceWarningThresholdGB = 9.8;
+		vm.runInNewContext(script, context);
+		const mixed = JSON.parse(body);
+		assert.strictEqual(mixed.storages[0].status, 'unobserved');
+		assert.strictEqual(mixed.thresholds.cleanupMB, 3072);
+		assert.strictEqual(mixed.thresholds.warningMB, 9.8 * 1024);
+		delete context.config.storageLowSpaceThresholdGB;
+		delete context.config.storageLowSpaceWarningThresholdGB;
 
 		state.storages[0].capacityCheckedAt = 1;
 		serializedState = JSON.stringify(state);
@@ -813,7 +827,7 @@ describe('Operator low-storage handling', function() {
 		serializedState = '{broken';
 		vm.runInNewContext(script, context);
 		assert.strictEqual(JSON.parse(body).storages[0].status, 'unobserved');
-		assert.strictEqual(reads, 6);
+		assert.strictEqual(reads, 7);
 	});
 
 	it('atomically replaces Storage snapshots and preserves the old file on failure', function() {
@@ -921,7 +935,11 @@ describe('Operator low-storage handling', function() {
 
 	it('enables Warning only above the effective Low threshold while preserving Low handling', function() {
 		[
-			{ config: {}, enabled: false, warning: null },
+			{ config: {}, enabled: false, warning: null, cleanup: 3072 },
+			{ config: { storageLowSpaceThresholdGB: 3, storageLowSpaceWarningThresholdGB: 9.8 }, enabled: true, warning: 9.8 * 1024, cleanup: 3072 },
+			{ config: { storageLowSpaceThresholdMB: 3000, storageLowSpaceWarningThresholdMB: 10000,
+				storageLowSpaceThresholdGB: 3, storageLowSpaceWarningThresholdGB: 0 }, enabled: false, warning: null, cleanup: 3072 },
+			{ config: { storageLowSpaceThresholdGB: 2.95, storageLowSpaceThresholdMB: 1000 }, enabled: false, warning: null, cleanup: 3072 },
 			{ config: { storageLowSpaceWarningThresholdMB: 0 }, enabled: false, warning: null },
 			{ config: { storageLowSpaceThresholdMB: 3000, storageLowSpaceWarningThresholdMB: 3000 }, enabled: false, warning: 3000 },
 			{ config: { storageLowSpaceThresholdMB: 4000, storageLowSpaceWarningThresholdMB: 3000 }, enabled: false, warning: 3000 },
@@ -931,15 +949,19 @@ describe('Operator low-storage handling', function() {
 			const thresholds = storageLow.resolveStorageThresholds(fixture.config);
 			assert.strictEqual(thresholds.warningEnabled, fixture.enabled);
 			assert.strictEqual(thresholds.warningThresholdMB, fixture.warning);
+			assert.strictEqual(thresholds.cleanupThresholdMB, fixture.cleanup ?? fixture.config.storageLowSpaceThresholdMB ?? 3072);
 			assert.strictEqual(storageLow.getPhase(2000, thresholds.cleanupThresholdMB, thresholds.warningThresholdMB, thresholds.warningEnabled), 'cleanup');
 		});
 
 		const enabled = storageLow.resolveStorageThresholds({
-			storageLowSpaceThresholdMB: 3000,
-			storageLowSpaceWarningThresholdMB: 50000
+			storageLowSpaceThresholdMB: 3000.25,
+			storageLowSpaceWarningThresholdMB: 10000.5
 		});
-		assert.strictEqual(storageLow.getPhase(4000, enabled.cleanupThresholdMB, enabled.warningThresholdMB, enabled.warningEnabled), 'warning');
-		assert.strictEqual(storageLow.getPhase(60000, enabled.cleanupThresholdMB, enabled.warningThresholdMB, enabled.warningEnabled), null);
+		const phase = freeMB => storageLow.getPhase(freeMB, enabled.cleanupThresholdMB, enabled.warningThresholdMB, enabled.warningEnabled);
+		assert.strictEqual(phase(3000.24), 'cleanup');
+		assert.strictEqual(phase(3000.25), 'warning');
+		assert.strictEqual(phase(10000.49), 'warning');
+		assert.strictEqual(phase(10000.5), null);
 	});
 
 	it('stops every initial recording on the low filesystem without touching other or unknown destinations', function() {

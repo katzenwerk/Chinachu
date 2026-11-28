@@ -23,7 +23,7 @@ function hoverDescription(program) {
   return '';
 }
 
-export function programHoverInfo(program, { channelLogoUrl = null, statuses = [] } = {}) {
+export function programHoverInfo(program, { channelLogoUrl = null, statuses = [], statusTones = false } = {}) {
   const channel = program.channel || {};
   const start = Number(program.start);
   const end = Number(program.end) || start + Number(program.seconds || 0) * 1000;
@@ -36,7 +36,8 @@ export function programHoverInfo(program, { channelLogoUrl = null, statuses = []
     description: hoverDescription(program),
     category: program.category || '',
     type: program.channelType || channel.type || '',
-    statuses: statuses.map(value => typeof value === 'string' ? value : value?.label).filter(Boolean)
+    statuses: statuses.filter(value => typeof value === 'string' ? value : value?.label),
+    statusTones
   };
 }
 
@@ -52,10 +53,26 @@ function rememberLogo(image) {
   } catch { /* Keep the existing text fallback when a loaded image cannot be copied. */ }
 }
 
-export function setProgramHover(target, info) {
+export function setProgramHover(target, info, { refresh = false } = {}) {
   target.dataset.programHover = '';
   target.setAttribute('title', ''); // Suppress inherited playback titles only over this information target.
   targets.set(target, info);
+  if (refresh && active?.target === target && active.preview) {
+    active.preview.remove();
+    active.logo?.dispose();
+    showPreview(active);
+  }
+}
+
+export function programHoverTags(info) {
+  const tags = new Map();
+  for (const value of [info.category, ...info.statuses]) {
+    const label = typeof value === 'string' ? value : value?.label;
+    if (!label) continue;
+    const tone = info.statusTones && ['warning', 'danger', 'muted'].includes(value?.tone) ? value.tone : null;
+    if (!tags.has(label) || tone && !tags.get(label)) tags.set(label, tone);
+  }
+  return tags;
 }
 
 export function dismissProgramHover() {
@@ -132,13 +149,13 @@ function showPreview(state) {
     description.append(content);
     preview.append(description);
   }
-  const labels = [...new Set([info.category, ...info.statuses].filter(Boolean))];
-  if (labels.length) {
+  const tags = programHoverTags(info);
+  if (tags.size) {
     const meta = document.createElement('div');
     meta.className = 'program-hover-meta';
-    for (const label of labels) {
+    for (const [label, tone] of tags) {
       const chip = document.createElement('span');
-      chip.className = 'program-hover-chip';
+      chip.className = `program-hover-chip${tone ? ` is-${tone}` : ''}`;
       chip.textContent = label;
       meta.append(chip);
     }

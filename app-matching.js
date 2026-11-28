@@ -431,6 +431,8 @@ function buildMatchLedger(options) {
 
 	var oldResults = Array.isArray(options.oldResults) ? options.oldResults : [];
 	var recordedAll = Array.isArray(options.recordedList) ? options.recordedList : [];
+	var recordingList = Array.isArray(options.recordingList) ? options.recordingList : [];
+	var recordingKeys = new Set(recordingList.map(makeCanonicalKey).filter(Boolean));
 	var reserves2All = Array.isArray(options.reserves2List) ? options.reserves2List : [];
 	var nowMs = safeInt(options.nowMs, Date.now());
 	var keepDays = safeInt(options.keepDays, DEFAULT_RETENTION_DAYS);
@@ -532,11 +534,10 @@ function buildMatchLedger(options) {
 		reserve = reserves2ByKey[key];
 		isSkip = safeBool(reserve && reserve.isSkip);
 		end = safeInt(reserve && reserve.end, 0) || (safeInt(reserve && reserve.start, 0) + safeInt(reserve && reserve.seconds, 0) * 1000);
-		/*
-		 * MISSED must be decided by end time, not start time.
-		 * While a programme is on-air, keep it as RESERVED so it does not appear as NG.
-		 */
-		status = isSkip ? "SKIPPED_ONLY" : end > 0 && nowMs > end ? "MISSED" : "RESERVED";
+		// Keep active and finalizing recordings RESERVED until history is committed.
+		status = "RESERVED";
+		if (isSkip) status = "SKIPPED_ONLY";
+		else if (end > 0 && nowMs > end && !recordingKeys.has(key)) status = "MISSED";
 
 		windowByKey[key] = buildMatchItem(status, key, null, reserve, false);
 	});
@@ -618,7 +619,7 @@ function buildMatchLedger(options) {
 
 	results = matchV2.markRecordedMissing(results, recordedAll, {
 		recordedReadOk: options.recordedReadOk === true,
-		recordingList: options.recordingList,
+		recordingList: recordingList,
 		nowMs: nowMs,
 		graceMs: options.recordedMissingGraceMs
 	});
@@ -723,7 +724,7 @@ function usage() {
 		"",
 		"Options:",
 		"  --recorded <path>    recorded.json path (default: ./data/recorded.json)",
-		"  --recording <path>   recording.json path used to guard recorded-missing",
+		"  --recording <path>   recording.json path used to guard missed and recorded-missing",
 		"  --reserves2 <path>   reserves2.json path (default: ./data/reserves2.json)",
 		"  --old-match <path>   existing match.json path used as the merge base",
 		"  --output <path>      comparison output path; required",
@@ -901,6 +902,16 @@ function writeMatchLedgerLocked(options) {
 	var lockPaths = Array.from(new Set([output, oldMatchPath])).sort();
 	function locked(index) {
 		if (index < lockPaths.length) return store.withLock(lockPaths[index], function () { return locked(index + 1); });
+		// Operator saves recorded before removing recording. Read in reverse order
+		// so a handoff between these reads cannot hide the program from both lists.
+		var latestRecordingList = options.recordingList;
+		if (options.recordingPath) {
+			try { latestRecordingList = store.readArray(options.recordingPath); }
+			catch (error) {
+				if (error.code !== "ENOENT") throw error;
+				latestRecordingList = [];
+			}
+		}
 		var latestRecordedList = options.recordedPath ? store.readArray(options.recordedPath) : options.recordedList;
 		var latestReserves2List = options.reserves2Path ? store.readArray(options.reserves2Path) : options.reserves2List;
 		var outputEntries = oldMatchPath !== output ? store.readArray(output) : null;
@@ -920,7 +931,7 @@ function writeMatchLedgerLocked(options) {
 		var ledger = buildMatchLedger({
 			oldResults: latestOldResults,
 			recordedList: latestRecordedList,
-			recordingList: options.recordingList,
+			recordingList: latestRecordingList,
 			recordedReadOk: true,
 			reserves2List: latestReserves2List,
 			nowMs: options.nowMs,
@@ -932,6 +943,7 @@ function writeMatchLedgerLocked(options) {
 			logger: options.logger
 		});
 		store.writeArrayAtomic(output, ledger.results);
+		ledger.sourceRecordingList = latestRecordingList;
 		ledger.sourceRecordedList = latestRecordedList;
 		ledger.sourceReserves2List = latestReserves2List;
 		return ledger;
@@ -988,7 +1000,6 @@ function main() {
 	var ledger;
 	var config;
 	var cleanup;
-	var recordingList;
 
 	try {
 		// Both Operator and Scheduler invoke this worker. Yield CPU to recording.
@@ -1015,17 +1026,17 @@ function main() {
 		}
 
 		oldMatchPath = options.oldMatch || options.output;
-		recordedList = readJsonArray(options.recorded, { createIfMissing: true });
-		recordingList = readJsonArray(options.recording, { allowMissing: true });
+		if (!fs.existsSync(options.recorded) && reservationStore.ensureArrayFile(options.recorded)) {
+			console.log("INIT JSON: " + options.recorded);
+		}
 		reserves2List = readJsonArray(options.reserves2, { createIfMissing: true });
 		ensureParentDirectory(options.output);
 		reservationStore.ensureArrayFile(options.output);
 		ledger = writeMatchLedgerLocked({
 			oldMatchPath: oldMatchPath,
 			output: options.output,
+			recordingPath: options.recording,
 			recordedPath: options.recorded,
-			recordedList: recordedList,
-			recordingList: recordingList,
 			reserves2Path: options.reserves2,
 			reserves2List: reserves2List,
 			nowMs: options.nowMs,
@@ -1042,15 +1053,17 @@ function main() {
 
 		var csvSaveFailed = false;
 		var csvFailedFiles = new Set();
+		var csvPendingRecordingKeys = new Set();
 		try {
 			var historyResult = recordingHistoryCsv.exportHistory({
 				enabled: config.recordingResultCsvEnabled === true,
+				root: path.dirname(options.config),
 				ledgerFiles: { recorded: options.recorded, match: options.output, recording: options.recording },
 				outputDir: path.join(path.dirname(options.config), "data", "csv"),
 				stateFile: path.join(path.dirname(options.config), "data", "recording-history-csv-state.json"),
 				nowMs: options.nowMs,
 				recordedList: recordedList,
-				recordingList: recordingList,
+				recordingList: ledger.sourceRecordingList,
 				reserves2List: reserves2List,
 				matchList: ledger.results
 			});
@@ -1060,6 +1073,7 @@ function main() {
 				console.log("RECORDING_HISTORY_CSV appended=" + historyResult.appended + " files=" + historyResult.files.length);
 			}
 			csvFailedFiles = new Set(historyResult.failedFiles || []);
+			csvPendingRecordingKeys = new Set(historyResult.pendingRecordingKeys || []);
 			if (historyResult.updated > 0) console.log("RECORDING_HISTORY_CSV updated=" + historyResult.updated);
 			(historyResult.errors || []).forEach(function (message) { console.error("WARNING: recording history CSV update failed: " + message); });
 		} catch (historyError) {
@@ -1086,17 +1100,18 @@ function main() {
 				result.kept = latest.filter(function (program) { return !folderRemoved.has(program); });
 				result.removedCount = result.removed.length;
 			}
-			if (csvSaveFailed || csvFailedFiles.size) {
+			if (csvSaveFailed || csvFailedFiles.size || csvPendingRecordingKeys.size) {
 				var held = result.removed.filter(function (program) {
 					var month = formatJstMinute(safeInt(program.start, 0)).slice(0, 7).replace('/', '-');
-					return csvSaveFailed || csvFailedFiles.has('recording-history_' + month + '.csv');
+					return csvSaveFailed || csvFailedFiles.has('recording-history_' + month + '.csv') ||
+						csvPendingRecordingKeys.has(makeCanonicalKey(program));
 				});
 				var heldSet = new Set(held);
 				result.removed = result.removed.filter(function (program) { return !heldSet.has(program); });
 				var removedSet = new Set(result.removed);
 				result.kept = latest.filter(function (program) { return !removedSet.has(program); });
 				result.removedCount = result.removed.length;
-				if (held.length) console.error('WARNING: CSV保存失敗のため録画履歴' + held.length + '件の整理を延期。CSV保存成功後のMatchingで整理を再試行します。');
+				if (held.length) console.error('WARNING: CSV未保存の録画履歴' + held.length + '件の整理を延期。CSV保存後のMatchingで整理を再試行します。');
 			}
 			if (result.enabled && result.removedCount > 0) {
 				reservationStore.writeArrayAtomic(options.recorded, result.kept);

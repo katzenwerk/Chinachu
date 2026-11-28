@@ -61,6 +61,13 @@ export function loadSeriesStatus({ signal } = {}) {
     return state;
   });
 }
+export async function loadSeriesRecordingJobs(signal) {
+  const value = await sharedRead('/api/recorded/auto-analysis.json?monitor=series', { method: 'GET' }, signal);
+  if (value?.recordingJobsVersion !== 1 || !Array.isArray(value.waiting) || !Array.isArray(value.running)) {
+    throw new Error('録画後処理の状態を取得できませんでした。');
+  }
+  return value;
+}
 export async function loadSeriesProjection({ signal, id, groupId, event, eventKeys, filter = 'all', view = 'list', page = 1, q = '', generation, retry = true } = {}) {
   const state = await loadSeriesStatus({ signal });
   if (generation && state.generation !== generation) {

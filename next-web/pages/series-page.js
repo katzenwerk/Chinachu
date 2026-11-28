@@ -8,8 +8,8 @@ import { createSeriesContextMenu } from '../components/series-context-menu.js';
 import { createRecordedContextMenu } from '../components/recorded-context-menu.js';
 import { createHomeProgramContextMenu } from '../components/home-program-context-menu.js';
 import { openRecordedPlaybackOverlay } from '../services/live-player-adapter.js';
-import { recordedResultWarnings } from '../services/recorded-result-warnings.js';
-import { loadSeriesProjection, loadSeriesStatus, removeSeriesOverride, setSeriesHidden } from '../services/series-client.js';
+import { recordingPostProcessingStates, seriesRecordingIndicator, seriesRecordingStatuses } from '../services/recorded-result-warnings.js';
+import { loadSeriesProjection, loadSeriesRecordingJobs, loadSeriesStatus, removeSeriesOverride, setSeriesHidden } from '../services/series-client.js';
 import { buildSeriesEventIndex, seriesEventHref } from '../services/series-event-model.js';
 import { subscribeRecordedThumbnailReady } from '../services/recorded-thumbnail-client.js';
 import {
@@ -602,10 +602,7 @@ function renderSeriesList(host, data, tab, search, viewMode = 'list', context = 
   keepSeriesAnchor(anchor);
 }
 
-function recordingWarnings(recording) {
-  return recordedResultWarnings(recording).filter(warning =>
-    !['deleted', 'recorded-unknown', 'path-unknown'].includes(warning.key));
-}
+const eventLogoUpdates = new WeakMap();
 
 function seriesEventContext(event, context) {
   return context.eventIndex.get(event.key) || {
@@ -640,10 +637,16 @@ function episodePlaybackStart(context, recording) {
   return Number.isFinite(seconds) && seconds > 0 && limits.every(limit => seconds < limit) ? seconds : 0;
 }
 
-function eventWarnings(event) {
+function eventRecordingStatuses(event, jobs) {
   const unique = new Map();
-  for (const recording of event.recordings || []) {
-    for (const warning of recordingWarnings(recording)) unique.set(warning.key, warning);
+  const recordings = event.recordings || [];
+  for (const recording of recordings) {
+    const id = String(recording.recordedId);
+    for (const status of seriesRecordingStatuses(recording, jobs?.tasks.get(id), jobs?.autoTsEnabled, jobs?.sourceMissing.has(id))) {
+      if (recordings.length > 1 && recording.recordedId) {
+        unique.set(`${id}:${status.key}`, { ...status, label: `${status.label} (#${id})` });
+      } else unique.set(status.key, status);
+    }
   }
   return Array.from(unique.values());
 }
@@ -658,19 +661,17 @@ function eventStates(event, seriesContext) {
   return states.length ? states : ['履歴'];
 }
 
-function eventTooltip(event, seriesContext, warnings = eventWarnings(event)) {
+function eventTooltip(event, seriesContext, statuses) {
   return [
     text(event.channel?.name, '放送局名未取得'),
     dateTime(event.start),
     eventStates(event, seriesContext).join(' · '),
-    ...warnings.map(warning => `△ ${warning.label}: ${warning.description}`)
+    ...statuses.map(status => status.description === status.label ? status.label : `${status.label}: ${status.description}`)
   ].join('\n');
 }
 
 function appendEventLogo(host, event, context, options = {}) {
   const seriesContext = seriesEventContext(event, context);
-  const warnings = eventWarnings(event);
-  const tooltip = eventTooltip(event, seriesContext, warnings);
   const wrapper = document.createElement('span');
   wrapper.className = 'series-event-logo-entry';
   wrapper.dataset.seriesEventKey = event.key;
@@ -678,27 +679,35 @@ function appendEventLogo(host, event, context, options = {}) {
   button.type = 'button';
   button.className = 'series-recording-logo';
   const mobile = window.matchMedia(MOBILE_QUERY).matches;
-  button.setAttribute('aria-label', `${tooltip.replaceAll('\n', '、')}。${mobile ? '操作メニュー' : '詳細を表示'}`);
   if (mobile) button.setAttribute('aria-haspopup', 'menu');
   const logo = createChannelLogo({
     name: event.channel?.name,
     fallbackText: event.channel?.name,
-    tooltip,
     url: event.channel?.logoUrl
   }, { variant: 'thumbnail' });
   logo.element.removeAttribute('title');
-  setProgramHover(button, programHoverInfo(event, {
-    channelLogoUrl: event.channel?.logoUrl,
-    statuses: [...eventStates(event, seriesContext), ...warnings]
-  }));
-  button.append(logo.element);
-  if (warnings.length) {
-    const warning = document.createElement('span');
-    warning.className = 'series-recording-warning';
-    warning.textContent = '△';
-    warning.setAttribute('aria-hidden', 'true');
-    button.append(warning);
-  }
+  const indicator = document.createElement('span');
+  indicator.className = 'series-recording-warning';
+  indicator.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-alert"></use></svg>';
+  button.append(logo.element, indicator);
+  let previousTooltip;
+  const update = () => {
+    const statuses = eventRecordingStatuses(event, context.getRecordingJobs?.());
+    const tooltip = eventTooltip(event, seriesContext, statuses);
+    if (tooltip === previousTooltip) return;
+    previousTooltip = tooltip;
+    const tone = seriesRecordingIndicator(statuses);
+    indicator.hidden = tone === null;
+    indicator.classList.toggle('is-muted', tone === 'muted');
+    button.setAttribute('aria-label', `${tooltip.replaceAll('\n', '、')}。${mobile ? '操作メニュー' : '詳細を表示'}`);
+    setProgramHover(button, programHoverInfo(event, {
+      channelLogoUrl: event.channel?.logoUrl,
+      statuses: [...eventStates(event, seriesContext), ...statuses],
+      statusTones: true
+    }), { refresh: true });
+  };
+  eventLogoUpdates.set(button, update);
+  update();
   if ((options.kind === 'recording' || !options.kind && !event.reservation) &&
       event.recordings?.length && event.recordings.every(recording => recording.deleted)) {
     button.classList.add('is-deleted');
@@ -954,6 +963,7 @@ function renderSeriesDetail(host, series, tab, context) {
       else {
         card = createEpisodeCard(episode, cardSize, eventContext);
         if (old) {
+          eventContext.closeHover?.();
           const prior = old.card.querySelectorAll('details.series-event-overflow');
           const next = card.querySelectorAll('details.series-event-overflow');
           prior.forEach((detail, i) => { if (next[i]) next[i].open = detail.open; });
@@ -1047,6 +1057,7 @@ function renderAttentionDetail(host, group, context) {
       let card;
       if (old && old.signature === signature) card = old.card;
       else {
+        if (old) eventContext.closeHover?.();
         card = document.createElement('article');
         card.className = 'panel series-attention-event';
         const title = document.createElement('strong');
@@ -1087,6 +1098,8 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
   const eventKey = query.get('event');
   let sequence = 0;
   let refreshTimer = null;
+  let recordingJobs = null;
+  let recordingJobsRead = null;
   let dataDialog = null;
   let hiddenDialog = null;
   let headerActions = null;
@@ -1508,6 +1521,7 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
     const current = ++sequence;
     const requestedQuery = listKey();
     const isList = !selectedId && !eventKey;
+    if (!isList && !append) refreshRecordingJobs();
     const previousPages = isList && renderedQuery === requestedQuery ? Math.max(1, listData?.pagination?.page || 1) : 1;
     const page = append ? listData.pagination.page + 1 : 1;
     try {
@@ -1551,6 +1565,7 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
       const eventContext = {
         closeHover: programHover.close,
         eventIndex,
+        getRecordingJobs: () => recordingJobs,
         selectedEventKey: eventKey,
         openDetail,
         openMenu: contextMenu.open,
@@ -1631,8 +1646,19 @@ export function renderSeriesPage(rootContainer, query = new URLSearchParams(), o
     refreshTimer = window.setTimeout(() => load(), delay);
   }
 
+  function refreshRecordingJobs() {
+    if ((!selectedId && !eventKey) || recordingJobsRead || controller.signal.aborted) return;
+    recordingJobsRead = loadSeriesRecordingJobs(controller.signal).catch(() => null).then(snapshot => {
+      if (controller.signal.aborted) return;
+      recordingJobs = snapshot && { tasks: recordingPostProcessingStates(snapshot), autoTsEnabled: snapshot.autoTsEnabled === true,
+        sourceMissing: new Set(snapshot.sourceMissing) };
+      container.querySelectorAll('.series-recording-logo').forEach(button => eventLogoUpdates.get(button)?.());
+    }).finally(() => { recordingJobsRead = null; });
+  }
+
   async function checkStatus() {
     if (loading) { refreshQueued = true; return; }
+    refreshRecordingJobs();
     try {
       const state = await loadSeriesStatus({ signal: controller.signal });
       if (controller.signal.aborted) return;

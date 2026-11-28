@@ -66,6 +66,7 @@ describe('Match v2 writer and migration', function () {
 		const future = { ...base, id: 'future', start: nowMs + 3600000, end: nowMs + 5400000 };
 		const missed = { ...base, id: 'missed', channel: { ...base.channel, id: 'channel-missed' } };
 		const skipped = { ...base, id: 'skipped', channel: { ...base.channel, id: 'channel-skip' }, isSkip: true };
+		const finalizing = { ...base, id: 'finalizing', channel: { ...base.channel, id: 'channel-finalizing' } };
 		const recorded = { ...base, recorded: '/fixture/a.m2ts', recordedDurationSeconds: 1700, savedTsAnalysis: { schemaVersion: 1, status: 'complete', registeredPath: '/fixture/a.m2ts', file: { path: '/fixture/a.m2ts' } } };
 		const untracked = {
 			...base,
@@ -74,16 +75,24 @@ describe('Match v2 writer and migration', function () {
 			channel: { ...base.channel, id: 'channel-b' },
 			recorded: '/fixture/b.m2ts'
 		};
-		const results = matching.buildMatchLedger({
+		const options = {
 			nowMs,
 			keepDays: 0,
 			recordedReadOk: true,
 			recordedList: [recorded, untracked],
-			reserves2List: [base, future, missed, skipped]
+			reserves2List: [base, future, missed, skipped, finalizing]
+		};
+		const finalizingKey = matching.makeCanonicalKey(finalizing);
+		const results = matching.buildMatchLedger({
+			...options,
+			recordingList: [base, skipped, { ...finalizing, id: 'different-id', operatorRecordingEnd: nowMs - 1000, _operatorHistoryPending: true }]
 		}).results;
 		const statuses = results.map(entry => entry.status).sort();
 
-		assert.deepStrictEqual(statuses, ['MISSED', 'RECORDED', 'RECORDED_UNTRACKED', 'RESERVED', 'SKIPPED_ONLY']);
+		assert.deepStrictEqual(statuses, ['MISSED', 'RECORDED', 'RECORDED_UNTRACKED', 'RESERVED', 'RESERVED', 'SKIPPED_ONLY']);
+		assert.equal(results.find(entry => entry.key === finalizingKey).status, 'RESERVED');
+		const rebuilt = matching.buildMatchLedger({ ...options, oldResults: results, recordingList: [] }).results;
+		assert.equal(rebuilt.find(entry => entry.key === finalizingKey).status, 'MISSED');
 		// The contract is the persisted JSON. Optional undefined metadata is omitted.
 		const persisted = JSON.parse(JSON.stringify(results));
 		persisted.forEach(entry => {
@@ -147,8 +156,11 @@ describe('Match v2 writer and migration', function () {
 
 	});
 
-	it('reads the latest match under the common lock and preserves concurrent deletion history', function () {
+	it('reads the ledgers in handoff order under the common lock and preserves concurrent deletion history', function () {
 		const latest = [v2({ deletion: { deletedAt: nowMs - 1000, reason: 'manual' } })];
+		const handoff = { ...base, id: 'handoff', channel: { id: 'channel-handoff' }, recorded: '/fixture/handoff.m2ts' };
+		let recording = [handoff];
+		let recorded = [{ ...base, recorded: '/fixture/a.m2ts' }];
 		const calls = [];
 		let locked = false;
 		let saved = null;
@@ -161,6 +173,14 @@ describe('Match v2 writer and migration', function () {
 			readArray(file) {
 				assert.equal(locked, true);
 				calls.push('read:' + file);
+				if (file === '/fixture/recorded.json') return recorded;
+				if (file === '/fixture/recording.json') {
+					// Commit history and clear the active row between the two snapshots.
+					const snapshot = recording;
+					recorded = recorded.concat(handoff);
+					recording = [];
+					return snapshot;
+				}
 				return JSON.parse(JSON.stringify(latest));
 			},
 			writeArrayAtomic(file, value) {
@@ -172,9 +192,9 @@ describe('Match v2 writer and migration', function () {
 
 		matching.writeMatchLedgerLocked({
 			output: '/fixture/match.json',
-			recordedList: [{ ...base, recorded: '/fixture/a.m2ts' }],
-			recordingList: [],
-			reserves2List: [base],
+			recordingPath: '/fixture/recording.json',
+			recordedPath: '/fixture/recorded.json',
+			reserves2List: [base, handoff],
 			nowMs,
 			keepDays: 0,
 			keepMonths: 3,
@@ -185,10 +205,11 @@ describe('Match v2 writer and migration', function () {
 		});
 
 		assert.deepStrictEqual(calls, [
-			'lock:/fixture/match.json', 'read:/fixture/match.json',
+			'lock:/fixture/match.json', 'read:/fixture/recording.json', 'read:/fixture/recorded.json', 'read:/fixture/match.json',
 			'write:/fixture/match.json', 'unlock:/fixture/match.json'
 		]);
-		assert.deepStrictEqual(saved[0].deletion, latest[0].deletion);
+		assert.deepStrictEqual(saved.find(entry => entry.key === key).deletion, latest[0].deletion);
+		assert.equal(saved.find(entry => entry.key === matching.makeCanonicalKey(handoff)).status, 'RECORDED');
 		assert.throws(() => matching.writeMatchLedgerLocked({
 			output: '/fixture/match.json',
 			reservationStore: { withLock() { throw new Error('fixture lock failed'); } }
@@ -316,8 +337,11 @@ describe('Match v2 writer and migration', function () {
 			assert.throws(() => matching.writeMatchLedgerLocked({ ...options, initialBuild: true }), /cannot replace existing history/);
 			assert.equal(matching.writeMatchLedgerLocked(options).results[0].schemaVersion, 2);
 			// Separate CLI output must leave the legacy source bytes intact.
+			const finalizing = { ...base, id: 'cli-active', channel: { id: 'channel-cli-active' } };
 			writeJson(sourceFile, [legacy]);
-			writeJson(recordedFile, [base]); writeJson(reserveFile, [base]); writeJson(activeFile, []);
+			writeJson(recordedFile, [base]);
+			writeJson(reserveFile, [base, finalizing]);
+			writeJson(activeFile, [{ ...finalizing, operatorRecordingEnd: nowMs, _operatorHistoryPending: true }]);
 			writeJson(configFile, { matchSchemaVersion: 1, recordedHistoryRetentionDays: 0 });
 			const sourceBefore = fs.readFileSync(sourceFile, 'utf8');
 			const cli = require('child_process').spawnSync(process.execPath, [
@@ -328,7 +352,9 @@ describe('Match v2 writer and migration', function () {
 			assert.equal(cli.status, 0, cli.stdout + cli.stderr);
 			assert.equal(fs.readFileSync(sourceFile, 'utf8'), sourceBefore);
 			assert.equal(fs.readFileSync(sourceFile + '.v1-backup', 'utf8'), sourceBefore);
-			assert.equal(JSON.parse(fs.readFileSync(matchFile, 'utf8'))[0].schemaVersion, 2);
+			const cliRows = JSON.parse(fs.readFileSync(matchFile, 'utf8'));
+			assert.equal(cliRows.find(entry => entry.key === key).schemaVersion, 2);
+			assert.equal(cliRows.find(entry => entry.key === matching.makeCanonicalKey(finalizing)).status, 'RESERVED');
 		});
 	});
 

@@ -306,9 +306,10 @@ async function checkMaintenanceState() {
 	assert.strictEqual(auto.peakRecordings(active,
 		[{ id: 'next', start: now + 60000, end: now + 240000 }], () => false, now), 2);
 
-	// Keep only TS finding classification and warning propagation; DOM layout/text is not a stability contract.
+	// Distinguish a completed clean result, a quality finding, and processing progress.
 	const warningSource = fs.readFileSync(path.join(__dirname, '../next-web/services/recorded-result-warnings.js'), 'utf8');
-	const { savedTsResultInfo, recordedResultWarnings } = await import('data:text/javascript;base64,' + Buffer.from(warningSource).toString('base64'));
+	const { savedTsResultInfo, recordedResultWarnings, recordingPostProcessingStates, seriesRecordingStatuses,
+		seriesRecordingIndicator } = await import('data:text/javascript;base64,' + Buffer.from(warningSource).toString('base64'));
 	const clean = { result: { status: 'NO_FINDINGS', completed: true, ccErrorEvents: 0, pcrGapEvents: 0 } };
 	assert.strictEqual(savedTsResultInfo(clean).findings, false);
 	assert.ok(!recordedResultWarnings({ savedTsAnalysis: clean }).some(item => item.key === 'saved-ts'));
@@ -317,6 +318,117 @@ async function checkMaintenanceState() {
 		assert.strictEqual(savedTsResultInfo(suspect).findings, true);
 		assert.ok(recordedResultWarnings({ savedTsAnalysis: suspect }).some(item => item.key === 'saved-ts'));
 	}
+	const probe = { current: true, status: 'RECORDED', recordedId: 'probe' };
+	const pending = { current: true, status: 'RECORDED', recordedId: 'pending' };
+	const taskSnapshot = { waiting: [{ id: 'probe', type: 'ffprobe' }, { id: 'probe', type: 'thumbnail' },
+		{ id: 'pending', type: 'ts' }], running: [{ id: 'probe', type: 'ffprobe' }] };
+	const jobs = recordingPostProcessingStates(taskSnapshot);
+	const grey = seriesRecordingStatuses(probe, jobs.get('probe'));
+	assert.deepStrictEqual(grey.map(({ label, tone }) => [label, tone]), [['ffprobe実行中', 'muted'], ['サムネイル待ち', 'muted']]);
+	assert.strictEqual(seriesRecordingIndicator(grey), 'muted');
+	assert.strictEqual(seriesRecordingStatuses(pending, jobs.get('pending'))[0].label, 'TS解析待ち');
+	assert.strictEqual(seriesRecordingStatuses(pending, undefined, true)[0].label, 'TS解析未完了');
+	assert.deepStrictEqual(seriesRecordingStatuses(pending), []);
+	assert.equal(seriesRecordingIndicator(seriesRecordingStatuses({ ...pending, savedTsAnalysis: clean }, undefined, true)), null);
+	const interrupted = { ...pending, savedTsAnalysis: { result: { status: 'CANCELLED', completed: false } }, tsDrop: { completed: false } };
+	assert.strictEqual(seriesRecordingIndicator(seriesRecordingStatuses(interrupted)), 'muted');
+	const processingError = seriesRecordingStatuses({ ...pending, savedTsAnalysis: { result: { status: 'ERROR', error: 'fixture' } } });
+	assert.deepStrictEqual(processingError.map(({ label, kind }) => [label, kind]), [['TS解析失敗', 'processing-error']]);
+	const mixed = seriesRecordingStatuses({ ...probe, mirakurunDrop: { dropTotal: 3 } }, jobs.get('probe'), true);
+	assert.strictEqual(seriesRecordingIndicator(mixed), 'warning');
+	for (const unavailable of [{ deleted: true }, { fileMissing: { recordedId: 'probe' } },
+		{ current: false }, { recordingPathMissing: true }, { operatorResumePending: true }]) {
+		assert.ok(!seriesRecordingStatuses({ ...probe, ...unavailable }, jobs.get('probe'), true)
+			.some(item => item.kind === 'post-processing'));
+	}
+	assert.deepStrictEqual(seriesRecordingStatuses(probe, jobs.get('probe'), true, true), []);
+	const hoverSource = fs.readFileSync(path.join(__dirname, '../next-web/components/program-hover.js'), 'utf8')
+		.replace(/^import .*;\n/gm, '');
+	const { programHoverInfo, programHoverTags } = await import('data:text/javascript;base64,' + Buffer.from(hoverSource).toString('base64'));
+	const hover = programHoverInfo({ title: 'Fixture', category: 'anime' }, { statusTones: true, statuses: ['録画済み', ...mixed] });
+	const chips = programHoverTags(hover);
+	assert.strictEqual(chips.get('録画済み'), null);
+	assert.strictEqual(chips.get('Mirakurun: 3'), 'warning');
+	assert.strictEqual(chips.get('サムネイル待ち'), 'muted');
+	assert.strictEqual(programHoverTags(programHoverInfo({}, { statuses: mixed })).get('Mirakurun: 3'), null);
+	const seriesSource = fs.readFileSync(path.join(__dirname, '../next-web/pages/series-page.js'), 'utf8');
+	const element = () => ({ children: [], dataset: {}, classes: new Set(), append(...nodes) { this.children.push(...nodes); },
+		setAttribute() {}, removeAttribute() {}, addEventListener() {} });
+	const logoContext = vm.createContext({ document: { createElement: () => {
+		const node = element();
+		node.classList = { toggle: (name, on) => on ? node.classes.add(name) : node.classes.delete(name) };
+		return node;
+	} }, window: { matchMedia: () => ({ matches: false }) }, MOBILE_QUERY: '',
+	seriesRecordingStatuses, seriesRecordingIndicator, programHoverInfo, setProgramHover: (button, info) => { button.hover = info; },
+	seriesEventContext: () => ({}), dateTime: () => '', text: (value, fallback) => value || fallback,
+	createChannelLogo: () => ({ element: element() }) });
+	vm.runInContext(section(seriesSource, 'const eventLogoUpdates', 'function seriesEventContext') +
+		section(seriesSource, 'function eventRecordingStatuses(', 'function eventTimeLabel('), logoContext);
+	let currentJobs = { tasks: jobs, sourceMissing: new Set() };
+	const logoEvent = { key: 'fixture', recordings: [{ ...probe, statusLabel: '録画済み' }] };
+	const wrapper = logoContext.appendEventLogo(element(), logoEvent, { getRecordingJobs: () => currentJobs });
+	const button = wrapper.children[0], indicator = button.children[1];
+	assert.ok(!indicator.hidden && indicator.classes.has('is-muted'));
+	assert.match(indicator.innerHTML, /#icon-alert/);
+	assert.strictEqual(programHoverTags(button.hover).get('サムネイル待ち'), 'muted');
+	logoContext.button = button;
+	currentJobs = { tasks: new Map(), sourceMissing: new Set() };
+	vm.runInContext('eventLogoUpdates.get(button)()', logoContext);
+	assert.strictEqual(indicator.hidden, true);
+	assert.strictEqual(programHoverTags(button.hover).has('サムネイル待ち'), false);
+
+	// The compact monitor mode reads all actual queues without the dashboard's thumbnail scan.
+	const operatorJobs = vm.createContext({
+		recordedMaintenance: { monitorState: ({ pendingLimit }) => {
+			assert.strictEqual(pendingLimit, Infinity);
+			return { pendingJobs: [{ id: 'manual', type: 'ts' }], autoTsId: 'active', autoTsPaused: false };
+		} },
+		recordedThumbnailGenerator: { getState: () => ({ active: 'thumbnail' }), getPendingJobs: limit => {
+			assert.strictEqual(limit, Infinity);
+			return [{ id: 'queued-thumb' }];
+		}, getSourceMissingIds: () => ['missing'] },
+		durationProbeQueue: [{ filePath: 'probe' }], activeDurationProbeJobs: new Map(),
+		recordedForPath: filePath => ({ id: filePath }), nextAutoTsCandidate: () => ({ id: 'auto-next' }), autoTsAnalysisEnabled: true
+	});
+	vm.runInContext(section(operator, 'function postProcessingMonitorStatus(', 'function handleRecordedThumbnailRequest('), operatorJobs);
+	const monitor = operatorJobs.postProcessingMonitorStatus(true);
+	assert.deepStrictEqual(monitor.sourceMissing, ['missing']);
+	assert.deepStrictEqual([...recordingPostProcessingStates(monitor)], [
+		['manual', { ts: 'waiting' }], ['probe', { ffprobe: 'waiting' }], ['queued-thumb', { thumbnail: 'waiting' }],
+		['auto-next', { ts: 'waiting' }], ['thumbnail', { thumbnail: 'running' }], ['active', { ts: 'running' }]
+	]);
+	operatorJobs.autoTsAnalysisEnabled = false;
+	assert.strictEqual(recordingPostProcessingStates(operatorJobs.postProcessingMonitorStatus(true)).has('auto-next'), false);
+	const api = fs.readFileSync(path.join(__dirname, '../api/script-recorded-auto-analysis.vm.js'), 'utf8');
+	const apiResult = await new Promise((resolve, reject) => vm.runInNewContext(api, {
+		request: { method: 'GET', type: 'json', query: { monitor: 'series' } }, define: { RECORDED_THUMBNAIL_SOCKET: '/fixture.sock' },
+		storageRefreshIpc: { request: async (_options, payload) => {
+			assert.strictEqual(payload.maintenanceAction, 'monitor-status');
+			assert.strictEqual(payload.recordingJobsOnly, true);
+			return monitor;
+		} }, response: { head: status => { if (status !== 200) reject(new Error('HTTP ' + status)); },
+			end: body => resolve(JSON.parse(body)), error: reject }
+	}));
+	assert.deepStrictEqual(apiResult, JSON.parse(JSON.stringify(monitor)));
+
+	const project = require('../lib/series-projector');
+	const event = { title: 'Fixture', channel: { id: 'fixture' }, start: now - 2000, end: now - 1000, seconds: 1 };
+	const projection = project.projectSeries({ resolver: { resolve: () => ({ classification: 'unknown', candidates: [] }) }, recorded: [
+		{ ...event, id: 'clean', recorded: '/recordings/clean.ts', savedTsAnalysis: clean },
+		{ ...event, id: 'other', recorded: '/recordings/other.ts', mirakurunDrop: { dropTotal: 3 } }
+	] });
+	const projected = projection.unassigned[0].event;
+	assert.deepStrictEqual(projected.recordingResults.clean.savedTsAnalysis, clean);
+	assert.strictEqual(projected.recordingResults.other.savedTsAnalysis, null);
+	assert.strictEqual(projected.recordingResults.other.mirakurunDrop.dropTotal, 3);
+	const serviceSource = fs.readFileSync(path.join(__dirname, '../lib/series-service.js'), 'utf8');
+	const recordedStatuses = new Set(['RECORDED', 'RECORDED_UNTRACKED']);
+	const service = vm.createContext({ text: value => value || null, unique: values => [...new Set(values)], URLSearchParams,
+		RESULT_STATUSES: new Set([...recordedStatuses, 'MISSED', 'SKIPPED_ONLY']), RECORDED_STATUSES: recordedStatuses });
+	vm.runInContext(section(serviceSource, 'function eventStatus(', 'function newest('), service);
+	const rendered = service.eventView(projected, null).recordings;
+	assert.strictEqual(seriesRecordingIndicator(seriesRecordingStatuses(rendered[0], undefined, true)), null);
+	assert.strictEqual(seriesRecordingIndicator(seriesRecordingStatuses(rendered[1], { ts: 'waiting' }, true)), 'warning');
 }
 
 async function programDetailModel() {

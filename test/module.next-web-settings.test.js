@@ -6,13 +6,11 @@ const path = require('path');
 const test = require('node:test');
 
 async function configModel() {
-	const source = fs.readFileSync(path.join(__dirname, '../next-web/services/config-model.js'), 'utf8');
-	return import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+	return import('../next-web/services/config-model.js');
 }
 
 async function storageModel() {
-	const source = fs.readFileSync(path.join(__dirname, '../next-web/services/storage-model.js'), 'utf8');
-	return import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+	return import('../next-web/services/storage-model.js');
 }
 
 test('settings model preserves unknown and untouched values while validating explicit edits', async function () {
@@ -22,8 +20,8 @@ test('settings model preserves unknown and untouched values while validating exp
 		wuiBlockGlobalAccess: true, recordedCommandSerial: true, recordedThumbnailAutoEnabled: true, seriesUseSyobocal: true,
 		vaapiEnabled: false, vaapiDevice: '/dev/dri/renderD128', wuiOpenPort: 20772,
 		recordedFolderOrganizeEnabled: false, recordedFolderOrganizeOrder: 'filename', epgTitleHalfWidthEnabled: false,
-		storageLowSpaceThresholdMB: 3000, storageLowSpaceAction: 'stop',
-		storageLowSpaceWarningThresholdMB: 0, storageLowSpaceWarningIntervalMinutes: 180,
+		storageLowSpaceThresholdGB: 3, storageLowSpaceAction: 'stop',
+		storageLowSpaceWarningThresholdGB: 0, storageLowSpaceWarningIntervalMinutes: 180,
 		storageLowSpaceCriticalNotifyIntervalMinutes: 180, handoffPrepSeconds: 10,
 		matchRetentionDays: 365, reserves2RetentionDays: 365, recordedHistoryRetentionDays: 365,
 		recordedStorage: { protectRootFilesystem: false }, broadcastClockIntervalHours: 3,
@@ -35,7 +33,7 @@ test('settings model preserves unknown and untouched values while validating exp
 		['mirakurunPath', 'http://192.0.2.1:40772/', ['operator', 'wui', 'scheduler', 'history']],
 		['recordedDir', '/new', ['operator', 'wui', 'history']],
 		['recordedDirs', [{ id: 'one', name: 'One', path: '/one' }], ['operator', 'wui', 'scheduler', 'history']],
-		['storageLowSpaceThresholdMB', 5000, ['operator', 'wui']],
+		['storageLowSpaceThresholdGB', 5.1, ['operator', 'wui']],
 		['recordedFolderOrganizeEnabled', true, ['operator', 'wui']],
 		['recordedFolderOrganizeOrder', 'title', ['operator']],
 		['recordedCommandSerial', false, ['operator']],
@@ -99,6 +97,36 @@ test('settings model preserves unknown and untouched values while validating exp
 	assert.deepStrictEqual(model.configApplicationMessages(effects({ endLackMaxSeconds: 60 }, retiredOnly)), []);
 	assert.strictEqual(effects({}, { handoffPrepSeconds: 20 }).operator, true);
 	assert.strictEqual(model.configForSave({ handoffPrepSeconds: 0 }).handoffPrepSeconds, 0);
+
+	for (const [mb, gb] of [[1000, 1], [2500, 2.5], [3000, 3], [10000, 9.8], [30720, 30], [512000, 500]]) {
+		const legacy = { storageLowSpaceThresholdMB: mb, customFutureSetting: { enabled: true } };
+		const draft = model.configDraft(legacy);
+		assert.deepStrictEqual(draft, { storageLowSpaceThresholdGB: gb, customFutureSetting: legacy.customFutureSetting });
+		assert.strictEqual(legacy.storageLowSpaceThresholdMB, mb);
+		assert.deepStrictEqual(model.unknownConfigKeys(legacy), ['customFutureSetting']);
+		assert.deepStrictEqual(model.configChanges(legacy, draft).map(change => change.key), ['storageLowSpaceThresholdGB', 'storageLowSpaceThresholdMB']);
+		assert.deepStrictEqual(model.configChanges(draft, model.configDraft(draft)), []);
+		assert.strictEqual(effects(legacy, draft).operator, gb * 1024 !== mb);
+		assert.strictEqual(effects(legacy, draft).wui, gb * 1024 !== mb);
+	}
+	const closeThresholds = { storageLowSpaceThresholdMB: 3000, storageLowSpaceWarningThresholdMB: 3001 };
+	const exactThresholds = { storageLowSpaceThresholdMB: 30720, storageLowSpaceWarningThresholdMB: 512000 };
+	assert.deepStrictEqual(model.configApplicationMessages(effects(exactThresholds, model.configDraft(exactThresholds))), []);
+	assert.deepStrictEqual(model.configDraft(closeThresholds), { storageLowSpaceThresholdGB: 3, storageLowSpaceWarningThresholdGB: 3.1 });
+	assert.deepStrictEqual(model.configDraft({ ...closeThresholds, storageLowSpaceWarningThresholdGB: 3 }), {
+		storageLowSpaceThresholdGB: 3, storageLowSpaceWarningThresholdGB: 3
+	});
+	assert.deepStrictEqual(model.configDraft({ storageLowSpaceWarningThresholdGB: 0, storageLowSpaceWarningThresholdMB: 10000 }), {
+		storageLowSpaceWarningThresholdGB: 0
+	});
+	assert.deepStrictEqual(model.configApplicationMessages(effects({ storageLowSpaceWarningThresholdMB: 0 }, {})), []);
+	assert.strictEqual(model.formatChangeValue(30720, false, 'storageLowSpaceThresholdMB'), '30 GB');
+	assert.deepStrictEqual(model.parseFieldValue('2.9', { label: '閾値', type: 'number', step: 0.1 }), { value: 2.9 });
+	assert.ok(model.parseFieldValue('2.95', { label: '閾値', type: 'number', step: 0.1 }).error);
+	for (const thresholds of [{ storageLowSpaceThresholdGB: 0 }, { storageLowSpaceWarningThresholdGB: -1 },
+		{ storageLowSpaceThresholdGB: 2.95 }, { storageLowSpaceWarningThresholdGB: '10' }]) {
+		assert.ok(model.validateConfig({ ...original, ...thresholds }).some(message => message.startsWith(Object.keys(thresholds)[0])));
+	}
 
 	const dirs = model.normalizeRecordedDirs([{
 		original: original.recordedDirs[0], id: 'one', name: 'One renamed', path: '/one', protectRootFilesystem: true
@@ -184,6 +212,8 @@ test('settings model preserves unknown and untouched values while validating exp
 	assert.strictEqual(model.configForSave(commandDraft).externalNotifications.routes.command.enabled, false);
 
 	const storage = await storageModel();
+	assert.strictEqual(storage.formatThreshold(512), '0.5 GB');
+	assert.strictEqual(storage.formatThreshold(30720), '30 GB');
 	const blocked = {
 		thresholds: {},
 		storages: [{
@@ -294,7 +324,7 @@ test('settings model preserves unknown and untouched values while validating exp
 			if (notifications) query.notifications = JSON.stringify(notifications);
 			vm.runInNewContext(apiSource, { fs, data: { status: { feature: { configurator: true } } },
 				define: { CONFIG_FILE: configFile, REPOSITORY_ROOT: root }, request: { method: 'PUT', query },
-				wuiConfigStore: require('../lib/wui-config'), externalNotification: notification,
+				wuiConfigStore: require('../lib/wui-config'), storageLow: require('../lib/storage-low'), externalNotification: notification,
 				response: { head: code => { status = code; }, end: text => { body = JSON.parse(text); }, error: code => { status = code; } } });
 			return { status, body };
 		}
@@ -304,7 +334,18 @@ test('settings model preserves unknown and untouched values while validating exp
 		assert.ok(!JSON.stringify(combined.body).includes('new-secret'));
 		assert.ok(!fs.readFileSync(configFile, 'utf8').includes('externalNotifications'));
 		assert.ok(notification.read(root).routes.slack.webhook.endsWith('new-secret'));
-		put({ ...original, recordedFormat: 'other-tab' });
+		const mixed = put({ ...original, storageLowSpaceThresholdMB: 30720,
+			storageLowSpaceWarningThresholdMB: 512000, storageLowSpaceWarningThresholdGB: 0 });
+		assert.strictEqual(mixed.status, 200);
+		assert.strictEqual(mixed.body.storageLowSpaceThresholdGB, 30);
+		assert.strictEqual(mixed.body.storageLowSpaceWarningThresholdGB, 0);
+		assert.ok(!Object.hasOwn(mixed.body, 'storageLowSpaceThresholdMB'));
+		assert.ok(!Object.hasOwn(mixed.body, 'storageLowSpaceWarningThresholdMB'));
+		assert.deepStrictEqual(mixed.body.customFutureSetting, original.customFutureSetting);
+		assert.strictEqual(put({ ...original, storageLowSpaceThresholdGB: 3.05 }).status, 400);
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')), mixed.body);
+		const legacyConfig = { ...original, recordedFormat: 'other-tab', ...closeThresholds };
+		fs.writeFileSync(configFile, JSON.stringify(legacyConfig));
 		assert.ok(notification.read(root).routes.slack.webhook.endsWith('new-secret'));
 		const clientSource = fs.readFileSync(path.join(__dirname, '../next-web/services/config-client.js'), 'utf8');
 		const client = await import('data:text/javascript;base64,' + Buffer.from(clientSource).toString('base64'));
@@ -324,7 +365,10 @@ test('settings model preserves unknown and untouched values while validating exp
 		try {
 			const loaded = await client.loadConfig();
 			assert.ok(loaded.externalNotifications.routes.slack.configured);
-			const edited = model.cloneConfig(loaded);
+			const edited = model.configDraft(loaded);
+			assert.strictEqual(edited.storageLowSpaceWarningThresholdGB, 3.1);
+			assert.deepStrictEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')), legacyConfig);
+			delete edited.storageLowSpaceWarningThresholdGB; // Clear the migrated field before saving.
 			edited.recordedThumbnailAutoEnabled = false;
 			edited.epgTitleHalfWidthEnabled = true;
 			edited.externalNotifications.events.start = !edited.externalNotifications.events.start;
@@ -332,6 +376,11 @@ test('settings model preserves unknown and untouched values while validating exp
 			const result = await client.saveConfig(edited, undefined, loaded);
 			assert.strictEqual(result.externalNotifications.events.start, edited.externalNotifications.events.start);
 			assert.strictEqual(result.externalNotifications.routes.slack.webhook, undefined);
+			assert.strictEqual(result.storageLowSpaceThresholdGB, 3);
+			assert.ok(!Object.hasOwn(result, 'storageLowSpaceWarningThresholdGB'));
+			assert.ok(!Object.hasOwn(result, 'storageLowSpaceWarningThresholdMB'));
+			assert.ok(!Object.hasOwn(result, 'storageLowSpaceThresholdMB'));
+			assert.deepStrictEqual(model.configChanges(result, model.configDraft(result)), []);
 			assert.deepStrictEqual(model.configChanges(result, model.cloneConfig(result)), []);
 			assert.strictEqual((await client.loadConfig()).recordedThumbnailAutoEnabled, false);
 			assert.strictEqual((await client.loadConfig()).epgTitleHalfWidthEnabled, true);
