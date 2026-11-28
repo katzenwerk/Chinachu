@@ -1,3 +1,25 @@
+# Chinachu 0.10.7-thorn.44
+
+## Series Management
+
+- Fill in missing episode numbers and subtitles from programme descriptions for newly fetched EPG entries and existing reservations and recordings.
+- Improve series matching in both directions. Use confirmed broadcasts, including unreserved EPG entries, to identify earlier or later episodes when the evidence agrees. Preserve manual associations and leave conflicting matches unresolved.
+- Distinguish recording warnings from pending or incomplete post-processing in series details. Show warnings in orange and post-processing states in gray.
+
+## Recording Filenames
+
+- Add a filename cleanup action to individual series details. Preview the proposed changes and rename eligible recordings in place, preserving their extensions, recording IDs, thumbnails, and TS analysis results.
+- Add a dedicated `seriesRenameFormat` setting and the `<fulltitle3>` and `<flags2>` placeholders. Use confirmed series titles, episode numbers, and subtitles, and add `[新]` or `[終]` when the premiere or finale can be verified.
+
+## Recording Results and History
+
+- Prevent false missed-recording alerts by checking the latest recording ledgers before sending a notification. Continue reporting genuine misses after recovery from an outage or Operator downtime.
+- Save monthly recording-history CSV entries as each programme’s outcome is finalized. Update existing entries when TS analysis completes, and retain history after files are moved, deleted, or removed from the recording ledger.
+
+## Storage Settings
+
+- Use GB for low-space thresholds, warnings, and logs. Existing MB settings retain their precision until the next settings save, when they migrate to GB. Capacity checks and cleanup behavior remain unchanged.
+
 # Chinachu 0.10.7-thorn.43
 
 ## Series Management

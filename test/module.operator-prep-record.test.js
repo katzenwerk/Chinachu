@@ -160,7 +160,12 @@ async function createOperatorFixture(programs, onStream, options) {
 		options.config = Object.assign({}, options.config, { recordedCommand: recordedCommand });
 	}
 	if (options.trackMatching) {
-		fs.writeFileSync(path.join(temporaryDir, 'app-matching.js'), 'require("fs").appendFileSync(process.env.CHINACHU_TEST_MATCHING_LOG, "matching\\n");\n');
+		fs.writeFileSync(path.join(temporaryDir, 'app-matching.js'), [
+			'const fs = require("node:fs");',
+			'const recorded = JSON.parse(fs.readFileSync("data/recorded.json", "utf8"));',
+			'const state = recorded.map(({ id, operatorResumePending }) => ({ id, operatorResumePending }));',
+			'fs.appendFileSync(process.env.CHINACHU_TEST_MATCHING_LOG, JSON.stringify(state) + "\\n");'
+		].join('\n') + '\n');
 	}
 	if (options.ffprobeScript) {
 		const ffprobeCommand = path.join(temporaryDir, 'ffprobe-test.js');
@@ -386,6 +391,12 @@ describe('Operator recording preparation attempts', function() {
 				].join('\n')
 			});
 			const recordedPath = path.join(fixture.recordedDir, '2.m2ts');
+			// Startup MATCH can run before this recording has finished. Wait for
+			// a MATCH invocation that actually sees the finalized history.
+			const hasFinalizedMatch = () => fs.existsSync(fixture.matchingLog) &&
+				fs.readFileSync(fixture.matchingLog, 'utf8').trim().split('\n').filter(Boolean)
+					.some(line => JSON.parse(line).some(item => item.id === scenario.program.id &&
+						item.operatorResumePending === false));
 
 			try {
 				await waitForCondition(
@@ -407,7 +418,7 @@ describe('Operator recording preparation attempts', function() {
 				assert.deepStrictEqual(fixture.read('recording'), []);
 				assert.strictEqual(fixture.read('reserves').length, 1);
 				assert.strictEqual(fs.existsSync(fixture.recordedCommandLog), false);
-				assert.strictEqual(fs.existsSync(fixture.matchingLog), false);
+				assert.strictEqual(hasFinalizedMatch(), false);
 				assert.strictEqual(fs.existsSync(fixture.ffprobeLog), false);
 				assert.match(fixture.output(), /FIN INTERRUPTED: resume pending: #2\b/);
 
@@ -424,7 +435,7 @@ describe('Operator recording preparation attempts', function() {
 						fixture.read('recorded').length === 1 &&
 						fixture.read('recorded')[0].operatorResumePending === false &&
 						fs.existsSync(fixture.recordedCommandLog) &&
-						fs.existsSync(fixture.matchingLog),
+						hasFinalizedMatch(),
 					'final ' + scenario.name + ' recording completion work did not finish',
 					20000 // History completes immediately; hooks and match wait out the 15s handoff window.
 				);
@@ -441,7 +452,6 @@ describe('Operator recording preparation attempts', function() {
 				assert.strictEqual(fixture.read('reserves').length, scenario.program.isManualReserved ? 0 : 1);
 				assert.strictEqual(fs.readFileSync(recordedPath, 'utf8'), 'PART1PART2');
 				assert.strictEqual(fs.readFileSync(fixture.recordedCommandLog, 'utf8').trim().split('\n').length, 1);
-				assert.ok(fs.readFileSync(fixture.matchingLog, 'utf8').trim().split('\n').length >= 1);
 				assert.strictEqual(fs.readFileSync(fixture.ffprobeLog, 'utf8').trim().split('\n').length, 1);
 				assert.match(fixture.output(), /RESUME RECORD: #2\b/);
 			} finally {
